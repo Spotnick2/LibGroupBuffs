@@ -1,0 +1,20 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <!--
+        Embedded into a consuming addon through .pkgmeta externals, e.g.
+
+            externals:
+              Libs/LibGroupBuffs-1.0:
+                url: https://github.com/Spotnick2/LibGroupBuffs
+
+        and then loaded from that addon's TOC before any of its own files:
+
+            Libs\LibGroupBuffs-1.0\LibGroupBuffs-1.0.xml
+
+        LibStub is bundled rather than pulled separately: it is designed to be
+        embedded many times over and resolves to a single instance at runtime.
+    -->
+    <Script file="LibStub\LibStub.lua"/>
+    <Script file="Compat.lua"/>
+    <Script file="Engine.lua"/>
+    <Script file="UI.lua"/>
+</Ui>

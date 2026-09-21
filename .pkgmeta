@@ -1,0 +1,10 @@
+package-as: LibGroupBuffs-1.0
+
+enable-nolib-creation: no
+
+ignore:
+  - .github
+  - tests
+  - README.md
+  - AGENTS.md
+  - CLAUDE.md
