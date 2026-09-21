@@ -5,8 +5,12 @@
 -- them to one table, but only the registration: a copy that loads after a
 -- newer one has to leave it alone, and a newer copy that loads after an older
 -- one has to upgrade it in place without throwing away its state. Checked in
--- all three orders, with table identity and kept state asserted rather than
--- just the version number.
+-- all three orders, loading every runtime file the way the client does, with
+-- table identity and kept state asserted rather than just the version number.
+--
+-- The older copies are real released source (tests/fixtures), never the
+-- current source with a lower number: that would already contain whatever the
+-- upgrade is supposed to add.
 --
 --   & 'C:\Program Files (x86)\Lua\5.1\lua.exe' tests\test_versions.lua
 ------------------------------------------------------------
@@ -21,27 +25,62 @@ local function ReadFile(path)
     return s
 end
 
-local SOURCE = ReadFile("Compat.lua")
-local CURRENT = tonumber(SOURCE:match('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'))
-H.check(CURRENT ~= nil and CURRENT >= 2, "Compat.lua declares its MINOR: " .. tostring(CURRENT))
+local MINOR_PATTERN = 'local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'
 
--- The older copy is the real r2, byte for byte (`git show r2:Compat.lua`):
--- Priestly v2.0.x ships it, so it is what a newer copy will actually meet in
--- game. A copy synthesised from the current source would already carry
--- everything added since, and hide exactly the upgrade under test.
-local OLDER = ReadFile("tests/fixtures/Compat-r2.lua")
-local OLDER_MINOR = tonumber(OLDER:match('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'))
-H.eq(OLDER_MINOR, 2, "the fixture is r2")
-H.check(CURRENT > OLDER_MINOR, "the current MINOR is newer than r2")
+------------------------------------------------------------
+-- Every runtime file declares the same MINOR
+------------------------------------------------------------
 
-local function run(src, label)
-    local chunk = assert(loadstring(src, "=" .. label))
-    chunk()
+-- The current copy: every file the XML loads except the bundled LibStub.
+local CURRENT_FILES = {}
+for _, file in ipairs(H.xmlScripts()) do
+    if file ~= "LibStub/LibStub.lua" then
+        CURRENT_FILES[#CURRENT_FILES + 1] = { name = file, src = ReadFile(file) }
+    end
 end
+H.check(#CURRENT_FILES >= 2, "the XML lists the library's files")
+
+local CURRENT = tonumber(CURRENT_FILES[1].src:match(MINOR_PATTERN))
+H.check(CURRENT ~= nil, CURRENT_FILES[1].name .. " declares its MINOR")
+for _, file in ipairs(CURRENT_FILES) do
+    H.eq(tonumber(file.src:match(MINOR_PATTERN)), CURRENT,
+        file.name .. " declares the same MINOR - one that disagreed would never install, "
+        .. "or install over a newer copy")
+end
+
+-- A copy is a list of { name, src }, loaded in order like the XML.
+local function load(copy, label)
+    for _, file in ipairs(copy) do
+        local chunk = assert(loadstring(file.src, "=" .. file.name .. " (" .. label .. ")"))
+        chunk()
+    end
+end
+
+local function withMinor(copy, minor, extra)
+    local out = {}
+    for i, file in ipairs(copy) do
+        local src = file.src:gsub(MINOR_PATTERN,
+            'local MAJOR, MINOR = "LibGroupBuffs-1.0", ' .. minor)
+        if extra and extra[file.name] then src = src .. "\n" .. extra[file.name] end
+        out[i] = { name = file.name, src = src }
+    end
+    return out
+end
+
+local R2 = { { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r2.lua") } }
+local R3 = { { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r3.lua") } }
+H.eq(tonumber(R2[1].src:match(MINOR_PATTERN)), 2, "the r2 fixture is r2")
+H.eq(tonumber(R3[1].src:match(MINOR_PATTERN)), 3, "the r3 fixture is r3")
+H.check(CURRENT > 3, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
-    run(ReadFile("LibStub/LibStub.lua"), "LibStub.lua")
+    load({ { name = "LibStub.lua", src = ReadFile("LibStub/LibStub.lua") } }, "bundled")
+end
+
+local function activeMinor()
+    local _, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
+    return minor
 end
 
 ------------------------------------------------------------
@@ -49,58 +88,112 @@ end
 ------------------------------------------------------------
 
 freshLibStub()
-run(SOURCE, "Compat.lua")
+load(CURRENT_FILES, "first")
 local lib = LibStub("LibGroupBuffs-1.0")
 local api, itemInfo = lib.API, lib.API.ItemInfo
+local settings, new, set = lib.Settings, lib.Settings.New, lib.SettingsMethods.Set
 api.eventFailures.PROBE = "recorded before the second load"
 
-run(SOURCE, "Compat.lua (again)")
+load(CURRENT_FILES, "again")
 H.check(LibStub("LibGroupBuffs-1.0") == lib, "equal-after-equal keeps the library table")
 H.check(lib.API == api, "and the API table")
 H.check(lib.API.ItemInfo == itemInfo, "and its functions")
+H.check(lib.Settings == settings and lib.Settings.New == new, "and Settings")
+H.check(lib.SettingsMethods.Set == set, "and the settings methods")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its recorded state")
 
 ------------------------------------------------------------
 -- An older copy after a newer one: it must return before touching anything.
+-- r3 has no Settings.lua at all.
 ------------------------------------------------------------
 
-local reportedFn = lib.API.RegisterEventsReported
-run(OLDER, "Compat.lua (r2)")
-H.check(lib.API == api, "older-after-newer keeps the API table")
-H.check(lib.API.ItemInfo == itemInfo, "and its functions")
-H.check(lib.API.RegisterEventsReported == reportedFn, "and does not remove what the newer copy added")
-H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "or reset its state")
-local _, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
-H.eq(minor, CURRENT, "the newer MINOR stays registered")
+local reported = lib.API.RegisterEventsReported
+load(R3, "r3")
+H.check(lib.API == api, "r3-after-newer keeps the API table")
+H.check(lib.API.RegisterEventsReported == reported, "and its functions")
+H.check(lib.Settings == settings and lib.Settings.New == new, "and leaves Settings in place")
+H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its state")
+H.eq(activeMinor(), CURRENT, "the newer MINOR stays registered")
+
+load(R2, "r2")
+H.check(lib.API.RegisterEventsReported == reported, "r2 after it changes nothing either")
+H.eq(activeMinor(), CURRENT, "and the newer MINOR still stands")
 
 ------------------------------------------------------------
--- A newer copy after an older one: upgrade in place, keep the state.
+-- A newer copy after r3: upgrade in place, keep the state, add Settings.
 ------------------------------------------------------------
 
 freshLibStub()
-run(OLDER, "Compat.lua (r2)")
+load(R3, "r3")
+lib = LibStub("LibGroupBuffs-1.0")
+api = lib.API
+H.eq(lib.Settings, nil, "r3 has no Settings")
+local failures = api.eventFailures
+failures.PROBE = "recorded by r3"
+api.eventFailuresByOwner.Priestly = { PROBE = "recorded for Priestly by r3" }
+
+load(CURRENT_FILES, "current")
+H.check(LibStub("LibGroupBuffs-1.0") == lib, "newer-after-r3 upgrades the same library table")
+H.check(lib.API == api, "and the same API table, so references taken earlier stay valid")
+H.check(type(lib.Settings) == "table" and type(lib.Settings.New) == "function",
+    "gaining Settings, which r3 lacked")
+H.eq(lib.settingsMinor, CURRENT, "installed by the claiming copy")
+H.check(lib.API.eventFailures == failures, "keeping r3's failure table")
+H.eq(lib.API.eventFailures.PROBE, "recorded by r3", "and what r3 recorded in it")
+H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly by r3",
+    "including what it recorded per consumer")
+H.eq(activeMinor(), CURRENT, "and the newer MINOR is registered")
+
+------------------------------------------------------------
+-- A newer copy after r2: the upgrade Priestly v2.0.x players will meet.
+------------------------------------------------------------
+
+freshLibStub()
+load(R2, "r2")
 lib = LibStub("LibGroupBuffs-1.0")
 api = lib.API
 H.eq(api.RegisterEventsReported, nil, "r2 has no RegisterEventsReported")
 H.eq(api.eventFailuresByOwner, nil, "or per-consumer failures")
-local failures = api.eventFailures
+failures = api.eventFailures
 failures.PROBE = "recorded by r2"
 
-run(SOURCE, "Compat.lua")
-H.check(LibStub("LibGroupBuffs-1.0") == lib, "newer-after-older upgrades the same library table")
-H.check(lib.API == api, "and the same API table, so references taken earlier stay valid")
+load(CURRENT_FILES, "current")
+H.check(lib.API == api, "newer-after-r2 upgrades the same API table")
 H.check(type(lib.API.RegisterEventsReported) == "function", "gaining what r2 lacked")
 H.check(type(lib.API.eventFailuresByOwner) == "table", "including per-consumer failures")
+H.check(type(lib.Settings.New) == "function", "and Settings")
 H.check(lib.API.eventFailures == failures, "keeping r2's failure table, not replacing it")
 H.eq(lib.API.eventFailures.PROBE, "recorded by r2", "or what r2 recorded in it")
 
--- Upgrading twice must not reset per-consumer failures either.
-lib.API.eventFailuresByOwner.Priestly = { PROBE = "recorded for Priestly" }
-run(SOURCE, "Compat.lua (again)")
-H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly",
-    "and a reload of the same version keeps per-consumer failures")
-_, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
-H.eq(minor, CURRENT, "and the newer MINOR is registered")
+------------------------------------------------------------
+-- A settings object made by one copy runs the next copy's methods.
+--
+-- Priestly creates its object at load; Wildly may embed a newer library that
+-- loads afterwards. The object holds the shared metatable, and the newer copy
+-- assigns into the shared methods table, so the upgrade reaches it.
+------------------------------------------------------------
+
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+local store = {}
+local made = lib.Settings.New({
+    owner = "Priestly", report = function() end,
+    measuredOnBuild = "1", svBrokenOnBuild = "1",
+    scopes = { { label = "per-character", get = function() return store end } },
+})
+made:Set("lockFrame", true)
+local meta = getmetatable(made)
+
+local NEXT = withMinor(CURRENT_FILES, CURRENT + 1, {
+    ["Settings.lua"] = "LibStub('LibGroupBuffs-1.0').SettingsMethods.Probe = function() return 'next' end",
+})
+load(NEXT, "next")
+H.eq(activeMinor(), CURRENT + 1, "the next copy claims the library")
+H.eq(lib.settingsMinor, CURRENT + 1, "and installs its Settings")
+H.check(getmetatable(made) == meta, "the object keeps its metatable")
+H.eq(made.Probe and made:Probe(), "next", "and runs the newer copy's methods")
+H.eq(store.lockFrame, true, "without losing what it wrote")
 
 ------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
@@ -108,6 +201,7 @@ H.eq(minor, CURRENT, "and the newer MINOR is registered")
 
 local scripts = H.xmlScripts()
 H.eq(scripts[1], "LibStub/LibStub.lua", "LibStub loads first")
+H.eq(scripts[2], "Compat.lua", "Compat.lua claims the version before any other file checks it")
 for _, file in ipairs(scripts) do
     local f = io.open(file, "rb")
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")

@@ -32,10 +32,11 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 | File | What it holds |
 |---|---|
 | `Compat.lua` | `lib.API` — every removed or moved API, measured against the live client |
+| `Settings.lua` | `lib.Settings` — one write path for your saved table, and the checks that notice when the client is fixed or updated |
 | `LibGroupBuffs-1.0.xml` | the entry point; lists exactly the files that exist, in load order |
-
-Planned, not yet present: the settings write path, the buff engine and the row/popover UI.
 | `LibStub/` | bundled; designed to be embedded many times and resolve to one instance |
+
+Planned, not yet present: the buff engine and the row/popover UI.
 
 ## Using it
 
@@ -78,6 +79,27 @@ API.RegisterEventsReported(frame, "MyAddon", function(rejected)
     print("MyAddon: unsupported events skipped: " .. table.concat(rejected, ", "))
 end, "PLAYER_LOGIN", "UNIT_AURA")
 ```
+
+Route settings through one setter, and let the library watch for the SavedVariables fix and for
+a new client build. Your addon owns its SavedVariables; the library only calls the accessors:
+
+```lua
+local settings = LibStub("LibGroupBuffs-1.0").Settings.New({
+    owner  = "MyAddon",
+    scopes = { { label = "account-wide", get = function()
+        if not MyAddonDB then MyAddonDB = {} end
+        return MyAddonDB
+    end } },
+    measuredOnBuild = "69913",   -- the build your notes were measured on
+    svBrokenOnBuild = "69913",   -- the build where SavedVariables are measured broken
+    report = function(text) print("MyAddon: " .. text) end,
+})
+settings:Set("lockFrame", true)
+-- from your PLAYER_ENTERING_WORLD handler:
+settings:HandleEnteringWorld(isInitialLogin, isReloadingUi)
+```
+
+`tests/config_scan.lua` (not shipped) lets your tests fail on any other write to your saved table.
 
 Only the runtime files and `LICENSE` end up in your addon's `Libs` folder. The library's own
 `.pkgmeta` tells the packager to leave out its tests and notes.

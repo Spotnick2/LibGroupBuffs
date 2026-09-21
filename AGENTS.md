@@ -91,11 +91,18 @@ Vanilla content, Retail codebase.
 - `LibGroupBuffs-1.0.xml` — load order; the entry point a consuming addon references. It lists
   **only files that exist**: a missing one is a load error in every embedding addon.
   `tests/harness.lua` loads exactly this list, so the suite fails the same way the client would.
-- Planned, not yet present: `Settings.lua` (the config write path, the SavedVariables-fix detector
-  and the build watch), `Engine.lua` (aura cache, learned durations, roster, group stats,
+- `Settings.lua` — `lib.Settings.New(spec)`: one write path for an addon's saved table
+  (`Set`, `SetIn`, `Changed`), the SavedVariables-fix detector and the build watch
+  (`HandleEnteringWorld`). The addon passes accessors for its own saved tables (the first is the
+  settings store), its `measuredOnBuild` / `svBrokenOnBuild` constants and a required
+  `report(text, kind)`. The library composes the plain-text messages, because the "full exit, not a
+  relog" caveat is part of the detector being right; the addon adds its prefix and colour.
+- Planned, not yet present: `Engine.lua` (aura cache, learned durations, roster, group stats,
   targeting) and `UI.lua` (row and popover frames).
 - `LibStub/` — bundled, unmodified, public domain.
-- `tests/` — Lua 5.1, no game client.
+- `tests/` — Lua 5.1, no game client. `tests/config_scan.lua` is also used by consumers: their
+  tests `dofile` it from their library checkout to fail on writes to their SavedVariables outside
+  a `config-owner` region. It is not shipped.
 - `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the
   packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
   `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is
@@ -114,20 +121,26 @@ Vanilla content, Retail codebase.
   changes capability detection for every other addon on the machine.
 - **No addon-specific behaviour.** Anything that differs between Priestly, Wildly and Magely
   belongs in the addon or behind a host callback, not in a branch here.
-- **Version bumps:** raise `MINOR` in `Compat.lua` whenever behaviour changes, so an older embedded
+- **Version bumps:** raise `MINOR` in **every runtime file** (they must agree;
+  `tests/test_versions.lua` checks) whenever behaviour changes, so an older embedded
   copy loses to a newer one, and tag the merge `r<MINOR>` for consumers to pin. `LibStub:NewLibrary`
   returns nil when a newer copy already loaded.
 - **An upgrade reuses the existing tables.** A newer copy loading after an older one gets the same
   `lib` and `lib.API`, so write `X = X or {}` for anything holding state (see `eventFailures`), and
   never replace a table other code may have taken a reference to. `tests/test_versions.lua` checks
-  equal-after-equal, older-after-newer and newer-after-older, against the real r2 source in
-  `tests/fixtures/Compat-r2.lua` — the copy Priestly v2.0.x ships. When a new tag goes out and
-  consumers move to it, add that tag's `Compat.lua` as a fixture too; never synthesise the older
-  copy from the current source, since it would already contain what the upgrade must add.
+  equal-after-equal, older-after-newer and newer-after-older, loading every runtime file, against
+  the real released source in `tests/fixtures/` (r2, the copy Priestly v2.0.x ships, and r3). When a
+  new tag goes out and consumers move to it, add that tag's runtime files as fixtures too; never
+  synthesise the older copy from the current source, since it would already contain what the
+  upgrade must add. Objects handed to consumers (settings objects) hold a shared metatable whose
+  methods table is assigned in place, so an upgrade reaches objects an older copy created.
 - **More than one file needs a shared guard.** Returning early from `Compat.lua` does not stop the
   XML from running the next file, and calling `NewLibrary` again with the same version in a second
-  file makes that file reject itself. When `Settings.lua` or `Engine.lua` arrive, one file claims the
-  version and the others check they belong to the active one before installing anything.
+  file makes that file reject itself. So `Compat.lua` claims the version, and every later file
+  checks `LibStub:GetLibrary(MAJOR)` reports its own `MINOR` (else an older copy is loading after a
+  newer one) and that it has not installed already (`lib.settingsMinor == MINOR`: equal after
+  equal, where reinstalling would replace functions consumers hold). It records that marker as its
+  **last** line, so a file that threw partway is not marked installed.
 
 ## Client Rules (measured, not inferred)
 
@@ -181,6 +194,10 @@ anything built on a widget method, execute it and assert what it produced.
 anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
 three orders to check an upgrade keeps table identity and state.
 
+`Settings.lua` is used by addons that also run their own copy of the load-check tests; when you
+change it, run the Priestly suite too (below) — its `test_config_seam.lua` checks the same
+behaviour through Priestly's wrappers.
+
 ### Validate through a consumer before tagging
 
 The library's own tests cover each contract. Priestly exercises the library far more — every aura
@@ -207,7 +224,7 @@ on and which you rejected.
 
 Consumers pin a tag, so nothing reaches them until one exists:
 
-1. Raise `MINOR` in `Compat.lua` for any behaviour change, in the same PR.
+1. Raise `MINOR` in every runtime file for any behaviour change, in the same PR.
 2. After merge, tag the merge commit `r<MINOR>` and push the tag: `git tag r3 && git push origin r3`.
    The tag and `MINOR` must match; a consumer reading the tag assumes it knows the version.
 3. In each consumer, bump `tag:` in `.pkgmeta` in its own PR. Its CI checks out exactly that tag and
