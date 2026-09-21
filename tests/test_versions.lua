@@ -71,7 +71,14 @@ local R2 = { { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r2.lua
 local R3 = { { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r3.lua") } }
 H.eq(tonumber(R2[1].src:match(MINOR_PATTERN)), 2, "the r2 fixture is r2")
 H.eq(tonumber(R3[1].src:match(MINOR_PATTERN)), 3, "the r3 fixture is r3")
-H.check(CURRENT > 3, "the current MINOR is newer than every fixture")
+local R4 = {
+    { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r4.lua") },
+    { name = "Settings.lua", src = ReadFile("tests/fixtures/Settings-r4.lua") },
+}
+for _, file in ipairs(R4) do
+    H.eq(tonumber(file.src:match(MINOR_PATTERN)), 4, "the r4 fixture's " .. file.name .. " is r4")
+end
+H.check(CURRENT > 4, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
@@ -92,6 +99,7 @@ load(CURRENT_FILES, "first")
 local lib = LibStub("LibGroupBuffs-1.0")
 local api, itemInfo = lib.API, lib.API.ItemInfo
 local settings, new, set = lib.Settings, lib.Settings.New, lib.SettingsMethods.Set
+local engine, engineNew, buffRem = lib.Engine, lib.Engine.New, lib.EngineMethods.BuffRem
 api.eventFailures.PROBE = "recorded before the second load"
 
 load(CURRENT_FILES, "again")
@@ -100,6 +108,8 @@ H.check(lib.API == api, "and the API table")
 H.check(lib.API.ItemInfo == itemInfo, "and its functions")
 H.check(lib.Settings == settings and lib.Settings.New == new, "and Settings")
 H.check(lib.SettingsMethods.Set == set, "and the settings methods")
+H.check(lib.Engine == engine and lib.Engine.New == engineNew, "and Engine")
+H.check(lib.EngineMethods.BuffRem == buffRem, "and the engine methods")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its recorded state")
 
 ------------------------------------------------------------
@@ -114,6 +124,12 @@ H.check(lib.API.RegisterEventsReported == reported, "and its functions")
 H.check(lib.Settings == settings and lib.Settings.New == new, "and leaves Settings in place")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its state")
 H.eq(activeMinor(), CURRENT, "the newer MINOR stays registered")
+
+load(R4, "r4")
+H.check(lib.Settings.New == new and lib.SettingsMethods.Set == set,
+    "r4-after-newer leaves Settings alone, though r4 has a Settings.lua of its own")
+H.check(lib.Engine.New == engineNew, "and Engine, which r4 lacks")
+H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
 
 load(R2, "r2")
 H.check(lib.API.RegisterEventsReported == reported, "r2 after it changes nothing either")
@@ -143,6 +159,30 @@ H.eq(lib.API.eventFailures.PROBE, "recorded by r3", "and what r3 recorded in it"
 H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly by r3",
     "including what it recorded per consumer")
 H.eq(activeMinor(), CURRENT, "and the newer MINOR is registered")
+
+------------------------------------------------------------
+-- A newer copy after r4: Settings upgrades, Engine arrives.
+------------------------------------------------------------
+
+freshLibStub()
+load(R4, "r4")
+lib = LibStub("LibGroupBuffs-1.0")
+H.eq(lib.Engine, nil, "r4 has no Engine")
+local r4Store = {}
+local r4Settings = lib.Settings.New({
+    owner = "Priestly", report = function() end,
+    measuredOnBuild = "1", svBrokenOnBuild = "1",
+    scopes = { { label = "per-character", get = function() return r4Store end } },
+})
+local r4Meta = getmetatable(r4Settings)
+
+load(CURRENT_FILES, "current")
+H.eq(lib.settingsMinor, CURRENT, "newer-after-r4 installs the newer Settings")
+H.check(getmetatable(r4Settings) == r4Meta, "an object r4 created keeps its metatable")
+r4Settings:Set("lockFrame", true)
+H.eq(r4Store.lockFrame, true, "and still works")
+H.check(type(lib.Engine.New) == "function", "Engine arrives")
+H.eq(lib.engineMinor, CURRENT, "installed by the claiming copy")
 
 ------------------------------------------------------------
 -- A newer copy after r2: the upgrade Priestly v2.0.x players will meet.
@@ -195,6 +235,25 @@ H.check(getmetatable(made) == meta, "the object keeps its metatable")
 H.eq(made.Probe and made:Probe(), "next", "and runs the newer copy's methods")
 H.eq(store.lockFrame, true, "without losing what it wrote")
 
+-- The same for an engine: its cache, host callbacks and defs survive.
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+local defs = { { id = "fort", snglID = 1243, sngl = "Power Word: Fortitude", duration = 3600 } }
+local visible = function() return true end
+local eng = lib.Engine.New({ defs = defs, bucketSize = 8, isVisible = visible })
+eng.cache["GUID-x"] = { fort = { exp = 0, dur = 0, stamp = 1 } }
+local engMeta, cache = getmetatable(eng), eng.cache
+
+load(withMinor(CURRENT_FILES, CURRENT + 1, {
+    ["Engine.lua"] = "LibStub('LibGroupBuffs-1.0').EngineMethods.Probe = function() return 'next' end",
+}), "next")
+H.eq(lib.engineMinor, CURRENT + 1, "the next copy installs its Engine")
+H.check(getmetatable(eng) == engMeta, "an existing engine keeps its metatable")
+H.eq(eng.Probe and eng:Probe(), "next", "and runs the newer copy's methods")
+H.check(eng.cache == cache and eng.cache["GUID-x"] ~= nil, "with its aura cache intact")
+H.check(eng.defs == defs and eng.isVisible == visible, "and its defs and host callbacks")
+
 ------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
 ------------------------------------------------------------
@@ -202,6 +261,7 @@ H.eq(store.lockFrame, true, "without losing what it wrote")
 local scripts = H.xmlScripts()
 H.eq(scripts[1], "LibStub/LibStub.lua", "LibStub loads first")
 H.eq(scripts[2], "Compat.lua", "Compat.lua claims the version before any other file checks it")
+H.eq(scripts[#scripts], "Engine.lua", "Engine.lua loads after the API it calls")
 for _, file in ipairs(scripts) do
     local f = io.open(file, "rb")
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")

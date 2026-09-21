@@ -49,8 +49,26 @@ Vanilla content, Retail codebase.
   settings store), its `measuredOnBuild` / `svBrokenOnBuild` constants and a required
   `report(text, kind)`. The library composes the plain-text messages, because the "full exit, not a
   relog" caveat is part of the detector being right; the addon adds its prefix and colour.
-- Planned, not yet present: `Engine.lua` (aura cache, learned durations, roster, group stats,
-  targeting) and `UI.lua` (row and popover frames).
+- `Engine.lua` — `lib.Engine.New(host)`: one engine per addon, holding its own GUID-keyed aura
+  cache. Aura reads with the combat-secrecy fallback (`HAS` / `MISSING` / `UNKNOWN`), durations,
+  the roster (`GatherGroups`, pets in `bucketSize` buckets from `PET_GROUP`), `ActiveDefs`,
+  `MembersFor`, `GroupStat`, `PickTarget`, `ClickSpells`, `AuraEventIsRelevant`, `PruneCache`.
+  Host seams: `defs` (ID-based: `id`, `snglID`, optional `grpID`), config accessors
+  (`showSolo`, `trackPets`, `isBuffEnabled`), `isVisible(def, groups, ord)`,
+  `membersFor(def, members)`, and duration storage (`learnDuration` / `learnedDuration`).
+  Contracts worth knowing before changing it:
+  - The addon calls `MembersFor` **once per row** and passes that list to `GroupStat`,
+    `PickTarget`, its row and its popover, so they cannot disagree; an empty list means no row.
+  - `PickTarget(members, def, anyValid, st)` reuses `st.byUnit` (no second aura read). UNKNOWN is
+    never picked as missing, but can be the last-resort fallback. Range is checked against the
+    spell the click actually casts. `anyValid` means "any valid member will do", not "this is the
+    group spell".
+  - `RefreshSpells` updates the addon's defs **in place**; the defs table belongs to one engine.
+  - The library has no frames or timers: the addon calls `PruneCache` (on roster changes) and
+    throttles refreshes itself. Durations are stored by the addon, keyed by the spell name seen.
+  - `AuraEventIsRelevant` keeps every payload touch inside one `pcall` and checks every def, not
+    only visible ones.
+- Planned, not yet present: `UI.lua` (row and popover frames).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. `tests/config_scan.lua` is also used by consumers: their
   tests `dofile` it from their library checkout to fail on writes to their SavedVariables outside
@@ -145,6 +163,11 @@ anything built on a widget method, execute it and assert what it produced.
 `tests/harness.lua` loads exactly what `LibGroupBuffs-1.0.xml` lists, in order, and fails on
 anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
 three orders to check an upgrade keeps table identity and state.
+
+`tests/test_engine_buffs.lua` and `test_engine_rows.lua` are Priestly's engine tests ported with
+the same scenarios and expectations (`H.PriestEngine` builds a Priestly-shaped host), plus hosts
+shaped like Wildly (a single-only, tank-filtered Thorns) and Magely (two optional buffs) — the
+seams exist for them, so test them there.
 
 `Settings.lua` is used by addons that also run their own copy of the load-check tests; when you
 change it, run the Priestly suite too (below) — its `test_config_seam.lua` checks the same

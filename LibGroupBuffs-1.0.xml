@@ -21,4 +21,5 @@
     <Script file="LibStub\LibStub.lua"/>
     <Script file="Compat.lua"/>
     <Script file="Settings.lua"/>
+    <Script file="Engine.lua"/>
 </Ui>
