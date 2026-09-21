@@ -3,6 +3,34 @@
 Trust these instructions. Search the codebase only when information here is incomplete, stale, or
 appears incorrect.
 
+## Review preferences
+
+- When asked to review a pull request, review its committed changes and post actionable findings on
+  that PR. If there are no actionable findings, post a review summary with validation performed and
+  any material limitations. Link the posted review in the final response.
+- End every pull-request review and follow-up review with an explicit merge-readiness verdict:
+  `Ready for merge` or `Not ready for merge`, followed by the reason and any remaining required
+  work. State the same verdict clearly in the final response to the user.
+- Before starting a substantive code review, assess its scope and recommend an appropriate model
+  and reasoning effort. Use a GPT-5.6 model as the floor for substantive reviews; normally recommend
+  `gpt-5.6-sol`, reserving stronger models for exceptional cases. Ask when an escalation or
+  de-escalation is warranted, and honor explicit approval to use the current model for that review
+  without asking again. Do not silently switch models or effort. Follow the user's cost policy.
+- Preserve unrelated local edits during reviews.
+- **Check API claims against the measured API dump, not memory.** `C:/Projects/References/` holds
+  `forever-api-<build>.md` — the full API surface dumped from the live client: documented functions
+  with signatures and `optional` markers, events with payloads, enums, the `_G` walk, every `C_*`
+  namespace, and widget methods per type (the only place those are listed). Use the newest file and
+  check the build in its header matches. Retail and Classic knowledge is wrong here often enough
+  that "this API exists" or "this method takes these arguments" must be checked before it is stated
+  in a finding.
+- The dump says what **exists**, not what **works**. Behaviour — combat secrecy, SavedVariables not
+  loading, `GetInstanceInfo` returning the continent — is measured in game and recorded in
+  Priestly's `docs/FOREVER-PROBE.md`. Read both before arguing from how an API behaves elsewhere.
+- **A change here ships in every consumer.** Review it as a change to Priestly, Wildly and Magely at
+  once: check the version guard, table identity across an upgrade, and that nothing assumes one
+  particular consumer.
+
 ## What This Repository Is
 
 `LibGroupBuffs-1.0` is the shared engine behind three WoW: Forever addons — Priestly, Wildly and
@@ -66,6 +94,12 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
   and the surname arrives where the realm normally sits. Use `API.UnitDisplayName`.
 - **`GetInstanceInfo` returns the continent outdoors**, not an empty string.
 - **`MouseIsOver` is gone.** Frames carry `:IsMouseOver()`.
+- **`GameTooltip` has no item-setting method at all** — no `SetItemByID`, `SetHyperlink`,
+  `SetBagItem` or `SetInventoryItem`. Build item tooltips from `API.ItemInfo`.
+- **Register secure buff buttons for both mouse edges** (`API.ClickEdges`). The client's secure
+  handler acts on exactly one of them, chosen by `ActionButtonUseKeyDown`, so both is one cast; one
+  edge is a dead button for anyone whose client acts on release. Never set `typerelease` on such a
+  button: that path would cast a second time.
 - **`RegisterEvent` throws on an unknown event name.**
 - **Nothing an addon writes survives a real restart** — account-wide or per-character
   SavedVariables, or addon CVars. An earlier note here said per-character storage works; it does
@@ -82,13 +116,48 @@ pwsh tests/run.ps1
 `tests/wow_stubs.lua` is an **allowlist**: it fails the run on the read of any global it does not
 define. That only works if it also models the client's absences and shapes honestly — a stub more
 forgiving than the client lets broken code pass a green suite, which is how a call to the removed
-`MouseIsOver` shipped once. Confirm a new global against the live client before stubbing it.
+`MouseIsOver` shipped once. Before stubbing a new global, confirm it exists in the newest
+`C:/Projects/References/forever-api-<build>.md`, and stub it with the client's exact signature.
 
 Strict globals only catch what actually runs, so every script handler the library installs needs a
-test that executes it.
+test that executes it. And they do not cover **methods**: the stub's frames answer any unknown
+method with a silent no-op, so a call to a widget method this client lacks passes unnoticed. For
+anything built on a widget method, execute it and assert what it produced.
+
+`tests/harness.lua` loads exactly what `LibGroupBuffs-1.0.xml` lists, in order, and fails on
+anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
+three orders to check an upgrade keeps table identity and state.
+
+### Validate through a consumer before tagging
+
+The library's own tests cover each contract. Priestly exercises the library far more — every aura
+read, click and tooltip — so run its suite against your working copy before tagging:
+
+```powershell
+pwsh ..\Priestly\tests\run.ps1        # reads this checkout as ../LibGroupBuffs
+```
+
+Its first line names the library revision it ran against. `pwsh ..\Priestly\Tools\deploy.ps1`
+puts the same working copy into the game for an in-game check.
 
 ## Workflow
 
 Issues and pull requests, same as the addons: open an issue, branch, PR referencing it, review
 before merge. Any behaviour change here lands in three addons at once, so it deserves more care than
 a change in one of them, not less.
+
+For an architecture or risk review, the `codex-consult` skill (`.claude/skills/codex-consult`) runs
+Codex headlessly. Treat its findings as input: verify each against the code, and say which you acted
+on and which you rejected.
+
+## Releasing
+
+Consumers pin a tag, so nothing reaches them until one exists:
+
+1. Raise `MINOR` in `Compat.lua` for any behaviour change, in the same PR.
+2. After merge, tag the merge commit `r<MINOR>` and push the tag: `git tag r3 && git push origin r3`.
+   The tag and `MINOR` must match; a consumer reading the tag assumes it knows the version.
+3. In each consumer, bump `tag:` in `.pkgmeta` in its own PR. Its CI checks out exactly that tag and
+   checks the release zip carries the library, so a bad tag fails there, not in players' hands.
+
+Never move or reuse a tag once pushed: a consumer's release is pinned to it.
