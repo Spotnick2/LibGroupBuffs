@@ -67,6 +67,21 @@ Then:
 local API = LibStub("LibGroupBuffs-1.0").API
 ```
 
+Call library functions through `API` rather than copying them into locals: a newer embedded copy
+upgrades `API` in place, and a local copy would keep running the old version.
+
+Register events with your own reporter, so a name this client rejects is never silent. The library
+still prints nothing itself; what the report says is up to you:
+
+```lua
+API.RegisterEventsReported(frame, "MyAddon", function(rejected)
+    print("MyAddon: unsupported events skipped: " .. table.concat(rejected, ", "))
+end, "PLAYER_LOGIN", "UNIT_AURA")
+```
+
+Only the runtime files and `LICENSE` end up in your addon's `Libs` folder. The library's own
+`.pkgmeta` tells the packager to leave out its tests and notes.
+
 ## Tests
 
 ```powershell

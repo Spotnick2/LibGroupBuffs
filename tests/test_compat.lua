@@ -233,6 +233,43 @@ H.check(failed ~= nil and failed[1] == "NOT_A_REAL_EVENT",
 H.check(API.eventFailures.NOT_A_REAL_EVENT ~= nil, "the failure is recorded for /dump")
 
 ------------------------------------------------------------
+-- RegisterEventsReported: rejected events cannot be silent
+--
+-- RegisterEvents returns the rejected names and prints nothing, so a caller
+-- that ignores the return value has a dead handler. The reported form takes
+-- the consumer's own reporter, and refuses to run without one.
+------------------------------------------------------------
+
+WoW.reset()
+local g = CreateFrame("Frame")
+local reported
+local function report(names) reported = names end
+
+reported = nil
+ok, failed = API.RegisterEventsReported(g, "Priestly", report, "PLAYER_LOGIN", "UNIT_AURA")
+H.eq(ok, true, "known events register cleanly")
+H.eq(reported, nil, "and nothing is reported")
+
+WoW.badEvents.NOT_A_REAL_EVENT = true
+ok, failed = API.RegisterEventsReported(g, "Priestly", report, "UNIT_PET", "NOT_A_REAL_EVENT")
+H.eq(ok, false, "a rejected name still fails")
+H.check(WoW.events[g].UNIT_PET == true, "the good event still registered")
+H.eq(reported and reported[1], "NOT_A_REAL_EVENT", "and the consumer's reporter is told")
+H.eq(failed and failed[1], "NOT_A_REAL_EVENT", "while the list is still returned")
+
+-- Recorded per consumer: the flat table cannot say which addon asked, and two
+-- failing on the same name would overwrite each other.
+ok = API.RegisterEventsReported(g, "Wildly", report, "NOT_A_REAL_EVENT")
+H.check(API.eventFailuresByOwner.Priestly.NOT_A_REAL_EVENT ~= nil, "Priestly's failure is kept")
+H.check(API.eventFailuresByOwner.Wildly.NOT_A_REAL_EVENT ~= nil, "and so is Wildly's, separately")
+
+-- No reporter, no registration: the mistake surfaces at load, in a test.
+local threw = not pcall(API.RegisterEventsReported, g, "Priestly", nil, "UNIT_PET")
+H.check(threw, "a missing reporter is an error, not a silent registration")
+threw = not pcall(API.RegisterEventsReported, g, "", report, "UNIT_PET")
+H.check(threw, "and so is a missing owner")
+
+------------------------------------------------------------
 -- Combat aura secrecy
 ------------------------------------------------------------
 

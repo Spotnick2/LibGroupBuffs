@@ -79,6 +79,8 @@ lib = LibStub("LibGroupBuffs-1.0")
 api = lib.API
 H.eq(api.ItemInfo, nil, "the older copy has no ItemInfo")
 api.eventFailures.PROBE = "recorded by the older copy"
+api.eventFailuresByOwner = api.eventFailuresByOwner or {}
+api.eventFailuresByOwner.Priestly = { PROBE = "recorded for Priestly by the older copy" }
 
 run(SOURCE, "Compat.lua")
 H.check(LibStub("LibGroupBuffs-1.0") == lib, "newer-after-older upgrades the same library table")
@@ -86,6 +88,8 @@ H.check(lib.API == api, "and the same API table, so references taken earlier sta
 H.check(type(lib.API.ItemInfo) == "function", "gaining what the older copy lacked")
 H.eq(lib.API.eventFailures.PROBE, "recorded by the older copy",
     "without resetting what the older copy recorded")
+H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly by the older copy",
+    "including what it recorded per consumer")
 _, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
 H.eq(minor, CURRENT, "and the newer MINOR is registered")
 

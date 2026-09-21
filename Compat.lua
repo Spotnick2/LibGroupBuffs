@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 2
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 3
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -37,7 +37,15 @@ local max, huge = math.max, math.huge
 -- resetting this would throw away the failures an older copy recorded.
 API.eventFailures = API.eventFailures or {}
 
--- Returns ok, failedList
+-- The same failures, per consumer: `eventFailuresByOwner[owner][event]`. The
+-- flat eventFailures above is shared by every addon embedding the library, so
+-- it cannot say which one asked, and two failing on the same name overwrite
+-- each other.
+API.eventFailuresByOwner = API.eventFailuresByOwner or {}
+
+-- Returns ok, failedList. Prints nothing and reports to no one, so a caller
+-- that ignores the return value has a silently dead handler; consumers should
+-- use RegisterEventsReported below. Kept unchanged for consumers pinned to r2.
 function API.RegisterEvents(frame, ...)
     local failed
     for i = 1, select("#", ...) do
@@ -50,6 +58,31 @@ function API.RegisterEvents(frame, ...)
         end
     end
     return failed == nil, failed
+end
+
+-- RegisterEvents that cannot be silent. `owner` names the consumer ("Priestly")
+-- and `report` is how it tells its user, called with the list of rejected
+-- names when there are any. Both are required and checked up front: a missing
+-- reporter is a programming error, and it fails at load where a test catches
+-- it rather than as a dead handler in game. The library still never prints -
+-- what the report says, and where, is the consumer's business.
+--
+-- Returns ok, failedList, like RegisterEvents.
+function API.RegisterEventsReported(frame, owner, report, ...)
+    if type(owner) ~= "string" or owner == "" then
+        error("RegisterEventsReported: owner must name the addon registering", 2)
+    end
+    if type(report) ~= "function" then
+        error("RegisterEventsReported: report must be a function - rejected events would be silent", 2)
+    end
+    local ok, failed = API.RegisterEvents(frame, ...)
+    if not ok then
+        local mine = API.eventFailuresByOwner[owner] or {}
+        API.eventFailuresByOwner[owner] = mine
+        for _, ev in ipairs(failed) do mine[ev] = API.eventFailures[ev] end
+        report(failed)
+    end
+    return ok, failed
 end
 
 -- ─── auras ───────────────────────────────────────────────────────────────────
