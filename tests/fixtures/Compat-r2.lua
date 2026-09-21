@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 3
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 2
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -37,72 +37,19 @@ local max, huge = math.max, math.huge
 -- resetting this would throw away the failures an older copy recorded.
 API.eventFailures = API.eventFailures or {}
 
--- The same failures, per consumer: `eventFailuresByOwner[owner][event]`. The
--- flat eventFailures above is shared by every addon embedding the library, so
--- it cannot say which one asked, and two failing on the same name overwrite
--- each other.
-API.eventFailuresByOwner = API.eventFailuresByOwner or {}
-
--- Returns ok, failedList. Prints nothing and reports to no one, so a caller
--- that ignores the return value has a silently dead handler; consumers should
--- use RegisterEventsReported below. Kept unchanged for consumers pinned to r2.
+-- Returns ok, failedList
 function API.RegisterEvents(frame, ...)
-    -- Arguments are checked before anything is registered. A nil event name is
-    -- a programming error (a misspelt constant, a conditional that came out
-    -- nil), and meeting it partway through would leave the earlier events
-    -- registered, the later ones never tried and nobody told.
-    if type(frame) ~= "table" or type(frame.RegisterEvent) ~= "function" then
-        error("RegisterEvents: frame must be a frame, got " .. type(frame), 2)
-    end
-    local n = select("#", ...)
-    for i = 1, n do
-        local ev = select(i, ...)
-        if type(ev) ~= "string" or ev == "" then
-            error("RegisterEvents: event " .. i .. " is not an event name (" .. tostring(ev) .. ")", 2)
-        end
-    end
-
     local failed
-    for i = 1, n do
+    for i = 1, select("#", ...) do
         local ev = select(i, ...)
-        -- Two ways to refuse, and both count. RegisterEvent throws on a name
-        -- this client does not know, and it is declared to return a boolean
-        -- (`RegisterEvent(eventName) -> registered:bool` in the API dump), so
-        -- a plain `false` is a refusal too. Checking only for a throw would
-        -- call it success, and the handler would be silently dead.
-        local ok, result = pcall(frame.RegisterEvent, frame, ev)
-        if not ok or result == false then
-            API.eventFailures[ev] = ok and "RegisterEvent returned false" or tostring(result)
+        local ok, err = pcall(frame.RegisterEvent, frame, ev)
+        if not ok then
+            API.eventFailures[ev] = tostring(err)
             failed = failed or {}
             failed[#failed + 1] = ev
         end
     end
     return failed == nil, failed
-end
-
--- RegisterEvents that cannot be silent. `owner` names the consumer ("Priestly")
--- and `report` is how it tells its user, called with the list of rejected
--- names when there are any. Both are required and checked up front: a missing
--- reporter is a programming error, and it fails at load where a test catches
--- it rather than as a dead handler in game. The library still never prints -
--- what the report says, and where, is the consumer's business.
---
--- Returns ok, failedList, like RegisterEvents.
-function API.RegisterEventsReported(frame, owner, report, ...)
-    if type(owner) ~= "string" or owner == "" then
-        error("RegisterEventsReported: owner must name the addon registering", 2)
-    end
-    if type(report) ~= "function" then
-        error("RegisterEventsReported: report must be a function - rejected events would be silent", 2)
-    end
-    local ok, failed = API.RegisterEvents(frame, ...)
-    if not ok then
-        local mine = API.eventFailuresByOwner[owner] or {}
-        API.eventFailuresByOwner[owner] = mine
-        for _, ev in ipairs(failed) do mine[ev] = API.eventFailures[ev] end
-        report(failed)
-    end
-    return ok, failed
 end
 
 -- ─── auras ───────────────────────────────────────────────────────────────────
