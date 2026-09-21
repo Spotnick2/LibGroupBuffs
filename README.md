@@ -4,8 +4,10 @@ Shared engine for PallyPower-style group buff managers on **World of Warcraft: F
 interface `16001`).
 
 Built out of [Priestly](https://github.com/Spotnick2/priestly), which ported from TBC Classic
-Anniversary to Forever. Its siblings — Druidly and Magely — are the same addon with a different
-`DEFS` table, so the parts that are not class-specific live here instead of three times over.
+Anniversary to Forever. Its siblings — [Wildly](https://github.com/Spotnick2/Wildly) and
+[Magely](https://github.com/Spotnick2/Magely) — are the same addon with a different `DEFS` table, so
+the parts that are not class-specific live here instead of three times over. Priestly is the only
+consumer so far; Wildly and Magely are still on TBC and will follow.
 
 ## Why a library
 
@@ -19,7 +21,9 @@ long list of client behaviours that are not in any documentation, several of whi
 - `UnitName` returns only the first name for anyone but the player, because characters have surnames
 - `GetInstanceInfo` returns the continent when you are outdoors, not an empty string
 - `MouseIsOver` is gone
-- account-wide SavedVariables are written but never read back
+- no SavedVariables are read back after a real restart, account-wide or per-character, and addon
+  CVars are lost too — nothing an addon writes survives. `/reload` hides this, because it keeps the
+  client running
 
 Each of those cost a debugging cycle to find. Rediscovering them per addon is the expensive path.
 
@@ -28,8 +32,9 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 | File | What it holds |
 |---|---|
 | `Compat.lua` | `lib.API` — every removed or moved API, measured against the live client |
-| `Engine.lua` | aura cache and combat secrecy, learned durations, roster gathering, group stats, target picking *(in progress)* |
-| `UI.lua` | the generic row and popover frames, driven by a `DEFS` table *(in progress)* |
+| `LibGroupBuffs-1.0.xml` | the entry point; lists exactly the files that exist, in load order |
+
+Planned, not yet present: the settings write path, the buff engine and the row/popover UI.
 | `LibStub/` | bundled; designed to be embedded many times and resolve to one instance |
 
 ## Using it
@@ -40,7 +45,15 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 externals:
   Libs/LibGroupBuffs-1.0:
     url: https://github.com/Spotnick2/LibGroupBuffs
+    tag: r2
 ```
+
+Pin a tag. Tracking the branch would let a release's library change without any change to the
+addon. Tags are named after the library's `MINOR`: `r2` is `MINOR = 2`.
+
+For development, check this repository out next to the addon (`../LibGroupBuffs`). The consuming
+addon's tests load it from there, and its deploy script copies it into `Libs/` for in-game
+testing.
 
 Its TOC, before any of its own files:
 

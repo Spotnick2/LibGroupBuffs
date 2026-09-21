@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 1
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 2
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -33,7 +33,9 @@ local max, huge = math.max, math.huge
 -- somebody else's chat frame.
 
 -- Kept for diagnosis (`/dump LibStub("LibGroupBuffs-1.0").API.eventFailures`).
-API.eventFailures = {}
+-- Kept across a library upgrade: a newer embedded copy reuses `lib.API`, and
+-- resetting this would throw away the failures an older copy recorded.
+API.eventFailures = API.eventFailures or {}
 
 -- Returns ok, failedList
 function API.RegisterEvents(frame, ...)
@@ -400,6 +402,56 @@ function API.CountItem(itemID)
     return total
 end
 
+-- ─── item info for tooltips ─────────────────────────────────────────────────
+-- GameTooltip has NO item-setting method on this client. Measured against the
+-- full widget-method dump: no SetItemByID, no SetHyperlink, no SetBagItem, no
+-- SetInventoryItem. So the caller builds the tooltip lines and this hands back
+-- the data (Priestly issue #29).
+--
+-- Returns nil when the item is not in the client's cache, having asked for it
+-- first. That matters: C_Item.GetItemInfo returns NOTHING on a cache miss
+-- rather than nil, and the cache is per client - the same call succeeds on one
+-- character and comes back empty on another.
+
+function API.ItemInfo(itemID)
+    -- C_Item is the file-local alias taken at load time, as every other
+    -- contract here does.
+    if not (C_Item and C_Item.GetItemInfo) then return nil end
+
+    local function requestLoad()
+        if C_Item.RequestLoadItemDataByID then
+            pcall(C_Item.RequestLoadItemDataByID, itemID)
+        end
+    end
+
+    if C_Item.IsItemDataCachedByID then
+        local known, cached = pcall(C_Item.IsItemDataCachedByID, itemID)
+        if known and not cached then
+            requestLoad()
+            return nil   -- the caller shows a placeholder; the next hover has it
+        end
+    end
+
+    -- Returns sit at index+1 inside `packed`, pcall's ok being [1]: the name is
+    -- the 1st return, quality the 3rd.
+    local packed = { pcall(C_Item.GetItemInfo, itemID) }
+    if not packed[1] or packed[2] == nil then
+        -- The cache check said yes and the data still is not there. Believe the
+        -- data over the flag and ask again, or every later call misses the
+        -- same way.
+        requestLoad()
+        return nil
+    end
+
+    local name, quality = packed[2], packed[4]
+    local r, g, b = 1, 1, 1
+    if quality and C_Item.GetItemQualityColor then
+        local ok, qr, qg, qb = pcall(C_Item.GetItemQualityColor, quality)
+        if ok and qr then r, g, b = qr, qg, qb end
+    end
+    return name, r, g, b
+end
+
 -- ─── addon metadata ──────────────────────────────────────────────────────────
 -- GetAddOnMetadata moved to C_AddOns.
 
@@ -418,4 +470,29 @@ end
 function API.ClientBuild()
     local ok, _, build = pcall(GetBuildInfo)
     return ok and tostring(build) or "?"
+end
+
+-- ─── click registration ─────────────────────────────────────────────────────
+-- Register BOTH mouse edges. The client decides which one acts.
+--
+-- Blizzard_FrameXML/SecureTemplates.lua computes, on every click:
+--
+--     useOnKeyDown = <the button's "useOnKeyDown" attribute>
+--                    or GetCVarBool("ActionButtonUseKeyDown")
+--     clickAction  = (down and useOnKeyDown) or (not down and not useOnKeyDown)
+--
+-- which is `down == useOnKeyDown`, so of the two edges exactly one performs
+-- the action. Registering both is one cast, right whatever the CVar says and
+-- whenever it changes. Registering one edge left rows dead for anyone whose
+-- client acts on release (Priestly issue #17). Measured in game: one cast per
+-- click with the attribute unset, forced true, and forced false.
+--
+-- It does not double-cast for two reasons, and the second is the one to check
+-- if it ever does: `clickAction` admits one edge, and the other edge can reach
+-- the press-and-hold release path only through the "typerelease" attribute.
+-- A button that sets "typerelease" WOULD cast twice and spend two reagents.
+
+-- The RegisterForClicks event names to register a secure buff button with.
+function API.ClickEdges()
+    return "LeftButtonDown", "RightButtonDown", "LeftButtonUp", "RightButtonUp"
 end
