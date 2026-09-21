@@ -224,6 +224,8 @@ WoW.badEvents.NOT_A_REAL_EVENT = true
 local ok, failed = API.RegisterEvents(f, "UNIT_PET", "NOT_A_REAL_EVENT")
 H.check(ok == false, "a throwing event name is reported, not swallowed")
 H.check(WoW.events[f].UNIT_PET == true, "the good event still registered")
+H.check(API.eventFailures.NOT_A_REAL_EVENT ~= nil,
+    "the failure is recorded for /dump, even though nothing is printed")
 -- A library must not print into somebody else's chat frame, so the names come
 -- back for the consuming addon to report however it likes.
 H.check(failed ~= nil and failed[1] == "NOT_A_REAL_EVENT",
