@@ -29,11 +29,20 @@ Vanilla content, Retail codebase.
   targeting) and `UI.lua` (row and popover frames).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client.
+- `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the
+  packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
+  `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is
+  ignored, and that every file `git ls-files` lists is either loaded, `LICENSE`, or ignored — so a
+  new file that is not runtime code fails the suite until it gets an entry here.
 
 ## Library Rules
 
-- **Never print.** A library has no business writing to somebody else's chat frame. Return failures
-  to the caller — `API.RegisterEvents` returns `ok, failedList` for exactly this reason.
+- **Never print, and never let a failure be silent either.** A library has no business writing to
+  somebody else's chat frame, so it hands failures to the consumer to report. Where ignoring the
+  return value would silently lose one, take the consumer's reporter and refuse to run without it:
+  `API.RegisterEventsReported(frame, owner, report, ...)` errors if `report` is not a function, and
+  records failures per consumer in `API.eventFailuresByOwner[owner]`. `API.RegisterEvents` stays for
+  consumers pinned to an older tag.
 - **No globals** beyond what LibStub requires. No `_G` injection: defining a real `GetItemInfo`
   changes capability detection for every other addon on the machine.
 - **No addon-specific behaviour.** Anything that differs between Priestly, Wildly and Magely
@@ -44,7 +53,10 @@ Vanilla content, Retail codebase.
 - **An upgrade reuses the existing tables.** A newer copy loading after an older one gets the same
   `lib` and `lib.API`, so write `X = X or {}` for anything holding state (see `eventFailures`), and
   never replace a table other code may have taken a reference to. `tests/test_versions.lua` checks
-  equal-after-equal, older-after-newer and newer-after-older.
+  equal-after-equal, older-after-newer and newer-after-older, against the real r2 source in
+  `tests/fixtures/Compat-r2.lua` — the copy Priestly v2.0.x ships. When a new tag goes out and
+  consumers move to it, add that tag's `Compat.lua` as a fixture too; never synthesise the older
+  copy from the current source, since it would already contain what the upgrade must add.
 - **More than one file needs a shared guard.** Returning early from `Compat.lua` does not stop the
   XML from running the next file, and calling `NewLibrary` again with the same version in a second
   file makes that file reject itself. When `Settings.lua` or `Engine.lua` arrive, one file claims the
@@ -66,7 +78,9 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
   and the surname arrives where the realm normally sits. Use `API.UnitDisplayName`.
 - **`GetInstanceInfo` returns the continent outdoors**, not an empty string.
 - **`MouseIsOver` is gone.** Frames carry `:IsMouseOver()`.
-- **`RegisterEvent` throws on an unknown event name.**
+- **`RegisterEvent` throws on an unknown event name**, and is declared to return
+  `registered:bool`, so a `false` return is a refusal too. `API.RegisterEvents` treats both as
+  failures, and rejects a nil or empty name before registering anything.
 - **Nothing an addon writes survives a real restart** — account-wide or per-character
   SavedVariables, or addon CVars. An earlier note here said per-character storage works; it does
   not. `/reload` keeps the client running, so it can prove something is broken, never that it works.

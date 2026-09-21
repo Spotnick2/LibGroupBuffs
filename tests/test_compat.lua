@@ -232,6 +232,78 @@ H.check(failed ~= nil and failed[1] == "NOT_A_REAL_EVENT",
     "and the failing name is handed back to the caller")
 H.check(API.eventFailures.NOT_A_REAL_EVENT ~= nil, "the failure is recorded for /dump")
 
+-- The client can also refuse by returning false (the dump declares
+-- `-> registered:bool`). That is a failure, not a success.
+WoW.refusedEvents.REFUSED_EVENT = true
+ok, failed = API.RegisterEvents(f, "REFUSED_EVENT")
+H.eq(ok, false, "a false return is a refusal, not a success")
+H.eq(failed and failed[1], "REFUSED_EVENT", "and the name comes back")
+H.eq(API.eventFailures.REFUSED_EVENT, "RegisterEvent returned false", "and is recorded")
+
+-- A nil or empty name is a programming error, caught before anything registers.
+local h = CreateFrame("Frame")
+local threwNil = not pcall(API.RegisterEvents, h, "UNIT_PET", nil, "PLAYER_LOGIN")
+H.check(threwNil, "a nil event name is an error")
+H.eq(WoW.events[h], nil, "and nothing before it was registered")
+H.check(not pcall(API.RegisterEvents, h, ""), "an empty event name is an error")
+H.check(not pcall(API.RegisterEvents, nil, "UNIT_PET"), "and so is a missing frame")
+
+------------------------------------------------------------
+-- RegisterEventsReported: rejected events cannot be silent
+--
+-- RegisterEvents returns the rejected names and prints nothing, so a caller
+-- that ignores the return value has a dead handler. The reported form takes
+-- the consumer's own reporter, and refuses to run without one.
+------------------------------------------------------------
+
+WoW.reset()
+local g = CreateFrame("Frame")
+local reported
+local function report(names) reported = names end
+
+reported = nil
+ok, failed = API.RegisterEventsReported(g, "Priestly", report, "PLAYER_LOGIN", "UNIT_AURA")
+H.eq(ok, true, "known events register cleanly")
+H.eq(reported, nil, "and nothing is reported")
+
+WoW.badEvents.NOT_A_REAL_EVENT = true
+ok, failed = API.RegisterEventsReported(g, "Priestly", report, "UNIT_PET", "NOT_A_REAL_EVENT")
+H.eq(ok, false, "a rejected name still fails")
+H.check(WoW.events[g].UNIT_PET == true, "the good event still registered")
+H.eq(reported and reported[1], "NOT_A_REAL_EVENT", "and the consumer's reporter is told")
+H.eq(failed and failed[1], "NOT_A_REAL_EVENT", "while the list is still returned")
+
+-- Recorded per consumer: the flat table cannot say which addon asked, and two
+-- failing on the same name would overwrite each other.
+ok = API.RegisterEventsReported(g, "Wildly", report, "NOT_A_REAL_EVENT")
+H.check(API.eventFailuresByOwner.Priestly.NOT_A_REAL_EVENT ~= nil, "Priestly's failure is kept")
+H.check(API.eventFailuresByOwner.Wildly.NOT_A_REAL_EVENT ~= nil, "and so is Wildly's, separately")
+
+-- No reporter, no registration: the mistake surfaces at load, in a test.
+local threw = not pcall(API.RegisterEventsReported, g, "Priestly", nil, "UNIT_PET")
+H.check(threw, "a missing reporter is an error, not a silent registration")
+threw = not pcall(API.RegisterEventsReported, g, "", report, "UNIT_PET")
+H.check(threw, "and so is a missing owner")
+local k = CreateFrame("Frame")
+pcall(API.RegisterEventsReported, k, "Priestly", nil, "UNIT_PET")
+pcall(API.RegisterEventsReported, k, "", report, "UNIT_PET")
+H.eq(WoW.events[k], nil, "and neither mistake registered anything")
+
+-- A false return reaches the reporter like a throw does.
+WoW.refusedEvents.REFUSED_EVENT = true
+reported = nil
+ok = API.RegisterEventsReported(g, "Priestly", report, "REFUSED_EVENT")
+H.eq(ok, false, "a refused event fails the reported form too")
+H.eq(reported and reported[1], "REFUSED_EVENT", "and the reporter is told")
+
+-- A reporter that throws: the failure is already recorded, and the error
+-- reaches the caller rather than vanishing.
+local threwReport = not pcall(API.RegisterEventsReported, g, "Magely",
+    function() error("reporter broke") end, "NOT_A_REAL_EVENT")
+H.check(threwReport, "a throwing reporter's error reaches the caller")
+H.check(API.eventFailuresByOwner.Magely and API.eventFailuresByOwner.Magely.NOT_A_REAL_EVENT ~= nil,
+    "and the failure was recorded before the reporter ran")
+
 ------------------------------------------------------------
 -- Combat aura secrecy
 ------------------------------------------------------------

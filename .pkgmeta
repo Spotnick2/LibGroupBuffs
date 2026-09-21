@@ -1,10 +1,22 @@
+# LibGroupBuffs-1.0 is never published on its own. Addons embed it through
+# their .pkgmeta externals, and the packager applies this ignore list when it
+# copies the library into <addon>/Libs/LibGroupBuffs-1.0 - so only what runs
+# in game ships inside the addon.
+#
+# LICENSE deliberately ships: MIT requires the notice to travel with the code.
+# A consumer's CI checks its zip holds exactly the files LibGroupBuffs-1.0.xml
+# needs, plus LICENSE, and nothing else.
+
 package-as: LibGroupBuffs-1.0
 
 enable-nolib-creation: no
 
 ignore:
-  - .github
   - tests
-  - README.md
+  - .github
+  - .gitignore
+  - .claude
+  - .pkgmeta
   - AGENTS.md
   - CLAUDE.md
+  - README.md
