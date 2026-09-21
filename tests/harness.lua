@@ -33,17 +33,30 @@ end
 -- The files LibGroupBuffs-1.0.xml loads, in order. Read from the XML itself,
 -- so the tests load exactly what the client loads: a file listed there that
 -- does not exist fails here, the same way it would fail in game.
+-- Follows <Include> the way the client does: a path is relative to the XML
+-- file that names it. Returns the Lua files in load order, and every XML file
+-- read on the way as a second list.
 function H.xmlScripts(root)
     root = root or "."
-    local f = assert(io.open(root .. "/LibGroupBuffs-1.0.xml", "rb"))
-    local xml = f:read("*a")
-    f:close()
-    xml = xml:gsub("<!%-%-.-%-%->", "")        -- listed in a comment is not loaded
-    local files = {}
-    for file in xml:gmatch('<Script%s+file="([^"]+)"') do
-        files[#files + 1] = (file:gsub("\\", "/"))
+    local files, xmls = {}, {}
+    local function walk(xmlPath)
+        local f = assert(io.open(root .. "/" .. xmlPath, "rb"), "cannot open " .. xmlPath)
+        local xml = f:read("*a")
+        f:close()
+        xmls[#xmls + 1] = xmlPath
+        xml = xml:gsub("<!%-%-.-%-%->", "")    -- listed in a comment is not loaded
+        local dir = xmlPath:match("^(.*/)") or ""
+        for tag, file in xml:gmatch('<(%a+)%s+file="([^"]+)"') do
+            local path = dir .. (file:gsub("\\", "/"))
+            if tag == "Script" then
+                files[#files + 1] = path
+            elseif tag == "Include" then
+                walk(path)
+            end
+        end
     end
-    return files
+    walk("LibGroupBuffs-1.0.xml")
+    return files, xmls
 end
 
 -- Load the library the way the client does, once. Every file must load: the

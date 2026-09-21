@@ -31,9 +31,9 @@ Vanilla content, Retail codebase.
 - `tests/` — Lua 5.1, no game client.
 - `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the
   packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
-  `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads is ignored and nothing
-  development-only gets through. A new top-level file or folder that is not runtime code needs an
-  entry here.
+  `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is
+  ignored, and that every file `git ls-files` lists is either loaded, `LICENSE`, or ignored — so a
+  new file that is not runtime code fails the suite until it gets an entry here.
 
 ## Library Rules
 
@@ -53,7 +53,10 @@ Vanilla content, Retail codebase.
 - **An upgrade reuses the existing tables.** A newer copy loading after an older one gets the same
   `lib` and `lib.API`, so write `X = X or {}` for anything holding state (see `eventFailures`), and
   never replace a table other code may have taken a reference to. `tests/test_versions.lua` checks
-  equal-after-equal, older-after-newer and newer-after-older.
+  equal-after-equal, older-after-newer and newer-after-older, against the real r2 source in
+  `tests/fixtures/Compat-r2.lua` — the copy Priestly v2.0.x ships. When a new tag goes out and
+  consumers move to it, add that tag's `Compat.lua` as a fixture too; never synthesise the older
+  copy from the current source, since it would already contain what the upgrade must add.
 - **More than one file needs a shared guard.** Returning early from `Compat.lua` does not stop the
   XML from running the next file, and calling `NewLibrary` again with the same version in a second
   file makes that file reject itself. When `Settings.lua` or `Engine.lua` arrive, one file claims the
@@ -75,7 +78,9 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
   and the surname arrives where the realm normally sits. Use `API.UnitDisplayName`.
 - **`GetInstanceInfo` returns the continent outdoors**, not an empty string.
 - **`MouseIsOver` is gone.** Frames carry `:IsMouseOver()`.
-- **`RegisterEvent` throws on an unknown event name.**
+- **`RegisterEvent` throws on an unknown event name**, and is declared to return
+  `registered:bool`, so a `false` return is a refusal too. `API.RegisterEvents` treats both as
+  failures, and rejects a nil or empty name before registering anything.
 - **Nothing an addon writes survives a real restart** — account-wide or per-character
   SavedVariables, or addon CVars. An earlier note here said per-character storage works; it does
   not. `/reload` keeps the client running, so it can prove something is broken, never that it works.

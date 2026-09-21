@@ -50,18 +50,40 @@ end
 -- Nothing the client loads may be ignored
 ------------------------------------------------------------
 
-local runtime = { "LibGroupBuffs-1.0.xml" }
-for _, file in ipairs(H.xmlScripts()) do runtime[#runtime + 1] = file end
-for _, file in ipairs(runtime) do
+local scripts, xmls = H.xmlScripts()
+local runtime = {}
+for _, file in ipairs(xmls) do runtime[file] = true end
+for _, file in ipairs(scripts) do runtime[file] = true end
+for file in pairs(runtime) do
     H.check(not isIgnored(file), file .. " is loaded by the client, so it must ship")
 end
 H.check(not isIgnored("LICENSE"), "LICENSE ships: MIT requires the notice to travel with the code")
 
 ------------------------------------------------------------
--- Everything that is only for working on the library is left out
+-- Every tracked file either runs in game, is LICENSE, or is ignored
+--
+-- Checked against what git tracks rather than a list written here, so a new
+-- file nobody thought about fails this test instead of landing in every
+-- consuming addon's AddOns folder.
 ------------------------------------------------------------
 
-for _, dev in ipairs({ "tests", ".github", ".claude", ".pkgmeta",
+local tracked = {}
+local git = io.popen("git ls-files")
+if git then
+    for line in git:lines() do tracked[#tracked + 1] = line end
+    git:close()
+end
+H.check(#tracked > 0, "git ls-files lists the repository (run the tests from a git checkout)")
+
+for _, file in ipairs(tracked) do
+    if not runtime[file] and file ~= "LICENSE" then
+        H.check(isIgnored(file), file .. " does not run in game, so .pkgmeta must ignore it")
+    end
+end
+
+-- The development files named explicitly as well, so the intent survives even
+-- if one of them is ever untracked.
+for _, dev in ipairs({ "tests", ".github", ".gitignore", ".claude", ".pkgmeta",
                        "AGENTS.md", "CLAUDE.md", "README.md" }) do
     H.check(isIgnored(dev), dev .. " is for working on the library, not for players' AddOns folders")
 end

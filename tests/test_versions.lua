@@ -25,12 +25,14 @@ local SOURCE = ReadFile("Compat.lua")
 local CURRENT = tonumber(SOURCE:match('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'))
 H.check(CURRENT ~= nil and CURRENT >= 2, "Compat.lua declares its MINOR: " .. tostring(CURRENT))
 
--- An older copy of Compat: one MINOR lower, and without ItemInfo, which is how
--- an addon released before the resync would really look.
-local OLDER = SOURCE
-    :gsub('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", %d+',
-          'local MAJOR, MINOR = "LibGroupBuffs-1.0", ' .. (CURRENT - 1))
-    :gsub("function API%.ItemInfo%(", "local function _olderHasNoItemInfo(")
+-- The older copy is the real r2, byte for byte (`git show r2:Compat.lua`):
+-- Priestly v2.0.x ships it, so it is what a newer copy will actually meet in
+-- game. A copy synthesised from the current source would already carry
+-- everything added since, and hide exactly the upgrade under test.
+local OLDER = ReadFile("tests/fixtures/Compat-r2.lua")
+local OLDER_MINOR = tonumber(OLDER:match('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'))
+H.eq(OLDER_MINOR, 2, "the fixture is r2")
+H.check(CURRENT > OLDER_MINOR, "the current MINOR is newer than r2")
 
 local function run(src, label)
     local chunk = assert(loadstring(src, "=" .. label))
@@ -62,9 +64,11 @@ H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its re
 -- An older copy after a newer one: it must return before touching anything.
 ------------------------------------------------------------
 
-run(OLDER, "Compat.lua (older)")
+local reportedFn = lib.API.RegisterEventsReported
+run(OLDER, "Compat.lua (r2)")
 H.check(lib.API == api, "older-after-newer keeps the API table")
-H.check(lib.API.ItemInfo == itemInfo, "and does not remove what the newer copy added")
+H.check(lib.API.ItemInfo == itemInfo, "and its functions")
+H.check(lib.API.RegisterEventsReported == reportedFn, "and does not remove what the newer copy added")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "or reset its state")
 local _, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
 H.eq(minor, CURRENT, "the newer MINOR stays registered")
@@ -74,22 +78,27 @@ H.eq(minor, CURRENT, "the newer MINOR stays registered")
 ------------------------------------------------------------
 
 freshLibStub()
-run(OLDER, "Compat.lua (older)")
+run(OLDER, "Compat.lua (r2)")
 lib = LibStub("LibGroupBuffs-1.0")
 api = lib.API
-H.eq(api.ItemInfo, nil, "the older copy has no ItemInfo")
-api.eventFailures.PROBE = "recorded by the older copy"
-api.eventFailuresByOwner = api.eventFailuresByOwner or {}
-api.eventFailuresByOwner.Priestly = { PROBE = "recorded for Priestly by the older copy" }
+H.eq(api.RegisterEventsReported, nil, "r2 has no RegisterEventsReported")
+H.eq(api.eventFailuresByOwner, nil, "or per-consumer failures")
+local failures = api.eventFailures
+failures.PROBE = "recorded by r2"
 
 run(SOURCE, "Compat.lua")
 H.check(LibStub("LibGroupBuffs-1.0") == lib, "newer-after-older upgrades the same library table")
 H.check(lib.API == api, "and the same API table, so references taken earlier stay valid")
-H.check(type(lib.API.ItemInfo) == "function", "gaining what the older copy lacked")
-H.eq(lib.API.eventFailures.PROBE, "recorded by the older copy",
-    "without resetting what the older copy recorded")
-H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly by the older copy",
-    "including what it recorded per consumer")
+H.check(type(lib.API.RegisterEventsReported) == "function", "gaining what r2 lacked")
+H.check(type(lib.API.eventFailuresByOwner) == "table", "including per-consumer failures")
+H.check(lib.API.eventFailures == failures, "keeping r2's failure table, not replacing it")
+H.eq(lib.API.eventFailures.PROBE, "recorded by r2", "or what r2 recorded in it")
+
+-- Upgrading twice must not reset per-consumer failures either.
+lib.API.eventFailuresByOwner.Priestly = { PROBE = "recorded for Priestly" }
+run(SOURCE, "Compat.lua (again)")
+H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly",
+    "and a reload of the same version keeps per-consumer failures")
 _, minor = LibStub:GetLibrary("LibGroupBuffs-1.0")
 H.eq(minor, CURRENT, "and the newer MINOR is registered")
 
