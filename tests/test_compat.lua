@@ -239,4 +239,56 @@ H.check(API.AurasAreSecret() == false, "auras readable out of combat")
 WoW.secret = true
 H.check(API.AurasAreSecret() == true, "secrecy is reported when the client says so")
 
+------------------------------------------------------------
+-- Item data, for tooltips built by hand
+--
+-- GameTooltip has no item setter on this client, so a consumer builds the
+-- lines from this. Resynced from Priestly (its issue #29).
+------------------------------------------------------------
+
+WoW.reset()
+local name, r, g, b = API.ItemInfo(17029)
+H.eq(name, "Item 17029", "a cached item reports its name")
+H.near(r, 0.3, 0.001, "with its quality colour")
+H.eq(g, 0.2, "...green")
+H.eq(b, 0.3, "...blue")
+
+-- A miss must ask for the data, or the next call is no better. GetItemInfo
+-- returns nothing at all on a miss, not nil.
+WoW.itemsUncached[17029] = true
+H.eq(API.ItemInfo(17029), nil, "a cache miss returns nil rather than a bad name")
+H.check(WoW.itemsRequested[17029], "and asks the client to load it")
+WoW.itemsUncached[17029] = nil
+H.eq(API.ItemInfo(17029), "Item 17029", "so the next call has it")
+
+-- The cache flag and the data can disagree. Believe the data, and ask again.
+local savedCached = C_Item.IsItemDataCachedByID
+C_Item.IsItemDataCachedByID = function() return true end
+WoW.itemsUncached[17056] = true
+H.eq(API.ItemInfo(17056), nil, "cached-by-flag but empty returns nil")
+H.check(WoW.itemsRequested[17056], "and still asks the client to load it")
+C_Item.IsItemDataCachedByID = savedCached
+WoW.itemsUncached[17056] = nil
+
+local savedFn = C_Item.GetItemInfo
+C_Item.GetItemInfo = nil
+H.eq(API.ItemInfo(17029), nil, "no GetItemInfo is nil, not an error")
+C_Item.GetItemInfo = savedFn
+
+------------------------------------------------------------
+-- Which mouse edges a secure buff button registers for
+--
+-- Both. The client's secure handler acts on exactly one of them, chosen by
+-- ActionButtonUseKeyDown, so both is one cast. One edge is a dead button for
+-- anyone whose client acts on release (Priestly issue #17).
+------------------------------------------------------------
+
+local edges = { API.ClickEdges() }
+H.eq(#edges, 4, "four names: both buttons, both edges")
+local seen = {}
+for _, e in ipairs(edges) do seen[e] = true end
+for _, want in ipairs({ "LeftButtonDown", "RightButtonDown", "LeftButtonUp", "RightButtonUp" }) do
+    H.check(seen[want], "registers " .. want)
+end
+
 H.done("test_compat")

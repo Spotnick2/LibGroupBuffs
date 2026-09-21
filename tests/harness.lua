@@ -30,12 +30,30 @@ function H.near(a, b, tol, msg)
         (msg or "values differ") .. "  (expected ~" .. tostring(b) .. ", got " .. tostring(a) .. ")")
 end
 
--- Load the library the way the XML does, once.
-function H.loadLibrary()
-    assert(loadfile("LibStub/LibStub.lua"))()
-    for _, file in ipairs({ "Compat.lua", "Engine.lua", "UI.lua" }) do
-        local chunk = loadfile(file)
-        if chunk then chunk() end      -- later files land in later commits
+-- The files LibGroupBuffs-1.0.xml loads, in order. Read from the XML itself,
+-- so the tests load exactly what the client loads: a file listed there that
+-- does not exist fails here, the same way it would fail in game.
+function H.xmlScripts(root)
+    root = root or "."
+    local f = assert(io.open(root .. "/LibGroupBuffs-1.0.xml", "rb"))
+    local xml = f:read("*a")
+    f:close()
+    xml = xml:gsub("<!%-%-.-%-%->", "")        -- listed in a comment is not loaded
+    local files = {}
+    for file in xml:gmatch('<Script%s+file="([^"]+)"') do
+        files[#files + 1] = (file:gsub("\\", "/"))
+    end
+    return files
+end
+
+-- Load the library the way the client does, once. Every file must load: the
+-- previous version skipped any that failed, which also hid syntax errors.
+function H.loadLibrary(root)
+    root = root or "."
+    for _, file in ipairs(H.xmlScripts(root)) do
+        local chunk, err = loadfile(root .. "/" .. file)
+        if not chunk then error("LibGroupBuffs: cannot load " .. file .. ": " .. tostring(err), 2) end
+        chunk()
     end
     local lib = LibStub("LibGroupBuffs-1.0")
     return lib, lib.API

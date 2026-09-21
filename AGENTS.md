@@ -5,8 +5,10 @@ appears incorrect.
 
 ## What This Repository Is
 
-`LibGroupBuffs-1.0` is the shared engine behind three WoW: Forever addons — Priestly, Druidly and
+`LibGroupBuffs-1.0` is the shared engine behind three WoW: Forever addons — Priestly, Wildly and
 Magely — which are the same PallyPower-style group buff manager with different `DEFS` tables.
+Priestly is the only consumer today; Wildly and Magely are still TBC addons and will be ported onto
+the library later. Changes land in Priestly first, so keep them class-agnostic from the start.
 
 It is a **LibStub library**, embedded into each addon at package time through `.pkgmeta` externals.
 There is no build system and no package manager; validation is a Lua 5.1 test suite plus in-game
@@ -19,9 +21,12 @@ Vanilla content, Retail codebase.
 
 - `Compat.lua` — `lib.API`, every removed or moved API. **Nothing outside this file may call a
   moved API directly.**
-- `Engine.lua` — aura cache, combat secrecy, learned durations, roster, group stats, targeting.
-- `UI.lua` — generic row and popover frames driven by a `DEFS` table.
-- `LibGroupBuffs-1.0.xml` — load order; the entry point a consuming addon references.
+- `LibGroupBuffs-1.0.xml` — load order; the entry point a consuming addon references. It lists
+  **only files that exist**: a missing one is a load error in every embedding addon.
+  `tests/harness.lua` loads exactly this list, so the suite fails the same way the client would.
+- Planned, not yet present: `Settings.lua` (the config write path, the SavedVariables-fix detector
+  and the build watch), `Engine.lua` (aura cache, learned durations, roster, group stats,
+  targeting) and `UI.lua` (row and popover frames).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client.
 
@@ -31,11 +36,19 @@ Vanilla content, Retail codebase.
   to the caller — `API.RegisterEvents` returns `ok, failedList` for exactly this reason.
 - **No globals** beyond what LibStub requires. No `_G` injection: defining a real `GetItemInfo`
   changes capability detection for every other addon on the machine.
-- **No addon-specific behaviour.** Anything that differs between Priestly, Druidly and Magely
+- **No addon-specific behaviour.** Anything that differs between Priestly, Wildly and Magely
   belongs in the addon or behind a host callback, not in a branch here.
 - **Version bumps:** raise `MINOR` in `Compat.lua` whenever behaviour changes, so an older embedded
-  copy loses to a newer one. `LibStub:NewLibrary` returns nil when a newer copy already loaded, and
-  every file must honour that early return.
+  copy loses to a newer one, and tag the merge `r<MINOR>` for consumers to pin. `LibStub:NewLibrary`
+  returns nil when a newer copy already loaded.
+- **An upgrade reuses the existing tables.** A newer copy loading after an older one gets the same
+  `lib` and `lib.API`, so write `X = X or {}` for anything holding state (see `eventFailures`), and
+  never replace a table other code may have taken a reference to. `tests/test_versions.lua` checks
+  equal-after-equal, older-after-newer and newer-after-older.
+- **More than one file needs a shared guard.** Returning early from `Compat.lua` does not stop the
+  XML from running the next file, and calling `NewLibrary` again with the same version in a second
+  file makes that file reject itself. When `Settings.lua` or `Engine.lua` arrive, one file claims the
+  version and the others check they belong to the active one before installing anything.
 
 ## Client Rules (measured, not inferred)
 
@@ -54,8 +67,10 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
 - **`GetInstanceInfo` returns the continent outdoors**, not an empty string.
 - **`MouseIsOver` is gone.** Frames carry `:IsMouseOver()`.
 - **`RegisterEvent` throws on an unknown event name.**
-- **Account-wide SavedVariables are written but never read back.** Consuming addons must use
-  `SavedVariablesPerCharacter`. The library holds no saved state of its own.
+- **Nothing an addon writes survives a real restart** — account-wide or per-character
+  SavedVariables, or addon CVars. An earlier note here said per-character storage works; it does
+  not. `/reload` keeps the client running, so it can prove something is broken, never that it works.
+  The library holds no saved state of its own.
 - Lua 5.1: `0` is truthy, so `x or default` does not guard a numeric that can be 0.
 
 ## Testing
