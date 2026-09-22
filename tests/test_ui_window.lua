@@ -304,7 +304,15 @@ ui:ScheduleRefresh()
 WoW.flushTimers(1)
 H.eq(#WoW.combatWrites, 0, "nor by a refresh that fires in combat")
 WoW.blockedCalls = {}
+host.deferredCloses = 0
 H.eq(ui:Close(), false, "closing in combat cannot hide the window, and says so")
+H.eq(host.deferredCloses, 0, "a close the addon made itself tells nobody")
+H.check(ui:IsVisible() == false, "though it is logically closed")
+ui:Update(); WoW.inCombat = false; ui:Update(); WoW.inCombat = true
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "but the X button in combat asks the addon to explain")
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "and closing an already closed window says nothing more")
 H.eq(#WoW.blockedCalls, 0, "without attempting a call the client blocks")
 H.check(ui.main:IsShown(), "the frame is still up - it parents secure buttons")
 H.check(not ui:IsVisible(), "but the window is logically closed")

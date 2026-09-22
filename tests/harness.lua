@@ -168,6 +168,7 @@ function H.PriestUI(opts)
         setVisible = function(v) host.saved.visible = v end,
         onLayout   = function() host.layouts = host.layouts + 1 end,
         onVisibility = function(_, v) host.visibility[#host.visibility + 1] = v end,
+        onCloseDeferred = function() host.deferredCloses = (host.deferredCloses or 0) + 1 end,
     })
     return host
 end

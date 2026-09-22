@@ -16,6 +16,7 @@
 --         getPos = function() return pos, whyNil end, setPos = function(pos) end,
 --         setVisible = function(visible) end,
 --         onLayout = function(ui) end, onVisibility = function(ui, visible) end,  -- optional
+--         onCloseDeferred = function(ui) end,   -- optional: combat refused the hide
 --     })
 --
 -- The addon keeps its events, slash commands, options panel and policy (who
@@ -185,7 +186,7 @@ local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 
 local OPTIONAL_FUNCTIONS = {
     "appearance", "footerItems", "alpha", "locked", "popoverSide", "showClickHints",
-    "getPos", "setPos", "setVisible", "onLayout", "onVisibility",
+    "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
 }
 
 function UI.New(host)
@@ -1050,8 +1051,14 @@ end
 
 -- Close the window. `manual` means the player asked, which the addon saves.
 -- Returns whether the frames are hidden NOW: in combat they cannot be, so the
--- window stops refreshing and goes when the fight ends. The addon can say so.
+-- window stops refreshing and goes when the fight ends.
+--
+-- When the player asked and the window was open, a deferred close also calls
+-- the addon's onCloseDeferred, so every way of closing - the X button, a slash
+-- command, a keybind - can explain itself the same way. The return value is
+-- there for a caller that wants to handle it itself.
 function Methods:Close(manual)
+    local wasOpen = self.visible
     if InCombatLockdown() then
         self.closePending = true
     else
@@ -1065,6 +1072,9 @@ function Methods:Close(manual)
     self.pendingShow = false
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
+    if self.closePending and manual and wasOpen then
+        Call(self.host.onCloseDeferred, self)
+    end
     return not self.closePending
 end
 
