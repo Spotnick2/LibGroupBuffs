@@ -172,6 +172,26 @@ H.check(row.missAll:IsShown() and not row.timer:IsShown(), "unreadable and nothi
 H.eq(row.missAll:GetText(), "?", "shows '?', not a confident MISS")
 H.secrecy(false)
 
+-- A member's state looks the same wherever it is drawn. The row's MISS and
+-- the popover's used different reds until they were put in one table.
+setup({ "FORT_SINGLE" })
+ui:Update()
+do
+    local r = H.ActiveRows(ui)[1]
+    ui:RefreshTimers()
+    H.eq(r.missAll:GetText(), "MISS", "nobody buffed: the row says MISS")
+    H.eq(r.missAll._textColor[1] .. "," .. r.missAll._textColor[2],
+        lib.UI.STATE_COLOUR.MISS[1] .. "," .. lib.UI.STATE_COLOUR.MISS[2],
+        "in the shared MISS colour")
+    H.runScript(r, "OnEnter")
+    local pr = ui.popRows[1]
+    H.eq(pr.timeTxt:GetText(), "MISS", "and so does the popover row")
+    H.eq(pr.timeTxt._textColor[2], lib.UI.STATE_COLOUR.MISS[2],
+        "in the same colour, not a second red")
+    WoW.units.party1.connected = false
+    ui:RefreshTimers()
+end
+
 ------------------------------------------------------------
 -- The ticker and the popover's hover poll
 ------------------------------------------------------------

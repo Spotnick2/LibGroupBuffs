@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 9
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 8
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -112,21 +112,6 @@ for key, colour in pairs({
     UI.DEFAULT_APPEARANCE[key] = t
     for i = 1, 4 do t[i] = colour[i] end
 end
-
--- One ladder for what a member's state looks like, wherever it is drawn: the
--- row's MISS, the popover row's timer text and the combat list. Kept in one
--- place because two of them had already drifted apart.
-UI.STATE_COLOUR = UI.STATE_COLOUR or {}
-for key, colour in pairs({
-    MISS    = { 1.00, 0.28, 0.28 },
-    UNKNOWN = { 0.65, 0.65, 0.65 },
-    OFFLINE = { 0.50, 0.50, 0.50 },
-}) do
-    local t = UI.STATE_COLOUR[key] or {}
-    UI.STATE_COLOUR[key] = t
-    for i = 1, 3 do t[i] = colour[i] end
-end
-local COLOUR = UI.STATE_COLOUR
 
 local DEFAULT_POS = { point = "CENTER", relPoint = "CENTER", x = 300, y = 50 }
 
@@ -290,7 +275,7 @@ local function MakeRow(ui, parent, i)
 
     r.missAll = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     r.missAll:SetPoint("CENTER", r, "CENTER", ICON_W / 2, 0)
-    r.missAll:SetTextColor(unpack(COLOUR.MISS))
+    r.missAll:SetTextColor(1.0, 0.28, 0.28)
     r.missAll:SetText("MISS")
 
     r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
@@ -525,11 +510,11 @@ function Methods:ApplyRowVisuals(r, st)
 
     if st.nUnknown == st.nTotal then
         r.missAll:SetText("?")
-        r.missAll:SetTextColor(unpack(COLOUR.UNKNOWN))
+        r.missAll:SetTextColor(0.65, 0.65, 0.65)
         r.missAll:Show()
     elseif st.nMiss == st.nTotal then
         r.missAll:SetText("MISS")
-        r.missAll:SetTextColor(unpack(COLOUR.MISS))
+        r.missAll:SetTextColor(1.0, 0.28, 0.28)
         r.missAll:Show()
     elseif st.minR > 0 then
         local tr, tg, tb = UI.TimerColor(pct)
@@ -584,10 +569,10 @@ function Methods:ApplyPopRowVisuals(pr)
         pr.timeTxt:SetTextColor(tr, tg, tb)
     elseif state == S.UNKNOWN then
         pr.timeTxt:SetText("?")
-        pr.timeTxt:SetTextColor(unpack(COLOUR.UNKNOWN))
+        pr.timeTxt:SetTextColor(0.65, 0.65, 0.65)
     else
         pr.timeTxt:SetText("MISS")
-        pr.timeTxt:SetTextColor(unpack(COLOUR.MISS))
+        pr.timeTxt:SetTextColor(1.00, 0.22, 0.22)
     end
 end
 
@@ -604,16 +589,6 @@ function Methods:RefreshTimers()
         for _, pr in ipairs(self.popRows) do
             if pr._active then self:ApplyPopRowVisuals(pr) end
         end
-    end
-    -- In combat the hint's list of who needs the buff is the only per-member
-    -- view there is, and OnEnter does not fire again while the mouse rests on
-    -- the row - so buff somebody and the tooltip would still call them
-    -- missing. Redraw it here, the same reason a rebuild re-drives the
-    -- popover. Out of combat the popover is open and shows this live.
-    if InCombatLockdown() and self.hintRow and self.hintRow._active
-        and lib.API.IsMouseOver(self.hintRow)
-    then
-        self:ShowClickHint(self.hintRow)
     end
 end
 
@@ -948,16 +923,10 @@ function Methods:HideClickHint()
 end
 
 function Methods:ShowClickHint(row)
+    local show = self.host.showClickHints
+    if show and not show() then return end
     local def = row and row._def
     if not def then return end
-    -- Two separate things share this tooltip. The click lines are the hint,
-    -- which the addon's setting turns off. The list of who still needs the
-    -- buff is not a hint - in combat it is the only per-member view there is,
-    -- since the popover cannot open - so turning hints off must not hide it.
-    local show = self.host.showClickHints
-    local wantHints = not show or show() and true or false
-    local wantNeeds = InCombatLockdown()
-    if not wantHints and not wantNeeds then return end
 
     -- The popover opens on this same hover, so sit on the other side.
     local side = (self:PopoverSide(row) == "right") and "ANCHOR_LEFT" or "ANCHOR_RIGHT"
@@ -993,59 +962,9 @@ function Methods:ShowClickHint(row)
         GameTooltip:AddLine(label .. "  |cffffffff" .. spell .. "|r on " .. target, 1, 1, 1)
     end
 
-    if wantHints then
-        describe("|cffaaaaaaLeft|r ", resolve(1))
-        describe("|cffaaaaaaRight|r", resolve(2))
-    end
-    self:AddNeedsList(row, def)
+    describe("|cffaaaaaaLeft|r ", resolve(1))
+    describe("|cffaaaaaaRight|r", resolve(2))
     GameTooltip:Show()
-end
-
--- In combat the popover cannot open: it parents secure buttons, so showing,
--- anchoring and re-arming it are all refused. The one thing it was for - who
--- in this group still needs the buff - goes in the tooltip instead, which is
--- not protected. Only those who need it, so a full pet bucket stays readable.
---
--- While auras are secret this is LAST KNOWN, and the wording says so. Every
--- aura read is refused in combat, so a buff stripped mid-fight still reads as
--- present from the cache, and one applied mid-fight is invisible: "everyone
--- has it" would be a claim the client cannot support. What the ticker can
--- still see is a cached buff running out, and somebody going offline.
-function Methods:AddNeedsList(row, def)
-    if not InCombatLockdown() or not row._members then return end
-    local S = lib.Engine.STATES
-    local st = self.engine:GroupStat(row._members, def)
-    local needs = {}
-    for _, m in ipairs(row._members) do
-        local known = st.byUnit[m.unit]
-        if not UnitIsConnected(m.unit) then
-            needs[#needs + 1] = { m.name, "offline", COLOUR.OFFLINE }
-        elseif known and known.state == S.UNKNOWN then
-            -- Unreadable, not absent: worth showing, because it may be a miss.
-            needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
-        elseif not known or (known.rem or 0) <= 0 then
-            needs[#needs + 1] = { m.name, "MISS", COLOUR.MISS }
-        end
-    end
-    -- Not "are we in combat": if a future build stops hiding party auras, the
-    -- reads work and the list is current again.
-    local lastKnown = lib.API.AurasAreSecret()
-    if #needs == 0 then
-        GameTooltip:AddLine(" ")
-        if lastKnown then
-            GameTooltip:AddLine("Nobody needed it when auras were last readable.",
-                0.40, 0.85, 0.40)
-        else
-            GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
-        end
-        return
-    end
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(lastKnown and "Needs it, when last readable:" or "Needs it:",
-        1.00, 0.82, 0.22)
-    for _, line in ipairs(needs) do
-        GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
-    end
 end
 
 -- ─── Row handlers ───────────────────────────────────────────────────────────
@@ -1104,7 +1023,6 @@ end
 -- row now, not captured when it was built.
 function Methods:RowEnter(r)
     if not r._active or not r._members or not r._def then return end
-    self.hintRow = r
     self:UpdatePopover(r, r._members, r._def)
     self:ShowClickHint(r)
 end
@@ -1112,7 +1030,6 @@ end
 -- The popover's own hide is the hover poll's job: an OnLeave would fire on the
 -- way TO the popover. Dropping the tooltip here is right either way.
 function Methods:RowLeave()
-    self.hintRow = nil
     self:HideClickHint()
 end
 
