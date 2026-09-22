@@ -86,7 +86,12 @@ local R5 = {
 for _, file in ipairs(R5) do
     H.eq(tonumber(file.src:match(MINOR_PATTERN)), 5, "the r5 fixture's " .. file.name .. " is r5")
 end
-H.check(CURRENT > 5, "the current MINOR is newer than every fixture")
+local R6 = {}
+for i, name in ipairs({ "Compat.lua", "Settings.lua", "Engine.lua", "UI.lua" }) do
+    R6[i] = { name = name, src = ReadFile("tests/fixtures/" .. name:gsub("%.lua$", "") .. "-r6.lua") }
+    H.eq(tonumber(R6[i].src:match(MINOR_PATTERN)), 6, "the r6 fixture's " .. name .. " is r6")
+end
+H.check(CURRENT > 6, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
@@ -151,6 +156,11 @@ load(R5, "r5")
 H.check(lib.Engine.New == engineNew and lib.EngineMethods.BuffRem == buffRem,
     "r5-after-newer leaves Engine alone, though r5 has an Engine.lua of its own")
 H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
+
+load(R6, "r6")
+H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
+    "r6-after-newer leaves UI alone, though r6 has a UI.lua of its own")
+H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
 H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
 
 load(R2, "r2")

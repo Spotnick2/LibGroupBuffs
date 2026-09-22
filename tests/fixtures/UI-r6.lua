@@ -36,7 +36,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 7
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 6
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -162,16 +162,29 @@ local function After(delay, fn)
     end)
 end
 
--- MEASURED, build 69913: a frame that parents secure buttons is PROTECTED, and
--- in combat the client refuses to hide it, move it, re-anchor it, unclamp it
--- or stop a drag on it - each attempt is an ADDON_ACTION_BLOCKED, silently
--- ignored, and blamed on whichever addon's taint the call path carries.
---
--- So parking the window offscreen during combat, which this file used to do,
--- was never possible: SetClampedToScreen was blocked before anything moved.
--- Nothing here touches either frame while locked down. What the player asked
--- for is remembered and done when combat ends, a fight being the one time the
--- rows are worth having on screen anyway.
+-- Hiding a frame that parents secure buttons is refused under combat lockdown,
+-- so it gets moved out of sight instead. Both frames are clamped to the
+-- screen, which would drag them straight back to the edge - and an alpha-0
+-- frame still takes mouse clicks, so a "hidden" row would stay a live,
+-- invisible cast button for the rest of the fight. Drop the clamp first.
+local function CombatPark(f)
+    if not f then return end
+    f:SetClampedToScreen(false)
+    f:SetAlpha(0)
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", UIParent, "BOTTOMRIGHT", 10000, -10000)
+    f._combatHidden = true
+end
+
+-- Undo a park now that combat is over.
+local function CombatUnpark(f)
+    if not f or not f._combatHidden then return false end
+    f:Hide()
+    f:SetAlpha(1)
+    f:SetClampedToScreen(true)
+    f._combatHidden = false
+    return true
+end
 
 local function Call(fn, ...)
     if fn then return fn(...) end
@@ -463,6 +476,7 @@ function Methods:Init()
     -- its row. It replaced OnLeave handlers, which fire on the way TO the
     -- popover.
     pop._hoverTimer = 0
+    pop._combatHidden = false
     pop:SetScript("OnUpdate", function(p, dt) return p._ui:PopoverTick(dt) end)
 
     -- ── Footer ──────────────────────────────────────────────────────────
@@ -702,7 +716,9 @@ end
 function Methods:PopoverTick(dt)
     local pop = self.pop
     if not pop:IsShown() then return end
-    if self.popHidePending then return end   -- waiting for combat to end
+    -- Parking does not Hide(), so without this the poll would re-park an
+    -- already-parked popover on every tick until combat ends.
+    if pop._combatHidden then return end
     pop._hoverTimer = pop._hoverTimer + dt
     if pop._hoverTimer < 0.15 then return end
     pop._hoverTimer = 0
@@ -718,9 +734,7 @@ function Methods:PopoverTick(dt)
     end
     if not overPop and not overAnchor and not overChild then
         if InCombatLockdown() then
-            -- Hiding it is blocked: it parents secure buttons. Leave it, stop
-            -- polling, and close it when the fight ends.
-            self.popHidePending = true
+            CombatPark(pop)
         else
             pop:Hide()
         end
@@ -738,13 +752,6 @@ function Methods:DragStart()
 end
 
 function Methods:DragStop()
-    -- A drag that combat interrupted cannot be stopped here: the frame is
-    -- protected, and StopMovingOrSizing is blocked. It keeps following the
-    -- cursor until the fight ends, which is when OnCombatEnd finishes this.
-    if InCombatLockdown() then
-        self.dragPending = true
-        return
-    end
     -- Release first: StopMovingOrSizing is harmless on a frame that was never
     -- moving, and skipping it would leave a frame locked mid-drag stuck to
     -- the cursor.
@@ -753,7 +760,6 @@ function Methods:DragStop()
     -- now: a drag interrupted by the lock leaves the window where the cursor
     -- was for the rest of the session, and the saved spot comes back on the
     -- next login.
-    self.dragPending = false
     self.main:StopMovingOrSizing()
     if Call(self.host.locked) then return end
     self.moved = true
@@ -778,7 +784,7 @@ function Methods:ResetPosition()
         return false
     end
     self.resetPending = false
-    if self.main then
+    if self.main and not self.main._combatHidden then
         self.main:ClearAllPoints()
         self.main:SetPoint(DEFAULT_POS.point, UIParent, DEFAULT_POS.relPoint, DEFAULT_POS.x, DEFAULT_POS.y)
     end
@@ -813,7 +819,7 @@ function Methods:UpdatePopover(anchorRow, members, def)
     if InCombatLockdown() then return end
     local pop = self.pop
     if not pop then return end
-    self.popHidePending = false
+    CombatUnpark(pop)
 
     local engine = self.engine
     pop.hdrIcon:SetTexture(lib.API.SpellIcon(def.hasSingle and def.snglID or def.grpID, def.fallbackIcon))
@@ -1046,15 +1052,14 @@ local function SetVisible(self, visible)
 end
 
 -- Close the window. `manual` means the player asked, which the addon saves.
--- Returns whether the frames are hidden NOW: in combat they cannot be, so the
--- window stops refreshing and goes when the fight ends. The addon can say so.
+-- In combat both frames are parked instead of hidden.
 function Methods:Close(manual)
-    if InCombatLockdown() then
-        self.closePending = true
-    else
-        self.closePending = false
-        if self.main then self.main:Hide() end
-        if self.pop then self.pop:Hide() end
+    for _, f in ipairs({ self.main, self.pop }) do
+        if InCombatLockdown() then
+            CombatPark(f)
+        elseif f then
+            f:Hide()
+        end
     end
     SetVisible(self, false)
     -- Cancel any show queued earlier: the player has since asked for the
@@ -1062,7 +1067,6 @@ function Methods:Close(manual)
     self.pendingShow = false
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
-    return not self.closePending
 end
 
 -- Rebuild and show the window after `delay` seconds, unless it is closed in
@@ -1096,16 +1100,10 @@ end
 -- rebuild combat deferred - including a show asked for while locked down.
 function Methods:OnCombatEnd()
     if InCombatLockdown() then return end
-    -- Everything the fight refused, in the order the player asked for it.
-    if self.dragPending then self:DragStop() end
-    if self.popHidePending then
-        self.popHidePending = false
-        if self.pop then self.pop:Hide() end
-    end
-    if self.closePending then
-        self.closePending = false
-        if self.main then self.main:Hide() end
-        if self.pop then self.pop:Hide() end
+    CombatUnpark(self.pop)
+    if CombatUnpark(self.main) then
+        -- Parking cleared its anchors: let the rebuild apply the position.
+        self.moved = false
     end
     if self.resetPending then self:ResetPosition() end
     if self.visible or self.pendingShow then
@@ -1259,7 +1257,7 @@ function Methods:Update()
     -- attributes still name the previous roster's unit tokens - and a row's
     -- OnEnter does not fire again while the mouse rests on it.
     local pop = self.pop
-    if pop:IsShown() and not self.popHidePending then
+    if pop:IsShown() and not pop._combatHidden then
         local anchor = pop._anchorRow
         if anchor and anchor._active and anchor._members and anchor._def then
             self:UpdatePopover(anchor, anchor._members, anchor._def)

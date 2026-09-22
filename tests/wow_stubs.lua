@@ -58,6 +58,7 @@ function WoW.reset()
     WoW.centers     = {}         -- [frame] = x; drives frame:GetCenter()
     WoW.screenWidth = 1920       -- what UIParent:GetWidth() reports
     WoW.combatWrites = {}        -- SetAttribute calls made while WoW.inCombat
+    WoW.blockedCalls = {}        -- protected calls refused while WoW.inCombat
     WoW.byNameBlind = false      -- simulate GetAuraDataBySpellName not resolving
     WoW.auraReadsThrow = false   -- combat secrecy: index reads throw
     WoW.aurasAreSecret = false   -- combat secrecy: the struct's fields throw
@@ -172,8 +173,25 @@ end
 -- Frames
 ------------------------------------------------------------
 
-local function makeFrame(name)
-    local f = { _attr = {}, _scripts = {}, _name = name, _shown = false }
+-- Protected frames: anything built from a secure template, and every ancestor
+-- of one - hiding or moving a parent moves its secure children with it. In
+-- combat the client REFUSES those calls (ADDON_ACTION_BLOCKED) instead of
+-- throwing, which is invisible to an addon, so the stub records each attempt
+-- in WoW.blockedCalls and does nothing. Measured on build 69913: parking the
+-- buff window offscreen during combat was blocked at SetClampedToScreen.
+local PROTECTED_METHODS = {
+    Show = true, Hide = true, SetPoint = true, ClearAllPoints = true,
+    SetClampedToScreen = true, SetAlpha = true, SetSize = true, SetScale = true,
+    StartMoving = true, StopMovingOrSizing = true, SetParent = true,
+}
+
+local function makeFrame(name, parent, template)
+    local f = { _attr = {}, _scripts = {}, _name = name, _shown = false, _parent = parent }
+    if template and tostring(template):find("Secure") then
+        f._protected = true
+        local p = parent
+        while p do p._protected = true; p = p._parent end
+    end
     local function chain() return f end
 
     f.GetName = function(self) return self._name end
@@ -249,8 +267,8 @@ local function makeFrame(name)
         if set then set[ev] = nil end
         return self
     end
-    f.CreateTexture    = function() return makeFrame() end
-    f.CreateFontString = function() return makeFrame() end
+    f.CreateTexture    = function(self) return makeFrame(nil, self) end
+    f.CreateFontString = function(self) return makeFrame(nil, self) end
     f.CreateAnimationGroup = function() return makeFrame() end
     f.GetThumbTexture  = function() return makeFrame() end
     -- The FIRST anchor, which is what the client's GetPoint() returns.
@@ -278,6 +296,21 @@ local function makeFrame(name)
     f.GetValue = function(self) return self._value or 0 end
     f.SetValue = function(self, v) self._value = v return self end
     f.GetID = function() return 1 end
+
+    -- A protected frame in combat: record and refuse, the way the client does.
+    for method in pairs(PROTECTED_METHODS) do
+        local real = f[method]
+        if real then
+            f[method] = function(self, ...)
+                if WoW.inCombat and self._protected then
+                    WoW.blockedCalls[#WoW.blockedCalls + 1] =
+                        { frame = self, method = method }
+                    return self
+                end
+                return real(self, ...)
+            end
+        end
+    end
 
     -- Anything else called as a method is a no-op returning the frame. But an
     -- underscore-prefixed key is one of the ADDON's own private fields, and the
@@ -336,7 +369,7 @@ local TEMPLATE_REGIONS = {
 }
 
 function CreateFrame(frameType, name, parent, template)
-    local f = makeFrame(name)
+    local f = makeFrame(name, parent, template)
     if name then _G[name] = f end
     f._type = frameType
     f._template = template
