@@ -275,17 +275,9 @@ WoW.inCombat = false
 
 host.ui_config.hints = false
 H.eq(hint(row), "", "off by preference means no hint at all")
-
--- ...but the list of who needs the buff is not a hint. In combat it is the
--- only per-member view there is, so turning hints off must not take it away.
-WoW.inCombat = true
-text = hint(row)
-H.check(text:find("Needs it") or text:find("Everyone here has it"),
-    "with hints off, combat still shows who needs it: " .. text)
-H.check(not text:find("Left") and not text:find("Right"),
-    "and only that - the click lines stay off: " .. text)
-WoW.inCombat = false
 host.ui_config.hints = true
+-- (in combat the list survives hints being off; with the rest of the list
+-- cases further down, where secrecy is modelled properly)
 
 -- RowEnter shows the hint too; RowLeave drops it.
 WoW.clearTooltip()
@@ -298,69 +290,96 @@ H.eq(WoW.tooltipText(), "", "and leaving it hides it")
 -- In combat the hint lists who still needs the buff
 --
 -- The popover cannot open then - it parents secure buttons - so the one
--- thing it was for goes in the tooltip, which is not protected.
+-- thing it was for goes in the tooltip, which is not protected. Driven under
+-- real secrecy (H.secrecy), because that is the only in-combat state this
+-- client has: every aura read is refused, so the list is last known and says
+-- so.
 ------------------------------------------------------------
 
+local function needsSection(text)
+    return text:match("[Nn]eeds it[^:]*:(.*)$") or ""
+end
+
 setup({ "FORT_SINGLE" })
-row = H.ActiveRows(ui)[1]
 WoW.SetAura("player", "Power Word: Fortitude", 3600, 1500)
 ui:Update()
 row = H.ActiveRows(ui)[1]
 
 text = hint(row)
 H.check(not text:find("Needs it"), "out of combat there is no list: the popover shows it")
-
-WoW.inCombat = true
-text = hint(row)
-H.check(text:find("Needs it"), "in combat the hint lists them: " .. text)
-H.check(text:find("Sten Thornbeard") and text:find("Mirel Dawnsong"),
-    "naming those who need it: " .. text)
-H.check(text:find("MISS"), "with what each one is missing: " .. text)
-H.check(not text:find("Karuzo Elegia", 1, true),
-    "and not the member who already has it: " .. text)
-H.check(text:find("Power Word: Fortitude"), "the click lines are still there: " .. text)
-
--- Offline and unreadable are worth knowing too, and are not the same as MISS.
-WoW.units.party1.connected = false
-text = hint(row)
-H.check(text:find("offline"), "an offline member is listed as that: " .. text)
-WoW.units.party1.connected = true
+H.check(text:find("Power Word: Fortitude"), "only the click lines: " .. text)
 
 H.secrecy(true)
-for k in pairs(host.engine.cache) do host.engine.cache[k] = nil end
 text = hint(row)
-H.check(text:find("?"), "an unreadable member is listed with a question mark: " .. text)
-H.secrecy(false)
-WoW.inCombat = true
+H.check(text:find("Needs it, when last readable"),
+    "in combat the list says it is last known, because auras cannot be read: " .. text)
+local listed = needsSection(text)
+H.check(listed:find("Sten Thornbeard") and listed:find("Mirel Dawnsong"),
+    "naming those who needed it: " .. listed)
+H.check(not listed:find("Karuzo Elegia", 1, true),
+    "and not the member who had it: " .. listed)
+H.check(text:find("Power Word: Fortitude"), "the click lines are still there: " .. text)
 
--- The mouse stays on the row and somebody gets buffed: OnEnter does not fire
--- again, so the ticker has to redraw the list or it keeps naming them.
+-- A buff stripped during the fight cannot be seen: every read is refused. The
+-- wording must not turn that into "everyone has it".
+setup({ "FORT_SINGLE" })
+for _, u in ipairs({ "player", "party1", "party2" }) do
+    WoW.SetAura(u, "Power Word: Fortitude", 3600, 1500)
+end
+ui:Update()                                  -- caches all three as buffed
+row = H.ActiveRows(ui)[1]
+H.secrecy(true)
+WoW.ClearAuras("party1")                     -- stripped mid-fight, invisibly
 WoW.clearTooltip()
 H.runScript(row, "OnEnter")
 WoW.mouseOver[row] = true
-H.check(WoW.tooltipText():find("Sten Thornbeard"), "the list names them while hovering")
-WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1500)
 ui:RefreshTimers()
--- Only the list is asserted: in combat the click lines name whoever the
--- button is still wired to, which is the point of reading the attributes.
-local needs = WoW.tooltipText():match("Needs it:(.*)$") or ""
-H.check(not needs:find("Sten Thornbeard"),
-    "and drops them once they are buffed, without leaving the row: " .. needs)
-H.check(needs:find("Mirel Dawnsong"), "while still naming who is left")
+text = WoW.tooltipText()
+H.check(not text:find("Everyone here has it"),
+    "a stripped buff is invisible, so the tooltip never claims everyone has it: " .. text)
+H.check(text:find("Nobody needed it when auras were last readable"),
+    "it says what it actually knows: " .. text)
+
+-- What the ticker CAN see while hovering: a cached buff running out...
+WoW.time = WoW.time + 1600
+ui:RefreshTimers()
+listed = needsSection(WoW.tooltipText())
+H.check(listed:find("Sten Thornbeard") and listed:find("MISS"),
+    "a cached buff running out appears without leaving the row: " .. listed)
+
+-- ...and somebody going offline.
+WoW.units.party2.connected = false
+ui:RefreshTimers()
+listed = needsSection(WoW.tooltipText())
+H.check(listed:find("Mirel Dawnsong") and listed:find("offline"),
+    "and so does going offline: " .. listed)
+WoW.units.party2.connected = true
+
 WoW.mouseOver[row] = nil
 H.runScript(row, "OnLeave")
 ui:RefreshTimers()
 H.eq(WoW.tooltipText(), "", "once the mouse leaves, nothing is redrawn")
-WoW.ClearAuras("party1")
 
--- Nobody needs it: say so rather than leaving the section empty.
-for _, u in ipairs({ "party1", "party2" }) do
-    WoW.SetAura(u, "Power Word: Fortitude", 3600, 1500)
-end
+-- Nothing cached at all: unreadable, which is not the same as missing.
+setup({ "FORT_SINGLE" })
+ui:Update()
+row = H.ActiveRows(ui)[1]
+H.secrecy(true)
+for k in pairs(host.engine.cache) do host.engine.cache[k] = nil end
+listed = needsSection(hint(row))
+H.check(listed:find("?"), "an unreadable member is listed with a question mark: " .. listed)
+
+-- Hints off: the click lines go, the list stays. It is not a hint - in combat
+-- it is the only per-member view there is.
+host.ui_config.hints = false
 text = hint(row)
-H.check(text:find("Everyone here has it"), "with everyone buffed it says so: " .. text)
-H.check(not text:find("Needs it"), "and lists nobody")
-WoW.inCombat = false
+H.check(text:find("Needs it") or text:find("Nobody needed it"),
+    "with hints off, combat still shows who needs it: " .. text)
+H.check(not text:find("Left") and not text:find("Right"),
+    "and only that - the click lines stay off: " .. text)
+H.secrecy(false)
+H.eq(hint(row), "", "and out of combat, hints off means no tooltip at all")
+host.ui_config.hints = true
 
 ------------------------------------------------------------
 -- Pet rows: the group spell's hint names the unit, not "the pets"

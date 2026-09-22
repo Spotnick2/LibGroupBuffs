@@ -1005,6 +1005,12 @@ end
 -- anchoring and re-arming it are all refused. The one thing it was for - who
 -- in this group still needs the buff - goes in the tooltip instead, which is
 -- not protected. Only those who need it, so a full pet bucket stays readable.
+--
+-- While auras are secret this is LAST KNOWN, and the wording says so. Every
+-- aura read is refused in combat, so a buff stripped mid-fight still reads as
+-- present from the cache, and one applied mid-fight is invisible: "everyone
+-- has it" would be a claim the client cannot support. What the ticker can
+-- still see is a cached buff running out, and somebody going offline.
 function Methods:AddNeedsList(row, def)
     if not InCombatLockdown() or not row._members then return end
     local S = lib.Engine.STATES
@@ -1021,13 +1027,22 @@ function Methods:AddNeedsList(row, def)
             needs[#needs + 1] = { m.name, "MISS", COLOUR.MISS }
         end
     end
+    -- Not "are we in combat": if a future build stops hiding party auras, the
+    -- reads work and the list is current again.
+    local lastKnown = lib.API.AurasAreSecret()
     if #needs == 0 then
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
+        if lastKnown then
+            GameTooltip:AddLine("Nobody needed it when auras were last readable.",
+                0.40, 0.85, 0.40)
+        else
+            GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
+        end
         return
     end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("Needs it:", 1.00, 0.82, 0.22)
+    GameTooltip:AddLine(lastKnown and "Needs it, when last readable:" or "Needs it:",
+        1.00, 0.82, 0.22)
     for _, line in ipairs(needs) do
         GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
     end
