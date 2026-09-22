@@ -561,6 +561,37 @@ end
 
 
 ------------------------------------------------------------
+-- The stub refuses every protected call, so the check below means something
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+ui:Update()
+do
+    local protectedFrame = ui.rows[1]         -- a secure button
+    local parent = ui.main                    -- protected: it parents them
+    WoW.inCombat = true
+    for _, method in ipairs({ "Show", "Hide", "SetPoint", "ClearAllPoints",
+                              "SetClampedToScreen", "SetAlpha", "SetSize", "SetScale",
+                              "StartMoving", "StopMovingOrSizing", "SetParent" }) do
+        for _, f in ipairs({ protectedFrame, parent }) do
+            WoW.blockedCalls = {}
+            f[method](f, 1, 2)
+            H.eq(#WoW.blockedCalls, 1, method .. " on a protected frame is refused and recorded")
+        end
+    end
+    -- The refusal must also leave the frame alone.
+    WoW.inCombat = false
+    parent:SetAlpha(1)
+    parent:Show()
+    WoW.inCombat = true
+    parent:SetAlpha(0)
+    parent:Hide()
+    H.eq(parent:GetAlpha(), 1, "a refused SetAlpha changes nothing")
+    H.check(parent:IsShown(), "and a refused Hide leaves the frame up")
+    WoW.inCombat = false
+end
+
+------------------------------------------------------------
 -- Nothing the window does in combat is a blocked call
 ------------------------------------------------------------
 

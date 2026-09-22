@@ -1097,8 +1097,28 @@ end
 
 -- Combat is over: unpark, apply a reset asked for during the fight, and do the
 -- rebuild combat deferred - including a show asked for while locked down.
+-- An r6 copy asked to hide a frame during combat, got blocked, and left
+-- `_combatHidden` on it. If a newer copy upgraded this window mid-fight, that
+-- flag is the only record of the request: without translating it, a logically
+-- closed window stays on screen for good.
+local function AdoptLegacyState(self)
+    for frame, field in pairs({ [self.main or false] = "closePending",
+                                [self.pop or false] = "popHidePending" }) do
+        if frame and frame._combatHidden then
+            frame._combatHidden = nil
+            self[field] = true
+            -- r6 tried to drop the clamp and the alpha before moving the
+            -- frame. Those calls were blocked in combat, but restore them
+            -- anyway: out of combat they would have gone through.
+            frame:SetAlpha(1)
+            frame:SetClampedToScreen(true)
+        end
+    end
+end
+
 function Methods:OnCombatEnd()
     if InCombatLockdown() then return end
+    AdoptLegacyState(self)
     -- Everything the fight refused, in the order the player asked for it.
     if self.dragPending then self:DragStop() end
     if self.popHidePending then

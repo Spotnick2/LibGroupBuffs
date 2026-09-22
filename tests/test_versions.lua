@@ -346,6 +346,65 @@ WoW.flushTimers(1)
 H.eq(w._probeUpdate, "next", "and so does a show the old copy queued")
 
 ------------------------------------------------------------
+-- An r6 window upgraded mid-fight: its deferred hide must survive
+--
+-- r6 parked frames - or tried to; the client refused - and left
+-- `_combatHidden` behind. If another addon loads this copy before the fight
+-- ends, that flag is the only record that the player closed the window.
+------------------------------------------------------------
+
+freshLibStub()
+load(R6, "r6")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local r6Host = H.PriestUI()
+local r6UI = r6Host.ui
+r6Host.config.visible.shadow = false
+r6Host.engine:RefreshSpells()
+r6UI:Update()
+H.check(r6UI.main:IsShown(), "r6 built and opened the window")
+
+WoW.inCombat = true
+r6UI:Close(true)
+H.check(r6UI.main:IsShown() and not r6UI:IsVisible(),
+    "r6's close in combat leaves the frame up and the window logically closed")
+H.eq(r6UI.main._combatHidden, true, "with only r6's flag to say so")
+H.eq(r6UI.closePending, nil, "and none of the newer copy's state")
+
+load(CURRENT_FILES, "current")             -- another addon's newer copy
+WoW.inCombat = false
+r6UI:OnCombatEnd()
+H.check(not r6UI.main:IsShown(), "the newer copy honours the close r6 recorded")
+H.eq(r6UI.main._combatHidden, nil, "and clears the old flag")
+WoW.flushTimers(1)
+H.check(not r6UI:IsVisible(), "without reopening the window")
+
+-- The same for a popover r6 left up when the mouse moved away in combat.
+freshLibStub()
+load(R6, "r6")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local r6b = H.PriestUI()
+r6b.config.visible.shadow = false
+r6b.engine:RefreshSpells()
+r6b.ui:Update()
+H.runScript(H.ActiveRows(r6b.ui)[1], "OnEnter")
+H.check(r6b.ui.pop:IsShown(), "r6 opened the popover")
+WoW.inCombat = true
+H.runScript(r6b.ui.pop, "OnUpdate", 1.0)
+H.eq(r6b.ui.pop._combatHidden, true, "r6 recorded the hide it could not do")
+load(CURRENT_FILES, "current")
+WoW.inCombat = false
+r6b.ui:OnCombatEnd()
+H.check(not r6b.ui.pop:IsShown(), "the newer copy hides it when the fight ends")
+H.check(r6b.ui.main:IsShown(), "and leaves the window itself alone")
+WoW.flushTimers(1)
+
+------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
 ------------------------------------------------------------
 

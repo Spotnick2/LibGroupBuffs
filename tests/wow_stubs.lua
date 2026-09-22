@@ -226,6 +226,16 @@ local function makeFrame(name, parent, template)
     -- undefined frame:IsFoo() would silently answer "yes" forever.
     f.IsMouseOver = function(self) return WoW.mouseOver[self] == true end
     f.SetClampedToScreen = function(self, v) self._clamped = v return self end
+    -- Recorded rather than left to the catch-all: PROTECTED_METHODS wraps what
+    -- exists, and a method the catch-all swallows can be called in combat
+    -- without the refusal being recorded.
+    f.SetAlpha = function(self, a) self._alpha = a return self end
+    f.GetAlpha = function(self) return self._alpha or 1 end
+    f.SetSize = function(self, w, h) self._width, self._height = w, h return self end
+    f.SetScale = function(self, s) self._scale = s return self end
+    f.GetScale = function(self) return self._scale or 1 end
+    f.SetParent = function(self, p) self._parent = p return self end
+    f.GetParent = function(self) return self._parent end
     f.IsVisible = function(self) return self._shown end
     f.IsMouseEnabled = function(self) return true end
     f.RegisterForClicks = function(self, ...) self._clicks = { ... } return self end
