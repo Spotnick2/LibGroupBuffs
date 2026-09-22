@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 10
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 9
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1008,13 +1008,9 @@ end
 --
 -- While auras are secret this is LAST KNOWN, and the wording says so. Every
 -- aura read is refused in combat, so a buff stripped mid-fight still reads as
--- present from the cache, and one applied mid-fight is invisible. What can
--- still be known is worth saying precisely, which is what `basis` is for:
---
---   MISS      seen without it, before the reads closed
---   ran out   its own clock expired during the fight - arithmetic, not a read
---   offline   nothing to do with auras
---   ?         never seen: joined mid-fight, or out of range at the pull
+-- present from the cache, and one applied mid-fight is invisible: "everyone
+-- has it" would be a claim the client cannot support. What the ticker can
+-- still see is a cached buff running out, and somebody going offline.
 function Methods:AddNeedsList(row, def)
     if not InCombatLockdown() or not row._members then return end
     local S = lib.Engine.STATES
@@ -1025,11 +1021,10 @@ function Methods:AddNeedsList(row, def)
         if not UnitIsConnected(m.unit) then
             needs[#needs + 1] = { m.name, "offline", COLOUR.OFFLINE }
         elseif known and known.state == S.UNKNOWN then
-            -- Never seen, so not claimed as missing.
+            -- Unreadable, not absent: worth showing, because it may be a miss.
             needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
         elseif not known or (known.rem or 0) <= 0 then
-            local ranOut = known and known.basis == "expired"
-            needs[#needs + 1] = { m.name, ranOut and "ran out" or "MISS", COLOUR.MISS }
+            needs[#needs + 1] = { m.name, "MISS", COLOUR.MISS }
         end
     end
     -- Not "are we in combat": if a future build stops hiding party auras, the
@@ -1038,7 +1033,7 @@ function Methods:AddNeedsList(row, def)
     if #needs == 0 then
         GameTooltip:AddLine(" ")
         if lastKnown then
-            GameTooltip:AddLine("Nobody was missing it when the fight started.",
+            GameTooltip:AddLine("Nobody needed it when auras were last readable.",
                 0.40, 0.85, 0.40)
         else
             GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
@@ -1046,7 +1041,7 @@ function Methods:AddNeedsList(row, def)
         return
     end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(lastKnown and "Missing when the fight started:" or "Needs it:",
+    GameTooltip:AddLine(lastKnown and "Needs it, when last readable:" or "Needs it:",
         1.00, 0.82, 0.22)
     for _, line in ipairs(needs) do
         GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
