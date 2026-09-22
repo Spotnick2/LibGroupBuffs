@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 8
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 7
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1053,15 +1053,12 @@ end
 -- Returns whether the frames are hidden NOW: in combat they cannot be, so the
 -- window stops refreshing and goes when the fight ends.
 --
--- When the player asked and the window is still on screen, a deferred close
--- also calls the addon's onCloseDeferred, so every way of closing - the X
--- button, a slash command, a keybind - can explain itself the same way. What
--- matters is that a frame the player just tried to close is still visible,
--- NOT whether the window was logically open: an automatic close during the
--- same fight (the group emptied) leaves it shown while `visible` is already
--- false. Said once per pending close, not once per click. The return value is
+-- When the player asked and the window was open, a deferred close also calls
+-- the addon's onCloseDeferred, so every way of closing - the X button, a slash
+-- command, a keybind - can explain itself the same way. The return value is
 -- there for a caller that wants to handle it itself.
 function Methods:Close(manual)
+    local wasOpen = self.visible
     if InCombatLockdown() then
         self.closePending = true
     else
@@ -1075,14 +1072,8 @@ function Methods:Close(manual)
     self.pendingShow = false
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
-    if self.closePending then
-        if manual and not self.closeExplained
-            and self.main and self.main:IsShown() then
-            self.closeExplained = true
-            Call(self.host.onCloseDeferred, self)
-        end
-    else
-        self.closeExplained = false
+    if self.closePending and manual and wasOpen then
+        Call(self.host.onCloseDeferred, self)
     end
     return not self.closePending
 end
@@ -1146,7 +1137,6 @@ function Methods:OnCombatEnd()
     end
     if self.closePending then
         self.closePending = false
-        self.closeExplained = false
         if self.main then self.main:Hide() end
         if self.pop then self.pop:Hide() end
     end
@@ -1294,7 +1284,6 @@ function Methods:Update()
     end
 
     main:Show()
-    self.closeExplained = false
     SetVisible(self, true)
     Call(self.host.setVisible, true)
     Call(self.host.onLayout, self)

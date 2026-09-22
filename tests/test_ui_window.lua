@@ -312,7 +312,7 @@ ui:Update(); WoW.inCombat = false; ui:Update(); WoW.inCombat = true
 H.runScript(ui.main.closeBtn, "OnClick")
 H.eq(host.deferredCloses, 1, "but the X button in combat asks the addon to explain")
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "and closing an already closed window says nothing more")
+H.eq(host.deferredCloses, 1, "and asks once per pending close, not once per click")
 H.eq(#WoW.blockedCalls, 0, "without attempting a call the client blocks")
 H.check(ui.main:IsShown(), "the frame is still up - it parents secure buttons")
 H.check(not ui:IsVisible(), "but the window is logically closed")
@@ -340,6 +340,34 @@ ui:OnCombatEnd()
 ui:Close()                        -- and closed before the deferred rebuild
 WoW.flushTimers(1)
 H.check(not ui:IsVisible(), "a close after combat's end beats the rebuild it queued")
+
+-- The window can close ITSELF during a fight - the group empties - and the
+-- frame stays up because the client refuses to hide it. The player clicking X
+-- on a window they can still see has to be answered, even though it is
+-- already logically closed.
+setup()
+ui:Update()
+WoW.inCombat = true
+host.deferredCloses = 0
+ui:Close()                                  -- the addon's own close: the group emptied
+H.check(ui.main:IsShown() and not ui:IsVisible(), "still on screen, logically closed")
+H.eq(host.deferredCloses, 0, "its own close explains nothing")
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "but the player clicking X on the visible window is answered")
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "once")
+WoW.inCombat = false
+ui:OnCombatEnd()
+H.check(not ui.main:IsShown(), "and the fight's end hides it")
+WoW.flushTimers(1)
+
+-- Once it is really hidden, closing again says nothing: there is no window.
+WoW.inCombat = true
+host.deferredCloses = 0
+ui:Close(true)
+H.eq(host.deferredCloses, 0, "closing a window that is not on screen explains nothing")
+WoW.inCombat = false
+WoW.flushTimers(1)
 
 ------------------------------------------------------------
 -- Dragging, lock and position
