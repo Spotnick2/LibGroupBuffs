@@ -34,10 +34,11 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 | `Compat.lua` | `lib.API` — every removed or moved API, measured against the live client |
 | `Settings.lua` | `lib.Settings` — one write path for your saved table, and the checks that notice when the client is fixed or updated |
 | `Engine.lua` | `lib.Engine` — aura reads that survive combat secrecy, the roster, group stats, target picking and click mapping |
+| `UI.lua` | `lib.UI` — the buff window: rows, popover, secure click casting, combat parking, footer |
 | `LibGroupBuffs-1.0.xml` | the entry point; lists exactly the files that exist, in load order |
 | `LibStub/` | bundled; designed to be embedded many times and resolve to one instance |
 
-Planned, not yet present: the row/popover UI.
+Planned, not yet present: shared options-panel widgets.
 
 ## Using it
 
@@ -121,6 +122,22 @@ for _, def in ipairs(engine:ActiveDefs(groups, ord)) do
     local left, right = engine:ClickSpells(def)
     local target = engine:PickTarget(members, def, def.hasGroup, st)
 end
+```
+
+And the window, which draws the engine's rows and handles the clicks. Your addon decides when it
+opens and supplies its branding, reagents and settings:
+
+```lua
+local ui = LibStub("LibGroupBuffs-1.0").UI.New({
+    engine = engine,
+    owner  = "MyAddon",
+    title  = "|cffff9933MyAddon|r",
+    footerItems = function() return { { itemID = 17021, usedBy = "Gift of the Wild" } } end,
+    getPos = function() return MyAddonDB.pos end,
+    setPos = function(pos) settings:Set("pos", pos) end,
+})
+ui:Open(0.5)                        -- from PLAYER_LOGIN, when your addon wants it shown
+-- and from events: ui:ScheduleRefresh(), ui:OnCombatEnd(), ui:Close(manual) ...
 ```
 
 `tests/config_scan.lua` (not shipped) lets your tests fail on any other write to your saved table.

@@ -55,6 +55,9 @@ function WoW.reset()
     WoW.refusedEvents = {}       -- event names RegisterEvent should return false for
     WoW.timers      = {}
     WoW.mouseOver   = {}         -- [frame] = true; drives frame:IsMouseOver()
+    WoW.centers     = {}         -- [frame] = x; drives frame:GetCenter()
+    WoW.screenWidth = 1920       -- what UIParent:GetWidth() reports
+    WoW.combatWrites = {}        -- SetAttribute calls made while WoW.inCombat
     WoW.byNameBlind = false      -- simulate GetAuraDataBySpellName not resolving
     WoW.auraReadsThrow = false   -- combat secrecy: index reads throw
     WoW.aurasAreSecret = false   -- combat secrecy: the struct's fields throw
@@ -136,10 +139,33 @@ function WoW.DefineSpell(spellID, name)
     WoW.spells[spellID] = { name = name, iconID = 100000 + spellID }
 end
 
-function WoW.flushTimers()
+-- Run pending C_Timer callbacks.
+--
+-- With `advance`, move the clock forward by that many seconds and run only
+-- what comes due, oldest first - which is how a test says "this much time
+-- passed", catches a callback that fires too early, and lets a timer from an
+-- earlier action still be pending while a later one is measured. Without it,
+-- everything runs, which is what most tests want.
+function WoW.flushTimers(advance)
+    local target = advance and (WoW.time + advance) or nil
     local pending = WoW.timers
     WoW.timers = {}
-    for _, fn in ipairs(pending) do fn() end
+
+    if not target then
+        for _, t in ipairs(pending) do t.fn() end
+        return
+    end
+
+    table.sort(pending, function(a, b) return a.at < b.at end)
+    for _, t in ipairs(pending) do
+        if t.at <= target then
+            WoW.time = t.at          -- callbacks see the time they ran at
+            t.fn()
+        else
+            WoW.timers[#WoW.timers + 1] = t
+        end
+    end
+    WoW.time = target
 end
 
 ------------------------------------------------------------
@@ -162,7 +188,17 @@ local function makeFrame(name)
         end
         return self
     end
-    f.SetAttribute = function(self, k, v) self._attr[k] = v return self end
+    -- A write to a secure attribute under combat lockdown is refused by the
+    -- client - silently, as far as the addon can tell. The stub still stores
+    -- it (so a test can see what was attempted) and records it, so a test can
+    -- assert that nothing tried.
+    f.SetAttribute = function(self, k, v)
+        if WoW.inCombat then
+            WoW.combatWrites[#WoW.combatWrites + 1] = { frame = self, key = k, value = v }
+        end
+        self._attr[k] = v
+        return self
+    end
     f.GetAttribute = function(self, k) return self._attr[k] end
     f.Show = function(self) self._shown = true return self end
     f.Hide = function(self) self._shown = false return self end
@@ -174,6 +210,28 @@ local function makeFrame(name)
     f.SetClampedToScreen = function(self, v) self._clamped = v return self end
     f.IsVisible = function(self) return self._shown end
     f.IsMouseEnabled = function(self) return true end
+    f.RegisterForClicks = function(self, ...) self._clicks = { ... } return self end
+    -- Recorded, so a test can assert what a font string or texture shows
+    -- rather than only that the call did not throw.
+    f.SetText = function(self, text) self._text = text return self end
+    f.GetText = function(self) return self._text end
+    f.SetTexture = function(self, tex) self._texture = tex return self end
+    f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
+    f.GetTexture = function(self) return self._texture end
+    f.StartMoving = function(self) self._moving = true return self end
+    f.StopMovingOrSizing = function(self) self._moving = false return self end
+    f.SetPoint = function(self, point, rel, relPoint, x, y)
+        -- SetPoint(point, x, y) is the short form, and a number in the second
+        -- slot is the only thing that distinguishes it from
+        -- SetPoint(point, relativeTo, relativePoint).
+        if type(rel) == "number" then
+            rel, relPoint, x, y = nil, nil, rel, relPoint
+        end
+        self._points = self._points or {}
+        self._points[#self._points + 1] = { point, rel, relPoint, x, y }
+        return self
+    end
+    f.ClearAllPoints = function(self) self._points = nil return self end
     -- The client declares `RegisterEvent(eventName:cstring) -> registered:bool`
     -- and throws on a name it does not know. WoW.badEvents models the throw,
     -- WoW.refusedEvents a refusal by return value.
@@ -195,12 +253,24 @@ local function makeFrame(name)
     f.CreateFontString = function() return makeFrame() end
     f.CreateAnimationGroup = function() return makeFrame() end
     f.GetThumbTexture  = function() return makeFrame() end
-    f.GetPoint = function() return "CENTER", nil, "CENTER", 0, 0 end
+    -- The FIRST anchor, which is what the client's GetPoint() returns.
+    f.GetPoint = function(self)
+        local p = self._points and self._points[1]
+        if not p then return "CENTER", nil, "CENTER", 0, 0 end
+        return p[1], p[2], p[3], p[4], p[5]
+    end
     -- Set WoW.zeroHeights to model a FontString that has not been laid out
     -- yet, which is what the live client reports inside a scroll child during
     -- OnShow.
     f.GetStringHeight = function() return WoW.zeroHeights and 0 or 12 end
-    f.GetWidth = function() return 100 end
+    f.GetWidth = function(self) return self == UIParent and WoW.screenWidth or 100 end
+    -- nil until a test places the frame, which is what the live client returns
+    -- before layout - a case the caller has to handle.
+    f.GetCenter = function(self)
+        local x = WoW.centers[self]
+        if not x then return nil end
+        return x, 300
+    end
     f.GetHeight = function() return 20 end
     f.GetChecked = function(self) return self._checked end
     f.SetChecked = function(self, v) self._checked = v return self end
@@ -292,6 +362,31 @@ DEFAULT_CHAT_FRAME = {
 }
 
 GameTooltip = makeFrame("GameTooltip")
+-- Records what was put in it, so a test can assert what the player is told.
+GameTooltip.SetOwner = function(self, owner, anchor)
+    self._owner, self._anchor, self._lines = owner, anchor, {}
+    return self
+end
+GameTooltip.SetText = function(self, text)
+    self._lines = { text }
+    return self
+end
+GameTooltip.AddLine = function(self, text)
+    self._lines = self._lines or {}
+    self._lines[#self._lines + 1] = text
+    return self
+end
+function WoW.clearTooltip()
+    GameTooltip:Hide()
+    GameTooltip._lines = nil
+end
+
+-- Everything the tooltip is showing, colour codes stripped.
+function WoW.tooltipText()
+    if not GameTooltip:IsShown() then return "" end
+    local joined = table.concat(GameTooltip._lines or {}, " / ")
+    return (joined:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
 SlashCmdList = {}
 
 -- Present on the live client, so the options panel's real registration and
@@ -305,7 +400,11 @@ Settings = {
 }
 
 C_Timer = {
-    After = function(_, fn) WoW.timers[#WoW.timers + 1] = fn end,
+    -- Scheduled against the virtual clock, so a timer left over from an
+    -- earlier action can still be pending while a later one is measured.
+    After = function(delay, fn)
+        WoW.timers[#WoW.timers + 1] = { at = WoW.time + (tonumber(delay) or 0), fn = fn }
+    end,
     NewTimer  = function() return { Cancel = function() end } end,
     NewTicker = function() return { Cancel = function() end } end,
 }

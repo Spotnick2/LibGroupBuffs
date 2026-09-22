@@ -22,4 +22,5 @@
     <Script file="Compat.lua"/>
     <Script file="Settings.lua"/>
     <Script file="Engine.lua"/>
+    <Script file="UI.lua"/>
 </Ui>

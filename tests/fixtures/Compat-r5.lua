@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 6
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 5
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -549,8 +549,3 @@ end
 function API.ClickEdges()
     return "LeftButtonDown", "RightButtonDown", "LeftButtonUp", "RightButtonUp"
 end
-
--- Last, so a copy that threw partway through is not marked complete. A
--- consumer checks this equals the active MINOR: after a newer copy threw, the
--- older copy's marker is still here, and a bare "is it set" would accept it.
-lib.compatMinor = MINOR
