@@ -44,7 +44,9 @@ lib.EngineMeta.__index = Methods
 -- Remaining time for a permanent aura. The addon's timer text prints nothing
 -- above 9998, and the gradient must not run past full.
 Engine.PERMANENT = 9999
-Engine.STATES = { HAS = "HAS", MISSING = "MISSING", UNKNOWN = "UNKNOWN" }
+-- Filled in place: a consumer may hold this table from an older copy.
+Engine.STATES = Engine.STATES or {}
+Engine.STATES.HAS, Engine.STATES.MISSING, Engine.STATES.UNKNOWN = "HAS", "MISSING", "UNKNOWN"
 -- Pet buckets are numbered from here, so they sort after every raid subgroup.
 Engine.PET_GROUP = 99
 

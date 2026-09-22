@@ -243,7 +243,7 @@ local defs = { { id = "fort", snglID = 1243, sngl = "Power Word: Fortitude", dur
 local visible = function() return true end
 local eng = lib.Engine.New({ defs = defs, bucketSize = 8, isVisible = visible })
 eng.cache["GUID-x"] = { fort = { exp = 0, dur = 0, stamp = 1 } }
-local engMeta, cache = getmetatable(eng), eng.cache
+local engMeta, cache, states = getmetatable(eng), eng.cache, lib.Engine.STATES
 
 load(withMinor(CURRENT_FILES, CURRENT + 1, {
     ["Engine.lua"] = "LibStub('LibGroupBuffs-1.0').EngineMethods.Probe = function() return 'next' end",
@@ -253,6 +253,8 @@ H.check(getmetatable(eng) == engMeta, "an existing engine keeps its metatable")
 H.eq(eng.Probe and eng:Probe(), "next", "and runs the newer copy's methods")
 H.check(eng.cache == cache and eng.cache["GUID-x"] ~= nil, "with its aura cache intact")
 H.check(eng.defs == defs and eng.isVisible == visible, "and its defs and host callbacks")
+H.check(lib.Engine.STATES == states, "and the STATES table a consumer may hold")
+H.eq(states.UNKNOWN, "UNKNOWN", "still filled in")
 
 ------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
