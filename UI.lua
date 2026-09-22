@@ -767,9 +767,9 @@ end
 
 -- Put the window back at the default spot and forget the saved one. It
 -- ignores the lock, so a locked window dragged somewhere unreachable can always
--- be recovered. In combat only the saved position is cleared; the frame
--- moves when combat ends (moving it now could bring parked, invisible
--- buttons back on screen). Returns whether it moved now.
+-- be recovered. In combat only the saved position is cleared: re-anchoring the
+-- frame is blocked, because it parents secure buttons. It moves when combat
+-- ends. Returns whether it moved now.
 function Methods:ResetPosition()
     Call(self.host.setPos, nil)
     self.moved = false
