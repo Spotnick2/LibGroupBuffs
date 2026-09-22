@@ -306,8 +306,8 @@ H.check(text:find("Needs it"), "in combat the hint lists them: " .. text)
 H.check(text:find("Sten Thornbeard") and text:find("Mirel Dawnsong"),
     "naming those who need it: " .. text)
 H.check(text:find("MISS"), "with what each one is missing: " .. text)
-H.check(not text:find("Karuzo Elegia  24", 1, true),
-    "and not the member who already has it")
+H.check(not text:find("Karuzo Elegia", 1, true),
+    "and not the member who already has it: " .. text)
 H.check(text:find("Power Word: Fortitude"), "the click lines are still there: " .. text)
 
 -- Offline and unreadable are worth knowing too, and are not the same as MISS.
@@ -322,6 +322,26 @@ text = hint(row)
 H.check(text:find("?"), "an unreadable member is listed with a question mark: " .. text)
 H.secrecy(false)
 WoW.inCombat = true
+
+-- The mouse stays on the row and somebody gets buffed: OnEnter does not fire
+-- again, so the ticker has to redraw the list or it keeps naming them.
+WoW.clearTooltip()
+H.runScript(row, "OnEnter")
+WoW.mouseOver[row] = true
+H.check(WoW.tooltipText():find("Sten Thornbeard"), "the list names them while hovering")
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1500)
+ui:RefreshTimers()
+-- Only the list is asserted: in combat the click lines name whoever the
+-- button is still wired to, which is the point of reading the attributes.
+local needs = WoW.tooltipText():match("Needs it:(.*)$") or ""
+H.check(not needs:find("Sten Thornbeard"),
+    "and drops them once they are buffed, without leaving the row: " .. needs)
+H.check(needs:find("Mirel Dawnsong"), "while still naming who is left")
+WoW.mouseOver[row] = nil
+H.runScript(row, "OnLeave")
+ui:RefreshTimers()
+H.eq(WoW.tooltipText(), "", "once the mouse leaves, nothing is redrawn")
+WoW.ClearAuras("party1")
 
 -- Nobody needs it: say so rather than leaving the section empty.
 for _, u in ipairs({ "party1", "party2" }) do

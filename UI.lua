@@ -590,6 +590,16 @@ function Methods:RefreshTimers()
             if pr._active then self:ApplyPopRowVisuals(pr) end
         end
     end
+    -- In combat the hint's list of who needs the buff is the only per-member
+    -- view there is, and OnEnter does not fire again while the mouse rests on
+    -- the row - so buff somebody and the tooltip would still call them
+    -- missing. Redraw it here, the same reason a rebuild re-drives the
+    -- popover. Out of combat the popover is open and shows this live.
+    if InCombatLockdown() and self.hintRow and self.hintRow._active
+        and lib.API.IsMouseOver(self.hintRow)
+    then
+        self:ShowClickHint(self.hintRow)
+    end
 end
 
 -- Colours and icon, re-read from the addon. Backdrop opacity only, never the
@@ -1056,6 +1066,7 @@ end
 -- row now, not captured when it was built.
 function Methods:RowEnter(r)
     if not r._active or not r._members or not r._def then return end
+    self.hintRow = r
     self:UpdatePopover(r, r._members, r._def)
     self:ShowClickHint(r)
 end
@@ -1063,6 +1074,7 @@ end
 -- The popover's own hide is the hover poll's job: an OnLeave would fire on the
 -- way TO the popover. Dropping the tooltip here is right either way.
 function Methods:RowLeave()
+    self.hintRow = nil
     self:HideClickHint()
 end
 
