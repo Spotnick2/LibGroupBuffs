@@ -123,6 +123,12 @@ H.check(lib.UI == uiLib and lib.UI.New == uiNew and lib.UIMethods.Update == uiUp
     "and UI with its methods")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its recorded state")
 
+-- Every runtime file marks itself complete with the active MINOR, which is
+-- what a consumer checks: a marker that merely exists can be an older copy's.
+for _, marker in ipairs({ "compatMinor", "settingsMinor", "engineMinor", "uiMinor" }) do
+    H.eq(lib[marker], CURRENT, marker .. " is the active MINOR")
+end
+
 ------------------------------------------------------------
 -- An older copy after a newer one: it must return before touching anything.
 -- r3 has no Settings.lua at all.
@@ -318,6 +324,7 @@ m.Update = function(self) self._probeUpdate = 'next' return oldUpdate(self) end
 ]],
 }), "next")
 H.eq(lib.uiMinor, CURRENT + 1, "the next copy installs its UI")
+H.eq(lib.compatMinor, CURRENT + 1, "and every file marks the new MINOR complete")
 H.check(lib.UI.DEFAULT_APPEARANCE == appearance and lib.UI.DEFAULT_APPEARANCE.border == border,
     "the public appearance table, and its colours, are the same tables after the upgrade")
 H.check(lib.UI.CLASS_ICONS == icons, "and so is the class icon map")

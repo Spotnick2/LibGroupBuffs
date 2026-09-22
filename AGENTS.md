@@ -130,7 +130,10 @@ Vanilla content, Retail codebase.
   checks `LibStub:GetLibrary(MAJOR)` reports its own `MINOR` (else an older copy is loading after a
   newer one) and that it has not installed already (`lib.settingsMinor == MINOR`: equal after
   equal, where reinstalling would replace functions consumers hold). It records that marker as its
-  **last** line, so a file that threw partway is not marked installed.
+  **last** line, so a file that threw partway is not marked installed. `Compat.lua` does the same
+  with `compatMinor`. **A consumer checks every marker EQUALS the active MINOR** (the second value
+  `LibStub("LibGroupBuffs-1.0", true)` returns), never merely that it is set: when a newer copy
+  throws partway, the older copy's markers and functions are still on the shared table.
 
 ## Client Rules (measured, not inferred)
 
