@@ -98,6 +98,44 @@ function H.TeachSpells(known)
     end
 end
 
+-- An engine shaped like Priestly's: the three priest buffs, durations stored
+-- in memory, and config the test flips through `host.config`. Everything a
+-- real addon keeps in its saved table lives in plain fields here, so a test
+-- reads exactly what the engine asked the addon to store.
+function H.PriestEngine()
+    local lib = LibStub("LibGroupBuffs-1.0")
+    local host = {
+        config = { showSolo = false, trackPets = true, enabled = {}, visible = {} },
+        durations = {},
+        visibilityCalls = {},
+    }
+    host.defs = {
+        { id = "fort", snglID = H.SPELL.FORT_SINGLE, grpID = H.SPELL.FORT_GROUP,
+          sngl = H.NAME.FORT_SINGLE, grp = H.NAME.FORT_GROUP, duration = 3600 },
+        { id = "spirit", snglID = H.SPELL.SPIRIT_SINGLE, grpID = H.SPELL.SPIRIT_GROUP,
+          sngl = H.NAME.SPIRIT_SINGLE, grp = H.NAME.SPIRIT_GROUP, duration = 3600 },
+        { id = "shadow", snglID = H.SPELL.SHADOW_SINGLE, grpID = H.SPELL.SHADOW_GROUP,
+          sngl = H.NAME.SHADOW_SINGLE, grp = H.NAME.SHADOW_GROUP, duration = 600 },
+    }
+    host.engine = lib.Engine.New({
+        defs = host.defs,
+        bucketSize = 8,
+        showSolo = function() return host.config.showSolo end,
+        trackPets = function() return host.config.trackPets end,
+        isBuffEnabled = function(id) return host.config.enabled[id] ~= false end,
+        isVisible = function(def, groups, ord)
+            host.visibilityCalls[#host.visibilityCalls + 1] = { def = def, groups = groups, ord = ord }
+            return host.config.visible[def.id] ~= false
+        end,
+        learnDuration = function(spell, seconds) host.durations[spell] = seconds end,
+        learnedDuration = function(spell) return host.durations[spell] end,
+    })
+    function host.def(id)
+        for _, d in ipairs(host.defs) do if d.id == id then return d end end
+    end
+    return host
+end
+
 -- Combat aura secrecy as measured on the live client: the flag is set AND
 -- every index read throws, while the by-name lookup quietly returns nil.
 function H.secrecy(on)

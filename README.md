@@ -33,10 +33,11 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 |---|---|
 | `Compat.lua` | `lib.API` — every removed or moved API, measured against the live client |
 | `Settings.lua` | `lib.Settings` — one write path for your saved table, and the checks that notice when the client is fixed or updated |
+| `Engine.lua` | `lib.Engine` — aura reads that survive combat secrecy, the roster, group stats, target picking and click mapping |
 | `LibGroupBuffs-1.0.xml` | the entry point; lists exactly the files that exist, in load order |
 | `LibStub/` | bundled; designed to be embedded many times and resolve to one instance |
 
-Planned, not yet present: the buff engine and the row/popover UI.
+Planned, not yet present: the row/popover UI.
 
 ## Using it
 
@@ -97,6 +98,29 @@ local settings = LibStub("LibGroupBuffs-1.0").Settings.New({
 settings:Set("lockFrame", true)
 -- from your PLAYER_ENTERING_WORLD handler:
 settings:HandleEnteringWorld(isInitialLogin, isReloadingUi)
+```
+
+One engine per addon. It needs your buff definitions (by spell ID) and a popover size; everything
+else is optional and defaults sensibly:
+
+```lua
+local engine = LibStub("LibGroupBuffs-1.0").Engine.New({
+    defs = {
+        { id = "mark", snglID = 1126, grpID = 21849, sngl = "Mark of the Wild",
+          grp = "Gift of the Wild", duration = 1800 },
+        { id = "thorns", snglID = 467, sngl = "Thorns", duration = 600 },   -- no group form
+    },
+    bucketSize = 8,
+    membersFor = function(def, members) ... end,   -- e.g. Thorns only on tanks
+})
+engine:RefreshSpells()                             -- at login and on SPELLS_CHANGED
+local groups, ord = engine:GatherGroups()
+for _, def in ipairs(engine:ActiveDefs(groups, ord)) do
+    local members = engine:MembersFor(def, groups[ord[1]])
+    local st = engine:GroupStat(members, def)
+    local left, right = engine:ClickSpells(def)
+    local target = engine:PickTarget(members, def, def.hasGroup, st)
+end
 ```
 
 `tests/config_scan.lua` (not shipped) lets your tests fail on any other write to your saved table.
