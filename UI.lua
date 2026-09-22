@@ -113,6 +113,21 @@ for key, colour in pairs({
     for i = 1, 4 do t[i] = colour[i] end
 end
 
+-- One ladder for what a member's state looks like, wherever it is drawn: the
+-- row's MISS, the popover row's timer text and the combat list. Kept in one
+-- place because two of them had already drifted apart.
+UI.STATE_COLOUR = UI.STATE_COLOUR or {}
+for key, colour in pairs({
+    MISS    = { 1.00, 0.28, 0.28 },
+    UNKNOWN = { 0.65, 0.65, 0.65 },
+    OFFLINE = { 0.50, 0.50, 0.50 },
+}) do
+    local t = UI.STATE_COLOUR[key] or {}
+    UI.STATE_COLOUR[key] = t
+    for i = 1, 3 do t[i] = colour[i] end
+end
+local COLOUR = UI.STATE_COLOUR
+
 local DEFAULT_POS = { point = "CENTER", relPoint = "CENTER", x = 300, y = 50 }
 
 -- ─── Small helpers ──────────────────────────────────────────────────────────
@@ -275,7 +290,7 @@ local function MakeRow(ui, parent, i)
 
     r.missAll = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     r.missAll:SetPoint("CENTER", r, "CENTER", ICON_W / 2, 0)
-    r.missAll:SetTextColor(1.0, 0.28, 0.28)
+    r.missAll:SetTextColor(unpack(COLOUR.MISS))
     r.missAll:SetText("MISS")
 
     r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
@@ -510,11 +525,11 @@ function Methods:ApplyRowVisuals(r, st)
 
     if st.nUnknown == st.nTotal then
         r.missAll:SetText("?")
-        r.missAll:SetTextColor(0.65, 0.65, 0.65)
+        r.missAll:SetTextColor(unpack(COLOUR.UNKNOWN))
         r.missAll:Show()
     elseif st.nMiss == st.nTotal then
         r.missAll:SetText("MISS")
-        r.missAll:SetTextColor(1.0, 0.28, 0.28)
+        r.missAll:SetTextColor(unpack(COLOUR.MISS))
         r.missAll:Show()
     elseif st.minR > 0 then
         local tr, tg, tb = UI.TimerColor(pct)
@@ -569,10 +584,10 @@ function Methods:ApplyPopRowVisuals(pr)
         pr.timeTxt:SetTextColor(tr, tg, tb)
     elseif state == S.UNKNOWN then
         pr.timeTxt:SetText("?")
-        pr.timeTxt:SetTextColor(0.65, 0.65, 0.65)
+        pr.timeTxt:SetTextColor(unpack(COLOUR.UNKNOWN))
     else
         pr.timeTxt:SetText("MISS")
-        pr.timeTxt:SetTextColor(1.00, 0.22, 0.22)
+        pr.timeTxt:SetTextColor(unpack(COLOUR.MISS))
     end
 end
 
@@ -933,10 +948,16 @@ function Methods:HideClickHint()
 end
 
 function Methods:ShowClickHint(row)
-    local show = self.host.showClickHints
-    if show and not show() then return end
     local def = row and row._def
     if not def then return end
+    -- Two separate things share this tooltip. The click lines are the hint,
+    -- which the addon's setting turns off. The list of who still needs the
+    -- buff is not a hint - in combat it is the only per-member view there is,
+    -- since the popover cannot open - so turning hints off must not hide it.
+    local show = self.host.showClickHints
+    local wantHints = not show or show() and true or false
+    local wantNeeds = InCombatLockdown()
+    if not wantHints and not wantNeeds then return end
 
     -- The popover opens on this same hover, so sit on the other side.
     local side = (self:PopoverSide(row) == "right") and "ANCHOR_LEFT" or "ANCHOR_RIGHT"
@@ -972,8 +993,10 @@ function Methods:ShowClickHint(row)
         GameTooltip:AddLine(label .. "  |cffffffff" .. spell .. "|r on " .. target, 1, 1, 1)
     end
 
-    describe("|cffaaaaaaLeft|r ", resolve(1))
-    describe("|cffaaaaaaRight|r", resolve(2))
+    if wantHints then
+        describe("|cffaaaaaaLeft|r ", resolve(1))
+        describe("|cffaaaaaaRight|r", resolve(2))
+    end
     self:AddNeedsList(row, def)
     GameTooltip:Show()
 end
@@ -990,12 +1013,12 @@ function Methods:AddNeedsList(row, def)
     for _, m in ipairs(row._members) do
         local known = st.byUnit[m.unit]
         if not UnitIsConnected(m.unit) then
-            needs[#needs + 1] = { m.name, "offline", 0.50, 0.50, 0.50 }
+            needs[#needs + 1] = { m.name, "offline", COLOUR.OFFLINE }
         elseif known and known.state == S.UNKNOWN then
             -- Unreadable, not absent: worth showing, because it may be a miss.
-            needs[#needs + 1] = { m.name, "?", 0.65, 0.65, 0.65 }
+            needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
         elseif not known or (known.rem or 0) <= 0 then
-            needs[#needs + 1] = { m.name, "MISS", 1.00, 0.28, 0.28 }
+            needs[#needs + 1] = { m.name, "MISS", COLOUR.MISS }
         end
     end
     if #needs == 0 then
@@ -1006,7 +1029,7 @@ function Methods:AddNeedsList(row, def)
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine("Needs it:", 1.00, 0.82, 0.22)
     for _, line in ipairs(needs) do
-        GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, line[3], line[4], line[5])
+        GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
     end
 end
 

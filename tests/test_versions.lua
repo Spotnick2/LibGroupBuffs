@@ -91,7 +91,18 @@ for i, name in ipairs({ "Compat.lua", "Settings.lua", "Engine.lua", "UI.lua" }) 
     R6[i] = { name = name, src = ReadFile("tests/fixtures/" .. name:gsub("%.lua$", "") .. "-r6.lua") }
     H.eq(tonumber(R6[i].src:match(MINOR_PATTERN)), 6, "the r6 fixture's " .. name .. " is r6")
 end
-H.check(CURRENT > 6, "the current MINOR is newer than every fixture")
+local function Fixtures(minor)
+    local out = {}
+    for i, name in ipairs({ "Compat.lua", "Settings.lua", "Engine.lua", "UI.lua" }) do
+        out[i] = { name = name,
+                   src = ReadFile("tests/fixtures/" .. name:gsub("%.lua$", "") .. "-r" .. minor .. ".lua") }
+        H.eq(tonumber(out[i].src:match(MINOR_PATTERN)), minor,
+            "the r" .. minor .. " fixture's " .. name .. " is r" .. minor)
+    end
+    return out
+end
+local R7, R8 = Fixtures(7), Fixtures(8)
+H.check(CURRENT > 8, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
@@ -157,10 +168,14 @@ H.check(lib.Engine.New == engineNew and lib.EngineMethods.BuffRem == buffRem,
     "r5-after-newer leaves Engine alone, though r5 has an Engine.lua of its own")
 H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
-load(R6, "r6")
-H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
-    "r6-after-newer leaves UI alone, though r6 has a UI.lua of its own")
-H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
+-- Every released copy, oldest to newest: each must return before touching
+-- anything. A fixture that is never loaded proves nothing.
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 } }) do
+    load(older[2], "r" .. older[1])
+    H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
+        "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
+    H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
+end
 H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
 
 load(R2, "r2")

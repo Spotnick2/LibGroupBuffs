@@ -275,6 +275,16 @@ WoW.inCombat = false
 
 host.ui_config.hints = false
 H.eq(hint(row), "", "off by preference means no hint at all")
+
+-- ...but the list of who needs the buff is not a hint. In combat it is the
+-- only per-member view there is, so turning hints off must not take it away.
+WoW.inCombat = true
+text = hint(row)
+H.check(text:find("Needs it") or text:find("Everyone here has it"),
+    "with hints off, combat still shows who needs it: " .. text)
+H.check(not text:find("Left") and not text:find("Right"),
+    "and only that - the click lines stay off: " .. text)
+WoW.inCombat = false
 host.ui_config.hints = true
 
 -- RowEnter shows the hint too; RowLeave drops it.
