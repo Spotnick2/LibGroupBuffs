@@ -27,8 +27,10 @@
 --     mouse edges registered (API.ClickEdges), no typerelease, no secure
 --     snippets (loadstring_untainted is missing on this client). Nothing
 --     writes an attribute under combat lockdown - the client refuses it.
---   * Both frames parent secure buttons, so neither may be Hide()n in combat:
---     they are parked offscreen, screen clamp dropped first.
+--   * Both frames parent secure buttons, which makes them PROTECTED: in
+--     combat the client refuses to hide, move, re-anchor or unclamp them, and
+--     refuses to stop a drag. Nothing here touches them while locked down;
+--     what the player asked for happens in OnCombatEnd.
 --   * Every script handler and every delayed callback calls a METHOD on the ui
 --     object when it runs. Handlers are installed once, when the frames are
 --     built, so a closure over an implementation function would keep running
@@ -202,7 +204,8 @@ function UI.New(host)
     return setmetatable({
         host = host,
         engine = host.engine,
-        visible = false,        -- the window is logically open (it may be parked)
+        visible = false,        -- the window is logically open (in combat the
+                                -- frame can still be up after a close)
         moved = false,          -- a position has been applied this session
         refQueued = false,
         pendingShow = false,    -- a show that arrived during combat
@@ -588,8 +591,8 @@ function Methods:RefreshTimers()
     end
 end
 
--- Colours and icon, re-read from the addon. Backdrop opacity only: the frame
--- alpha belongs to combat parking.
+-- Colours and icon, re-read from the addon. Backdrop opacity only, never the
+-- frame's own alpha.
 function Methods:ApplyAppearance()
     if not self.main then return end
     local look = self:Appearance()
