@@ -419,6 +419,9 @@ GameTooltip.AddLine = function(self, text)
     self._lines[#self._lines + 1] = text
     return self
 end
+GameTooltip.AddDoubleLine = function(self, left, right)
+    return GameTooltip.AddLine(self, tostring(left) .. "  " .. tostring(right))
+end
 function WoW.clearTooltip()
     GameTooltip:Hide()
     GameTooltip._lines = nil

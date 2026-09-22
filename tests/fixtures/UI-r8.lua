@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 9
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 8
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -964,40 +964,7 @@ function Methods:ShowClickHint(row)
 
     describe("|cffaaaaaaLeft|r ", resolve(1))
     describe("|cffaaaaaaRight|r", resolve(2))
-    self:AddNeedsList(row, def)
     GameTooltip:Show()
-end
-
--- In combat the popover cannot open: it parents secure buttons, so showing,
--- anchoring and re-arming it are all refused. The one thing it was for - who
--- in this group still needs the buff - goes in the tooltip instead, which is
--- not protected. Only those who need it, so a full pet bucket stays readable.
-function Methods:AddNeedsList(row, def)
-    if not InCombatLockdown() or not row._members then return end
-    local S = lib.Engine.STATES
-    local st = self.engine:GroupStat(row._members, def)
-    local needs = {}
-    for _, m in ipairs(row._members) do
-        local known = st.byUnit[m.unit]
-        if not UnitIsConnected(m.unit) then
-            needs[#needs + 1] = { m.name, "offline", 0.50, 0.50, 0.50 }
-        elseif known and known.state == S.UNKNOWN then
-            -- Unreadable, not absent: worth showing, because it may be a miss.
-            needs[#needs + 1] = { m.name, "?", 0.65, 0.65, 0.65 }
-        elseif not known or (known.rem or 0) <= 0 then
-            needs[#needs + 1] = { m.name, "MISS", 1.00, 0.28, 0.28 }
-        end
-    end
-    if #needs == 0 then
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
-        return
-    end
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("Needs it:", 1.00, 0.82, 0.22)
-    for _, line in ipairs(needs) do
-        GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, line[3], line[4], line[5])
-    end
 end
 
 -- ─── Row handlers ───────────────────────────────────────────────────────────

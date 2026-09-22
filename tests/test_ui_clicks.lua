@@ -285,6 +285,54 @@ H.runScript(row, "OnLeave")
 H.eq(WoW.tooltipText(), "", "and leaving it hides it")
 
 ------------------------------------------------------------
+-- In combat the hint lists who still needs the buff
+--
+-- The popover cannot open then - it parents secure buttons - so the one
+-- thing it was for goes in the tooltip, which is not protected.
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+row = H.ActiveRows(ui)[1]
+WoW.SetAura("player", "Power Word: Fortitude", 3600, 1500)
+ui:Update()
+row = H.ActiveRows(ui)[1]
+
+text = hint(row)
+H.check(not text:find("Needs it"), "out of combat there is no list: the popover shows it")
+
+WoW.inCombat = true
+text = hint(row)
+H.check(text:find("Needs it"), "in combat the hint lists them: " .. text)
+H.check(text:find("Sten Thornbeard") and text:find("Mirel Dawnsong"),
+    "naming those who need it: " .. text)
+H.check(text:find("MISS"), "with what each one is missing: " .. text)
+H.check(not text:find("Karuzo Elegia  24", 1, true),
+    "and not the member who already has it")
+H.check(text:find("Power Word: Fortitude"), "the click lines are still there: " .. text)
+
+-- Offline and unreadable are worth knowing too, and are not the same as MISS.
+WoW.units.party1.connected = false
+text = hint(row)
+H.check(text:find("offline"), "an offline member is listed as that: " .. text)
+WoW.units.party1.connected = true
+
+H.secrecy(true)
+for k in pairs(host.engine.cache) do host.engine.cache[k] = nil end
+text = hint(row)
+H.check(text:find("?"), "an unreadable member is listed with a question mark: " .. text)
+H.secrecy(false)
+WoW.inCombat = true
+
+-- Nobody needs it: say so rather than leaving the section empty.
+for _, u in ipairs({ "party1", "party2" }) do
+    WoW.SetAura(u, "Power Word: Fortitude", 3600, 1500)
+end
+text = hint(row)
+H.check(text:find("Everyone here has it"), "with everyone buffed it says so: " .. text)
+H.check(not text:find("Needs it"), "and lists nobody")
+WoW.inCombat = false
+
+------------------------------------------------------------
 -- Pet rows: the group spell's hint names the unit, not "the pets"
 ------------------------------------------------------------
 
