@@ -70,7 +70,11 @@ local MAX_RAID      = 40
 local MAX_SUBGROUPS = 8
 local SUBGROUP_SIZE = 5
 
-UI.CLASS_ICONS = UI.CLASS_ICONS or {
+-- Public tables are filled in place, never replaced: a consumer may hold a
+-- reference, and a newer embedded copy must be able to add or correct entries
+-- without detaching it (the same rule as lib.API and Engine.STATES).
+UI.CLASS_ICONS = UI.CLASS_ICONS or {}
+for class, icon in pairs({
     WARRIOR  = "Interface\\Icons\\ClassIcon_Warrior",
     PALADIN  = "Interface\\Icons\\ClassIcon_Paladin",
     HUNTER   = "Interface\\Icons\\ClassIcon_Hunter",
@@ -85,10 +89,13 @@ UI.CLASS_ICONS = UI.CLASS_ICONS or {
     PET_PRIEST  = "Interface\\Icons\\Spell_Shadow_Shadowfiend",
     PET_MAGE    = "Interface\\Icons\\Spell_Frost_SummonWaterElemental_2",
     PET         = "Interface\\Icons\\Ability_Hunter_BeastCall",
-}
+}) do
+    UI.CLASS_ICONS[class] = icon
+end
 
 -- Colours an addon can override through appearance(); these are Priestly's.
-UI.DEFAULT_APPEARANCE = {
+UI.DEFAULT_APPEARANCE = UI.DEFAULT_APPEARANCE or {}
+for key, colour in pairs({
     mainBg     = { 0.04, 0.04, 0.10 },          -- alpha comes from host.alpha()
     border     = { 0.40, 0.40, 0.65, 0.85 },
     header     = { 0.07, 0.07, 0.18, 0.98 },
@@ -97,7 +104,11 @@ UI.DEFAULT_APPEARANCE = {
     popBg      = { 0.05, 0.05, 0.12 },
     popBorder  = { 0.42, 0.42, 0.65, 1 },
     groupText  = { 0.52, 0.52, 0.70 },
-}
+}) do
+    local t = UI.DEFAULT_APPEARANCE[key] or {}
+    UI.DEFAULT_APPEARANCE[key] = t
+    for i = 1, 4 do t[i] = colour[i] end
+end
 
 local DEFAULT_POS = { point = "CENTER", relPoint = "CENTER", x = 300, y = 50 }
 
@@ -603,6 +614,7 @@ function Methods:ApplyAppearance()
     main.hdrBg:SetColorTexture(unpack(look.header))
     main.hdrLine:SetColorTexture(unpack(look.headerLine))
     main.ftrLine:SetColorTexture(unpack(look.footerLine))
+    for _, h in ipairs(self.headers) do h:SetTextColor(unpack(look.groupText)) end
     if look.icon then main.specIcon:SetTexture(look.icon) end
     if look.title then main.title:SetText(look.title) end
     pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
@@ -1136,9 +1148,19 @@ function Methods:Update()
 
     for _, gNum in ipairs(ord) do
         if rowIdx >= maxRows then break end
-        local groupMembers = groups[gNum]
 
-        if inRaid or gNum >= PET_GROUP then
+        -- Each buff's members for this group, asked ONCE: the same list then
+        -- drives the stats, the targets, the popover and the clicks, so they
+        -- cannot disagree. A group where no buff covers anybody (Thorns on
+        -- tanks, and this group has none) gets no header and no rows.
+        local groupMembers = groups[gNum]
+        local rowsHere = {}
+        for _, def in ipairs(defs) do
+            local members = engine:MembersFor(def, groupMembers)
+            if #members > 0 then rowsHere[#rowsHere + 1] = { def = def, members = members } end
+        end
+
+        if #rowsHere > 0 and (inRaid or gNum >= PET_GROUP) then
             hdrIdx = hdrIdx + 1
             if hdrIdx <= maxGroups then
                 local hdr = self.headers[hdrIdx]
@@ -1156,12 +1178,9 @@ function Methods:Update()
             end
         end
 
-        -- One row per active buff over the members that buff covers. The same
-        -- list drives the stats, the targets, the popover and the clicks, so
-        -- they cannot disagree; an empty list means no row.
-        for _, def in ipairs(defs) do
-            local members = engine:MembersFor(def, groupMembers)
-            if #members > 0 then
+        for _, entry in ipairs(rowsHere) do
+            local def, members = entry.def, entry.members
+            do
                 rowIdx = rowIdx + 1
                 if rowIdx > maxRows then break end
                 local r = self.rows[rowIdx]
@@ -1202,6 +1221,9 @@ function Methods:Update()
             end
         end
     end
+
+    -- Every buff filtered down to nobody: there is nothing to show.
+    if rowIdx == 0 then self:Close(); return end
 
     y = y - 2
     y = self:LayoutFooter(y)

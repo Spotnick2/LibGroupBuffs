@@ -306,6 +306,7 @@ e:RefreshSpells()
 local w = lib.UI.New({ engine = e, owner = "Priestly" })
 w:Update()
 local row, mainFrame = w.rows[1], w.main
+local appearance, border, icons = lib.UI.DEFAULT_APPEARANCE, lib.UI.DEFAULT_APPEARANCE.border, lib.UI.CLASS_ICONS
 w:Open(0.5)                                  -- queued before the upgrade
 
 load(withMinor(CURRENT_FILES, CURRENT + 1, {
@@ -317,6 +318,10 @@ m.Update = function(self) self._probeUpdate = 'next' return oldUpdate(self) end
 ]],
 }), "next")
 H.eq(lib.uiMinor, CURRENT + 1, "the next copy installs its UI")
+H.check(lib.UI.DEFAULT_APPEARANCE == appearance and lib.UI.DEFAULT_APPEARANCE.border == border,
+    "the public appearance table, and its colours, are the same tables after the upgrade")
+H.check(lib.UI.CLASS_ICONS == icons, "and so is the class icon map")
+H.eq(icons.WARRIOR, "Interface\\Icons\\ClassIcon_Warrior", "still filled in")
 H.check(w.main == mainFrame and w.rows[1] == row, "the window keeps its frames")
 row._scripts.PreClick(row, "LeftButton")
 H.eq(row._probe, "next", "a click handler installed by the old copy runs the new code")

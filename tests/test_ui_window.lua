@@ -462,6 +462,75 @@ ui:Update()
 H.check(not ui:IsVisible(), "and with nobody left the window closes")
 
 ------------------------------------------------------------
+-- A host filter that leaves a group with nobody
+--
+-- Wildly's Thorns goes on tanks only. A group with no tank has no Thorns row,
+-- so it must get no header either - and a window where every buff filtered
+-- down to nobody must not open empty.
+------------------------------------------------------------
+
+local function tankHost(tanks)
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    local e = lib.Engine.New({
+        defs = { { id = "thorns", snglID = 1243, sngl = "Power Word: Fortitude" } },
+        bucketSize = 8,
+        membersFor = function(_, members)
+            local out = {}
+            for _, m in ipairs(members) do
+                if tanks[m.unit] then out[#out + 1] = m end
+            end
+            return out
+        end,
+    })
+    e:RefreshSpells()
+    return lib.UI.New({ engine = e, owner = "Wildly" })
+end
+
+local w = tankHost({})
+H.Party3()
+w:Update()
+H.check(not w:IsVisible() and not (w.main and w.main:IsShown()),
+    "a party with no tank does not open an empty window")
+
+w = tankHost({ raid1 = true })
+WoW.inRaid = true
+WoW.groupMembers = 10
+for i = 1, 10 do
+    WoW.raidRoster[i] = { name = "R" .. i, subgroup = (i <= 5) and 1 or 2 }
+    WoW.SetUnit("raid" .. i, { name = "R" .. i, guid = "G" .. i })
+end
+w:Update()
+local headers = 0
+for _, h in ipairs(w.headers) do if h:IsShown() then headers = headers + 1 end end
+H.eq(#H.ActiveRows(w), 1, "a raid with a tank only in group 1 gets one row")
+H.eq(headers, 1, "and one header - group 2 has nobody to buff, so no header")
+H.eq(w.headers[1]:GetText(), "-- Group 1 --", "the header is group 1's")
+H.eq(#H.ActiveRows(w)[1]._members, 1, "the row covers just the tank")
+
+------------------------------------------------------------
+-- Appearance changes reach what is already on screen
+------------------------------------------------------------
+
+setup()
+WoW.inRaid = true
+WoW.groupMembers = 3
+WoW.raidRoster = { { name = "Karuzo Elegia", subgroup = 1 } }
+WoW.SetUnit("raid1", { name = "Karuzo Elegia", guid = "P0" })
+ui:Update()
+host.look = { groupText = { 1, 0.5, 0 } }
+ui:ApplyAppearance()
+H.eq(ui.headers[1]._textColor and ui.headers[1]._textColor[2], 0.5,
+    "a new header colour recolours the existing group labels")
+
+-- Every built-in icon is a real texture path, backslashes intact: Lua reads
+-- "\I" in a string as a plain "I", so a lost backslash is silent.
+for class, icon in pairs(lib.UI.CLASS_ICONS) do
+    H.check(icon:sub(1, 16) == "Interface\\Icons\\", class .. "'s icon is a texture path: " .. icon)
+end
+
+
+------------------------------------------------------------
 -- Two addons, two windows
 ------------------------------------------------------------
 

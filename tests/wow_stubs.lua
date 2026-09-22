@@ -216,6 +216,7 @@ local function makeFrame(name)
     f.SetText = function(self, text) self._text = text return self end
     f.GetText = function(self) return self._text end
     f.SetTexture = function(self, tex) self._texture = tex return self end
+    f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
     f.GetTexture = function(self) return self._texture end
     f.StartMoving = function(self) self._moving = true return self end
     f.StopMovingOrSizing = function(self) self._moving = false return self end
