@@ -216,19 +216,19 @@ H.check(ui.pop:IsShown(), "it waits a moment before deciding")
 H.runScript(ui.pop, "OnUpdate", 0.2)
 H.check(not ui.pop:IsShown(), "and hides once the mouse is elsewhere")
 
--- In combat it parks instead of hiding, and stops polling once parked.
+-- In combat it cannot be hidden at all: it parents secure buttons, so the
+-- client refuses. It waits for the fight to end instead.
 H.runScript(row, "OnEnter")
 WoW.inCombat = true
+WoW.blockedCalls = {}
 H.runScript(ui.pop, "OnUpdate", 0.2)
-H.check(ui.pop._combatHidden and ui.pop:IsShown(), "in combat the popover is parked, not hidden")
-H.eq(ui.pop._clamped, false, "with the screen clamp dropped so it really goes offscreen")
-local parkedAt = { ui.pop:GetPoint() }
+H.check(ui.pop:IsShown(), "in combat the popover stays on screen")
+H.eq(#WoW.blockedCalls, 0, "without attempting anything the client would block")
 H.runScript(ui.pop, "OnUpdate", 0.2)
-H.eq(select(4, ui.pop:GetPoint()), parkedAt[4], "an already parked popover is left alone")
+H.eq(#WoW.blockedCalls, 0, "and it stops polling rather than trying every tick")
 WoW.inCombat = false
 ui:OnCombatEnd()
-H.check(not ui.pop._combatHidden and not ui.pop:IsShown(), "combat's end hides it properly")
-H.eq(ui.pop._clamped, true, "and puts the clamp back")
+H.check(not ui.pop:IsShown(), "combat's end hides it")
 WoW.flushTimers()
 
 -- The offline tooltip on a popover row belongs to that row's member.
@@ -303,14 +303,29 @@ H.eq(#WoW.combatWrites, 0, "a rebuild in combat is visual only: no attribute is 
 ui:ScheduleRefresh()
 WoW.flushTimers(1)
 H.eq(#WoW.combatWrites, 0, "nor by a refresh that fires in combat")
-ui:Close()
-H.check(ui.main._combatHidden and ui.main:IsShown(), "closing in combat parks the main frame")
-H.eq(ui.main._clamped, false, "clamp dropped first")
-H.check(not ui:IsVisible(), "and the window is logically closed")
+WoW.blockedCalls = {}
+host.deferredCloses = 0
+H.eq(ui:Close(), false, "closing in combat cannot hide the window, and says so")
+H.eq(host.deferredCloses, 0, "a close the addon made itself tells nobody")
+H.check(ui:IsVisible() == false, "though it is logically closed")
+ui:Update(); WoW.inCombat = false; ui:Update(); WoW.inCombat = true
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "but the X button in combat asks the addon to explain")
+H.runScript(ui.main.closeBtn, "OnClick")
+H.eq(host.deferredCloses, 1, "and closing an already closed window says nothing more")
+H.eq(#WoW.blockedCalls, 0, "without attempting a call the client blocks")
+H.check(ui.main:IsShown(), "the frame is still up - it parents secure buttons")
+H.check(not ui:IsVisible(), "but the window is logically closed")
 H.eq(host.visibility[#host.visibility], false, "onVisibility hears it, though the frame is still shown")
+local ticks = 0
+local realRead2 = lib.API.ReadBuff
+lib.API.ReadBuff = function(...) ticks = ticks + 1 return realRead2(...) end
+H.runScript(ui.main, "OnUpdate", 1.0)
+lib.API.ReadBuff = realRead2
+H.eq(ticks, 0, "and stops refreshing")
 WoW.inCombat = false
 ui:OnCombatEnd()
-H.check(not ui.main._combatHidden and not ui.main:IsShown(), "combat's end hides it for real")
+H.check(not ui.main:IsShown(), "combat's end hides it for real")
 WoW.flushTimers(1)
 H.check(not ui:IsVisible(), "and does not reopen it")
 
@@ -352,9 +367,32 @@ H.eq(host.saved.pos.x, 1, "but the interrupted position is not saved")
 host.ui_config.locked = false
 
 WoW.inCombat = true
+WoW.blockedCalls = {}
 H.runScript(ui.main.dragHandle, "OnDragStart")
 H.check(not ui.main._moving, "in combat the window does not start moving: it parents secure buttons")
+H.eq(#WoW.blockedCalls, 0, "and nothing the client blocks is attempted")
 WoW.inCombat = false
+
+-- A drag combat interrupts: the release is blocked too, so the frame follows
+-- the cursor until the fight ends, and the position is saved then.
+setup()
+ui:Update()
+host.saved.pos = nil
+H.runScript(ui.main.dragHandle, "OnDragStart")
+H.check(ui.main._moving, "the drag starts out of combat")
+WoW.inCombat = true
+WoW.blockedCalls = {}
+H.runScript(ui.main.dragHandle, "OnDragStop")
+H.eq(#WoW.blockedCalls, 0, "releasing in combat attempts nothing the client blocks")
+H.check(ui.main._moving, "so the window is still following the cursor")
+H.eq(host.saved.pos, nil, "and nothing is saved yet")
+WoW.inCombat = false
+ui.main:ClearAllPoints()
+ui.main:SetPoint("TOPLEFT", nil, "TOPLEFT", 42, -42)
+ui:OnCombatEnd()
+H.check(not ui.main._moving, "combat's end releases it")
+H.eq(host.saved.pos and host.saved.pos.x, 42, "and saves where it ended up")
+WoW.flushTimers(1)
 
 -- The saved position is applied once per session, and refreshes are counted.
 setup()
@@ -377,9 +415,9 @@ host.ui_config.locked = false
 ui.main:ClearAllPoints()
 ui.main:SetPoint("TOPLEFT", nil, "TOPLEFT", 5, 5)
 WoW.inCombat = true
-ui:Close()                         -- parked
+WoW.blockedCalls = {}
 H.eq(ui:ResetPosition(), false, "in combat reset only records the wish")
-H.check(ui.main._combatHidden, "and does not pull a parked frame back on screen")
+H.eq(#WoW.blockedCalls, 0, "without attempting to move a protected frame")
 WoW.inCombat = false
 ui:OnCombatEnd()
 p, _, _, x = ui.main:GetPoint()
@@ -529,6 +567,71 @@ for class, icon in pairs(lib.UI.CLASS_ICONS) do
     H.check(icon:sub(1, 16) == "Interface\\Icons\\", class .. "'s icon is a texture path: " .. icon)
 end
 
+
+------------------------------------------------------------
+-- The stub refuses every protected call, so the check below means something
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+ui:Update()
+do
+    local protectedFrame = ui.rows[1]         -- a secure button
+    local parent = ui.main                    -- protected: it parents them
+    WoW.inCombat = true
+    for _, method in ipairs({ "Show", "Hide", "SetPoint", "ClearAllPoints",
+                              "SetClampedToScreen", "SetAlpha", "SetSize", "SetScale",
+                              "StartMoving", "StopMovingOrSizing", "SetParent" }) do
+        for _, f in ipairs({ protectedFrame, parent }) do
+            WoW.blockedCalls = {}
+            f[method](f, 1, 2)
+            H.eq(#WoW.blockedCalls, 1, method .. " on a protected frame is refused and recorded")
+        end
+    end
+    -- The refusal must also leave the frame alone.
+    WoW.inCombat = false
+    parent:SetAlpha(1)
+    parent:Show()
+    WoW.inCombat = true
+    parent:SetAlpha(0)
+    parent:Hide()
+    H.eq(parent:GetAlpha(), 1, "a refused SetAlpha changes nothing")
+    H.check(parent:IsShown(), "and a refused Hide leaves the frame up")
+    WoW.inCombat = false
+end
+
+------------------------------------------------------------
+-- Nothing the window does in combat is a blocked call
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+ui:Update()
+row = H.ActiveRows(ui)[1]
+H.runScript(row, "OnEnter")
+WoW.inCombat = true
+WoW.blockedCalls, WoW.combatWrites = {}, {}
+ui:Update()
+ui:RefreshTimers()
+ui:RefreshFooter()
+ui:ApplyAppearance()
+ui:ScheduleRefresh()
+ui:UpdatePopover(row, row._members, row._def)
+ui:ShowClickHint(row)
+H.runScript(row, "PreClick", "LeftButton")
+H.runScript(row, "PostClick", "LeftButton")
+H.runScript(ui.popRows[1], "PreClick", "LeftButton")
+H.runScript(ui.popRows[1], "PostClick", "LeftButton")
+H.runScript(ui.main, "OnUpdate", 1.0)
+H.runScript(ui.pop, "OnUpdate", 1.0)
+H.runScript(ui.main.dragHandle, "OnDragStart")
+H.runScript(ui.main.dragHandle, "OnDragStop")
+H.runScript(ui.main.closeBtn, "OnClick")
+ui:ResetPosition()
+WoW.flushTimers(1)
+H.eq(#WoW.blockedCalls, 0, "not one protected call is attempted during a fight")
+H.eq(#WoW.combatWrites, 0, "and not one secure attribute is written")
+WoW.inCombat = false
+ui:OnCombatEnd()
+WoW.flushTimers(1)
 
 ------------------------------------------------------------
 -- Two addons, two windows

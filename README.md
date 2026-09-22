@@ -34,7 +34,7 @@ Each of those cost a debugging cycle to find. Rediscovering them per addon is th
 | `Compat.lua` | `lib.API` — every removed or moved API, measured against the live client |
 | `Settings.lua` | `lib.Settings` — one write path for your saved table, and the checks that notice when the client is fixed or updated |
 | `Engine.lua` | `lib.Engine` — aura reads that survive combat secrecy, the roster, group stats, target picking and click mapping |
-| `UI.lua` | `lib.UI` — the buff window: rows, popover, secure click casting, combat parking, footer |
+| `UI.lua` | `lib.UI` — the buff window: rows, popover, secure click casting, footer, and the combat rules |
 | `LibGroupBuffs-1.0.xml` | the entry point; lists exactly the files that exist, in load order |
 | `LibStub/` | bundled; designed to be embedded many times and resolve to one instance |
 

@@ -16,7 +16,6 @@
 --         getPos = function() return pos, whyNil end, setPos = function(pos) end,
 --         setVisible = function(visible) end,
 --         onLayout = function(ui) end, onVisibility = function(ui, visible) end,  -- optional
---         onCloseDeferred = function(ui) end,   -- optional: combat refused the hide
 --     })
 --
 -- The addon keeps its events, slash commands, options panel and policy (who
@@ -28,10 +27,8 @@
 --     mouse edges registered (API.ClickEdges), no typerelease, no secure
 --     snippets (loadstring_untainted is missing on this client). Nothing
 --     writes an attribute under combat lockdown - the client refuses it.
---   * Both frames parent secure buttons, which makes them PROTECTED: in
---     combat the client refuses to hide, move, re-anchor or unclamp them, and
---     refuses to stop a drag. Nothing here touches them while locked down;
---     what the player asked for happens in OnCombatEnd.
+--   * Both frames parent secure buttons, so neither may be Hide()n in combat:
+--     they are parked offscreen, screen clamp dropped first.
 --   * Every script handler and every delayed callback calls a METHOD on the ui
 --     object when it runs. Handlers are installed once, when the frames are
 --     built, so a closure over an implementation function would keep running
@@ -39,7 +36,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 7
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 6
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -165,16 +162,29 @@ local function After(delay, fn)
     end)
 end
 
--- MEASURED, build 69913: a frame that parents secure buttons is PROTECTED, and
--- in combat the client refuses to hide it, move it, re-anchor it, unclamp it
--- or stop a drag on it - each attempt is an ADDON_ACTION_BLOCKED, silently
--- ignored, and blamed on whichever addon's taint the call path carries.
---
--- So parking the window offscreen during combat, which this file used to do,
--- was never possible: SetClampedToScreen was blocked before anything moved.
--- Nothing here touches either frame while locked down. What the player asked
--- for is remembered and done when combat ends, a fight being the one time the
--- rows are worth having on screen anyway.
+-- Hiding a frame that parents secure buttons is refused under combat lockdown,
+-- so it gets moved out of sight instead. Both frames are clamped to the
+-- screen, which would drag them straight back to the edge - and an alpha-0
+-- frame still takes mouse clicks, so a "hidden" row would stay a live,
+-- invisible cast button for the rest of the fight. Drop the clamp first.
+local function CombatPark(f)
+    if not f then return end
+    f:SetClampedToScreen(false)
+    f:SetAlpha(0)
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", UIParent, "BOTTOMRIGHT", 10000, -10000)
+    f._combatHidden = true
+end
+
+-- Undo a park now that combat is over.
+local function CombatUnpark(f)
+    if not f or not f._combatHidden then return false end
+    f:Hide()
+    f:SetAlpha(1)
+    f:SetClampedToScreen(true)
+    f._combatHidden = false
+    return true
+end
 
 local function Call(fn, ...)
     if fn then return fn(...) end
@@ -186,7 +196,7 @@ local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 
 local OPTIONAL_FUNCTIONS = {
     "appearance", "footerItems", "alpha", "locked", "popoverSide", "showClickHints",
-    "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
+    "getPos", "setPos", "setVisible", "onLayout", "onVisibility",
 }
 
 function UI.New(host)
@@ -205,8 +215,7 @@ function UI.New(host)
     return setmetatable({
         host = host,
         engine = host.engine,
-        visible = false,        -- the window is logically open (in combat the
-                                -- frame can still be up after a close)
+        visible = false,        -- the window is logically open (it may be parked)
         moved = false,          -- a position has been applied this session
         refQueued = false,
         pendingShow = false,    -- a show that arrived during combat
@@ -467,6 +476,7 @@ function Methods:Init()
     -- its row. It replaced OnLeave handlers, which fire on the way TO the
     -- popover.
     pop._hoverTimer = 0
+    pop._combatHidden = false
     pop:SetScript("OnUpdate", function(p, dt) return p._ui:PopoverTick(dt) end)
 
     -- ── Footer ──────────────────────────────────────────────────────────
@@ -592,8 +602,8 @@ function Methods:RefreshTimers()
     end
 end
 
--- Colours and icon, re-read from the addon. Backdrop opacity only, never the
--- frame's own alpha.
+-- Colours and icon, re-read from the addon. Backdrop opacity only: the frame
+-- alpha belongs to combat parking.
 function Methods:ApplyAppearance()
     if not self.main then return end
     local look = self:Appearance()
@@ -706,7 +716,9 @@ end
 function Methods:PopoverTick(dt)
     local pop = self.pop
     if not pop:IsShown() then return end
-    if self.popHidePending then return end   -- waiting for combat to end
+    -- Parking does not Hide(), so without this the poll would re-park an
+    -- already-parked popover on every tick until combat ends.
+    if pop._combatHidden then return end
     pop._hoverTimer = pop._hoverTimer + dt
     if pop._hoverTimer < 0.15 then return end
     pop._hoverTimer = 0
@@ -722,9 +734,7 @@ function Methods:PopoverTick(dt)
     end
     if not overPop and not overAnchor and not overChild then
         if InCombatLockdown() then
-            -- Hiding it is blocked: it parents secure buttons. Leave it, stop
-            -- polling, and close it when the fight ends.
-            self.popHidePending = true
+            CombatPark(pop)
         else
             pop:Hide()
         end
@@ -742,13 +752,6 @@ function Methods:DragStart()
 end
 
 function Methods:DragStop()
-    -- A drag that combat interrupted cannot be stopped here: the frame is
-    -- protected, and StopMovingOrSizing is blocked. It keeps following the
-    -- cursor until the fight ends, which is when OnCombatEnd finishes this.
-    if InCombatLockdown() then
-        self.dragPending = true
-        return
-    end
     -- Release first: StopMovingOrSizing is harmless on a frame that was never
     -- moving, and skipping it would leave a frame locked mid-drag stuck to
     -- the cursor.
@@ -757,7 +760,6 @@ function Methods:DragStop()
     -- now: a drag interrupted by the lock leaves the window where the cursor
     -- was for the rest of the session, and the saved spot comes back on the
     -- next login.
-    self.dragPending = false
     self.main:StopMovingOrSizing()
     if Call(self.host.locked) then return end
     self.moved = true
@@ -771,9 +773,9 @@ end
 
 -- Put the window back at the default spot and forget the saved one. It
 -- ignores the lock, so a locked window dragged somewhere unreachable can always
--- be recovered. In combat only the saved position is cleared: re-anchoring the
--- frame is blocked, because it parents secure buttons. It moves when combat
--- ends. Returns whether it moved now.
+-- be recovered. In combat only the saved position is cleared; the frame
+-- moves when combat ends (moving it now could bring parked, invisible
+-- buttons back on screen). Returns whether it moved now.
 function Methods:ResetPosition()
     Call(self.host.setPos, nil)
     self.moved = false
@@ -782,7 +784,7 @@ function Methods:ResetPosition()
         return false
     end
     self.resetPending = false
-    if self.main then
+    if self.main and not self.main._combatHidden then
         self.main:ClearAllPoints()
         self.main:SetPoint(DEFAULT_POS.point, UIParent, DEFAULT_POS.relPoint, DEFAULT_POS.x, DEFAULT_POS.y)
     end
@@ -817,7 +819,7 @@ function Methods:UpdatePopover(anchorRow, members, def)
     if InCombatLockdown() then return end
     local pop = self.pop
     if not pop then return end
-    self.popHidePending = false
+    CombatUnpark(pop)
 
     local engine = self.engine
     pop.hdrIcon:SetTexture(lib.API.SpellIcon(def.hasSingle and def.snglID or def.grpID, def.fallbackIcon))
@@ -1050,21 +1052,14 @@ local function SetVisible(self, visible)
 end
 
 -- Close the window. `manual` means the player asked, which the addon saves.
--- Returns whether the frames are hidden NOW: in combat they cannot be, so the
--- window stops refreshing and goes when the fight ends.
---
--- When the player asked and the window was open, a deferred close also calls
--- the addon's onCloseDeferred, so every way of closing - the X button, a slash
--- command, a keybind - can explain itself the same way. The return value is
--- there for a caller that wants to handle it itself.
+-- In combat both frames are parked instead of hidden.
 function Methods:Close(manual)
-    local wasOpen = self.visible
-    if InCombatLockdown() then
-        self.closePending = true
-    else
-        self.closePending = false
-        if self.main then self.main:Hide() end
-        if self.pop then self.pop:Hide() end
+    for _, f in ipairs({ self.main, self.pop }) do
+        if InCombatLockdown() then
+            CombatPark(f)
+        elseif f then
+            f:Hide()
+        end
     end
     SetVisible(self, false)
     -- Cancel any show queued earlier: the player has since asked for the
@@ -1072,10 +1067,6 @@ function Methods:Close(manual)
     self.pendingShow = false
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
-    if self.closePending and manual and wasOpen then
-        Call(self.host.onCloseDeferred, self)
-    end
-    return not self.closePending
 end
 
 -- Rebuild and show the window after `delay` seconds, unless it is closed in
@@ -1107,38 +1098,12 @@ end
 
 -- Combat is over: unpark, apply a reset asked for during the fight, and do the
 -- rebuild combat deferred - including a show asked for while locked down.
--- An r6 copy asked to hide a frame during combat, got blocked, and left
--- `_combatHidden` on it. If a newer copy upgraded this window mid-fight, that
--- flag is the only record of the request: without translating it, a logically
--- closed window stays on screen for good.
-local function AdoptLegacyState(self)
-    for frame, field in pairs({ [self.main or false] = "closePending",
-                                [self.pop or false] = "popHidePending" }) do
-        if frame and frame._combatHidden then
-            frame._combatHidden = nil
-            self[field] = true
-            -- r6 tried to drop the clamp and the alpha before moving the
-            -- frame. Those calls were blocked in combat, but restore them
-            -- anyway: out of combat they would have gone through.
-            frame:SetAlpha(1)
-            frame:SetClampedToScreen(true)
-        end
-    end
-end
-
 function Methods:OnCombatEnd()
     if InCombatLockdown() then return end
-    AdoptLegacyState(self)
-    -- Everything the fight refused, in the order the player asked for it.
-    if self.dragPending then self:DragStop() end
-    if self.popHidePending then
-        self.popHidePending = false
-        if self.pop then self.pop:Hide() end
-    end
-    if self.closePending then
-        self.closePending = false
-        if self.main then self.main:Hide() end
-        if self.pop then self.pop:Hide() end
+    CombatUnpark(self.pop)
+    if CombatUnpark(self.main) then
+        -- Parking cleared its anchors: let the rebuild apply the position.
+        self.moved = false
     end
     if self.resetPending then self:ResetPosition() end
     if self.visible or self.pendingShow then
@@ -1292,7 +1257,7 @@ function Methods:Update()
     -- attributes still name the previous roster's unit tokens - and a row's
     -- OnEnter does not fire again while the mouse rests on it.
     local pop = self.pop
-    if pop:IsShown() and not self.popHidePending then
+    if pop:IsShown() and not pop._combatHidden then
         local anchor = pop._anchorRow
         if anchor and anchor._active and anchor._members and anchor._def then
             self:UpdatePopover(anchor, anchor._members, anchor._def)

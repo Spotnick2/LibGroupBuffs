@@ -82,10 +82,14 @@ Vanilla content, Retail codebase.
     (`self._ui:Method()`), because handlers are installed once and a captured function would keep
     running the copy that installed it. Pool sizes: groups `8 + ceil(40 / bucketSize)`, rows
     `groups * #defs`, popover rows `max(5, bucketSize)` (player subgroups are never split).
-  - **Combat:** `Init` refuses; `Update` only refreshes visuals and remembers a show; handlers
-    never write attributes; `Close` parks both frames; `ResetPosition` only records the wish;
-    `OnCombatEnd` unparks and runs what was deferred. `Close` bumps a generation so a show queued
-    earlier (`Open(delay)`) cannot reopen the window.
+  - **Combat: the window touches NOTHING.** Both frames parent secure buttons, which makes them
+    protected, and the client refuses to hide, move, re-anchor, unclamp or stop a drag on one -
+    silently, as an `ADDON_ACTION_BLOCKED` blamed on whichever addon's taint the call path carries.
+    Parking the window offscreen, which this file did until r7, was blocked at the first call and
+    never worked. So `Init` refuses, `Update` only refreshes visuals and remembers a show,
+    handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
+    `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
+    `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
