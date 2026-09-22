@@ -78,7 +78,15 @@ local R4 = {
 for _, file in ipairs(R4) do
     H.eq(tonumber(file.src:match(MINOR_PATTERN)), 4, "the r4 fixture's " .. file.name .. " is r4")
 end
-H.check(CURRENT > 4, "the current MINOR is newer than every fixture")
+local R5 = {
+    { name = "Compat.lua", src = ReadFile("tests/fixtures/Compat-r5.lua") },
+    { name = "Settings.lua", src = ReadFile("tests/fixtures/Settings-r5.lua") },
+    { name = "Engine.lua", src = ReadFile("tests/fixtures/Engine-r5.lua") },
+}
+for _, file in ipairs(R5) do
+    H.eq(tonumber(file.src:match(MINOR_PATTERN)), 5, "the r5 fixture's " .. file.name .. " is r5")
+end
+H.check(CURRENT > 5, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
@@ -100,6 +108,7 @@ local lib = LibStub("LibGroupBuffs-1.0")
 local api, itemInfo = lib.API, lib.API.ItemInfo
 local settings, new, set = lib.Settings, lib.Settings.New, lib.SettingsMethods.Set
 local engine, engineNew, buffRem = lib.Engine, lib.Engine.New, lib.EngineMethods.BuffRem
+local uiLib, uiNew, uiUpdate = lib.UI, lib.UI.New, lib.UIMethods.Update
 api.eventFailures.PROBE = "recorded before the second load"
 
 load(CURRENT_FILES, "again")
@@ -110,6 +119,8 @@ H.check(lib.Settings == settings and lib.Settings.New == new, "and Settings")
 H.check(lib.SettingsMethods.Set == set, "and the settings methods")
 H.check(lib.Engine == engine and lib.Engine.New == engineNew, "and Engine")
 H.check(lib.EngineMethods.BuffRem == buffRem, "and the engine methods")
+H.check(lib.UI == uiLib and lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
+    "and UI with its methods")
 H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its recorded state")
 
 ------------------------------------------------------------
@@ -129,6 +140,11 @@ load(R4, "r4")
 H.check(lib.Settings.New == new and lib.SettingsMethods.Set == set,
     "r4-after-newer leaves Settings alone, though r4 has a Settings.lua of its own")
 H.check(lib.Engine.New == engineNew, "and Engine, which r4 lacks")
+
+load(R5, "r5")
+H.check(lib.Engine.New == engineNew and lib.EngineMethods.BuffRem == buffRem,
+    "r5-after-newer leaves Engine alone, though r5 has an Engine.lua of its own")
+H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 H.eq(activeMinor(), CURRENT, "and the newer MINOR stays registered")
 
 load(R2, "r2")
@@ -257,13 +273,67 @@ H.check(lib.Engine.STATES == states, "and the STATES table a consumer may hold")
 H.eq(states.UNKNOWN, "UNKNOWN", "still filled in")
 
 ------------------------------------------------------------
+-- A newer copy after r5: UI arrives
+------------------------------------------------------------
+
+freshLibStub()
+load(R5, "r5")
+lib = LibStub("LibGroupBuffs-1.0")
+H.eq(lib.UI, nil, "r5 has no UI")
+local r5Engine = lib.Engine.New({ defs = { { id = "x", snglID = 1243 } }, bucketSize = 8 })
+load(CURRENT_FILES, "current")
+H.eq(lib.uiMinor, CURRENT, "newer-after-r5 installs UI")
+H.check(pcall(lib.UI.New, { engine = r5Engine, owner = "Priestly" }),
+    "and it accepts an engine the r5 copy created")
+
+------------------------------------------------------------
+-- A window built by one copy runs the next copy's code - including the
+-- handlers it installed on its frames and a timer it queued before the
+-- upgrade. Handlers are installed once, so a closure over an implementation
+-- function would keep running the old copy forever.
+------------------------------------------------------------
+
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+WoW.SetUnit("party1", { name = "A One", guid = "P1" })
+WoW.groupMembers = 2
+local e = lib.Engine.New({ defs = { { id = "fort", snglID = 1243, sngl = "Power Word: Fortitude" } },
+    bucketSize = 8 })
+e:RefreshSpells()
+local w = lib.UI.New({ engine = e, owner = "Priestly" })
+w:Update()
+local row, mainFrame = w.rows[1], w.main
+w:Open(0.5)                                  -- queued before the upgrade
+
+load(withMinor(CURRENT_FILES, CURRENT + 1, {
+    ["UI.lua"] = [[
+local m = LibStub('LibGroupBuffs-1.0').UIMethods
+m.RowPreClick = function(self, r) r._probe = 'next' end
+local oldUpdate = m.Update
+m.Update = function(self) self._probeUpdate = 'next' return oldUpdate(self) end
+]],
+}), "next")
+H.eq(lib.uiMinor, CURRENT + 1, "the next copy installs its UI")
+H.check(w.main == mainFrame and w.rows[1] == row, "the window keeps its frames")
+row._scripts.PreClick(row, "LeftButton")
+H.eq(row._probe, "next", "a click handler installed by the old copy runs the new code")
+WoW.flushTimers(1)
+H.eq(w._probeUpdate, "next", "and so does a show the old copy queued")
+
+------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
 ------------------------------------------------------------
 
 local scripts = H.xmlScripts()
 H.eq(scripts[1], "LibStub/LibStub.lua", "LibStub loads first")
 H.eq(scripts[2], "Compat.lua", "Compat.lua claims the version before any other file checks it")
-H.eq(scripts[#scripts], "Engine.lua", "Engine.lua loads after the API it calls")
+local position = {}
+for i, file in ipairs(scripts) do position[file] = i end
+H.check((position["Engine.lua"] or 0) > (position["Compat.lua"] or 99), "Engine.lua loads after the API it calls")
+H.eq(scripts[#scripts], "UI.lua", "and UI.lua last, after the engine it draws")
 for _, file in ipairs(scripts) do
     local f = io.open(file, "rb")
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")

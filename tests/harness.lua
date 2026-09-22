@@ -136,6 +136,71 @@ function H.PriestEngine()
     return host
 end
 
+-- A window shaped like Priestly's, over H.PriestEngine. Everything the addon
+-- would keep in its saved table lives in `host.saved`, and every call the
+-- window makes back into the addon is recorded, so a test reads exactly what
+-- the window asked for.
+function H.PriestUI(opts)
+    opts = opts or {}
+    local lib = LibStub("LibGroupBuffs-1.0")
+    local host = opts.engineHost or H.PriestEngine()
+    host.saved = { visible = nil, pos = nil }
+    host.ui_config = { alpha = 0.96, locked = false, popoverSide = "auto", hints = true }
+    host.footer = {}
+    host.layouts, host.visibility = 0, {}
+    host.ui = lib.UI.New({
+        engine  = host.engine,
+        owner   = opts.owner or "Priestly",
+        title   = opts.title or "|cff99ddffPriestly|r",
+        version = "test",
+        appearance = function() return host.look end,
+        unknownClassIcon = "PRIEST_ICON",
+        footerItems = function() return host.footer end,
+        alpha       = function() return host.ui_config.alpha end,
+        locked      = function() return host.ui_config.locked end,
+        popoverSide = function() return host.ui_config.popoverSide end,
+        showClickHints = function() return host.ui_config.hints end,
+        getPos = function()
+            if not host.saved.pos then return nil, "no saved pos" end
+            return host.saved.pos
+        end,
+        setPos     = function(pos) host.saved.pos = pos end,
+        setVisible = function(v) host.saved.visible = v end,
+        onLayout   = function() host.layouts = host.layouts + 1 end,
+        onVisibility = function(_, v) host.visibility[#host.visibility + 1] = v end,
+    })
+    return host
+end
+
+-- A party of three - the player and two members - which most window tests
+-- start from.
+function H.Party3()
+    WoW.SetUnit("player", { name = "Karuzo Elegia", guid = "P0", class = "PRIEST" })
+    WoW.SetUnit("party1", { name = "Sten Thornbeard", guid = "P1", class = "WARRIOR" })
+    WoW.SetUnit("party2", { name = "Mirel Dawnsong", guid = "P2", class = "MAGE" })
+    WoW.groupMembers = 3
+end
+
+-- The active rows of a window, in order.
+function H.ActiveRows(ui)
+    local out = {}
+    for _, r in ipairs(ui.rows) do
+        if r._active then out[#out + 1] = r end
+    end
+    return out
+end
+
+-- Call a frame's script handler, failing the test rather than the run if it
+-- throws - including on an unstubbed global.
+function H.runScript(frame, script, ...)
+    if not frame then H.check(false, "no frame for " .. script) return end
+    local fn = frame._scripts and frame._scripts[script]
+    if not fn then H.check(false, "no " .. script .. " handler installed") return end
+    local ok, err = pcall(fn, frame, ...)
+    H.check(ok, script .. " ran without error: " .. tostring(err))
+    return ok
+end
+
 -- Combat aura secrecy as measured on the live client: the flag is set AND
 -- every index read throws, while the by-name lookup quietly returns nil.
 function H.secrecy(on)

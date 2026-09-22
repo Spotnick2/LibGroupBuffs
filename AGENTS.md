@@ -69,7 +69,25 @@ Vanilla content, Retail codebase.
     throttles refreshes itself. Durations are stored by the addon, keyed by the spell name seen.
   - `AuraEventIsRelevant` keeps every payload touch inside one `pcall` and checks every def, not
     only visible ones.
-- Planned, not yet present: `UI.lua` (row and popover frames).
+- `UI.lua` — `lib.UI.New(host)`: the buff window over an engine — main frame, one row per group
+  per buff, the per-member popover, drag handle, close button, reagent footer and ticker. Host
+  seams: `owner`, `title`, `version`, `appearance()` (icon and colour overrides — Wildly's orange
+  header, Magely's per-spec colours), `unknownClassIcon`, `footerItems()` (data, not frames), config
+  accessors (`alpha`, `locked`, `popoverSide`, `showClickHints`), position/visibility storage
+  (`getPos` returning `pos, whyNil`, `setPos`, `setVisible`) and `onLayout` / `onVisibility` for a
+  companion pane such as Magely's cooldowns. Contracts:
+  - **Frames are anonymous.** The library creates no globals; tests and addons reach frames
+    through the ui object.
+  - **Every installed handler and delayed callback dispatches through the ui object**
+    (`self._ui:Method()`), because handlers are installed once and a captured function would keep
+    running the copy that installed it. Pool sizes: groups `8 + ceil(40 / bucketSize)`, rows
+    `groups * #defs`, popover rows `max(5, bucketSize)` (player subgroups are never split).
+  - **Combat:** `Init` refuses; `Update` only refreshes visuals and remembers a show; handlers
+    never write attributes; `Close` parks both frames; `ResetPosition` only records the wish;
+    `OnCombatEnd` unparks and runs what was deferred. `Close` bumps a generation so a show queued
+    earlier (`Open(delay)`) cannot reopen the window.
+  - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
+- Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. `tests/config_scan.lua` is also used by consumers: their
   tests `dofile` it from their library checkout to fail on writes to their SavedVariables outside
@@ -88,7 +106,8 @@ Vanilla content, Retail codebase.
   `API.RegisterEventsReported(frame, owner, report, ...)` errors if `report` is not a function, and
   records failures per consumer in `API.eventFailuresByOwner[owner]`. `API.RegisterEvents` stays for
   consumers pinned to an older tag.
-- **No globals** beyond what LibStub requires. No `_G` injection: defining a real `GetItemInfo`
+- **No globals** beyond what LibStub requires — including frame names: `UI.lua` creates its frames
+  anonymous, and `test_ui_window` fails if building the window adds a global. No `_G` injection: defining a real `GetItemInfo`
   changes capability detection for every other addon on the machine.
 - **No addon-specific behaviour.** Anything that differs between Priestly, Wildly and Magely
   belongs in the addon or behind a host callback, not in a branch here.
@@ -164,6 +183,11 @@ anything built on a widget method, execute it and assert what it produced.
 `tests/harness.lua` loads exactly what `LibGroupBuffs-1.0.xml` lists, in order, and fails on
 anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
 three orders to check an upgrade keeps table identity and state.
+
+`tests/test_ui_clicks.lua` and `test_ui_window.lua` cover the window: every handler it installs is
+executed and its effect asserted (the stub records text, textures, anchors, tooltips, and every
+`SetAttribute` made while `WoW.inCombat`, in `WoW.combatWrites`). A new handler needs a test that
+runs it.
 
 `tests/test_engine_buffs.lua` and `test_engine_rows.lua` are Priestly's engine tests ported with
 the same scenarios and expectations (`H.PriestEngine` builds a Priestly-shaped host), plus hosts
