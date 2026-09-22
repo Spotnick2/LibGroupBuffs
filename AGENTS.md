@@ -61,8 +61,9 @@ Vanilla content, Retail codebase.
     `PickTarget`, its row and its popover, so they cannot disagree; an empty list means no row.
   - `PickTarget(members, def, anyValid, st)` reuses `st.byUnit` (no second aura read). UNKNOWN is
     never picked as missing, but can be the last-resort fallback. Range is checked against the
-    spell the click actually casts. `anyValid` means "any valid member will do", not "this is the
-    group spell".
+    spell the click actually casts. `anyValid` (group spell) only picks which spell is
+    range-checked: the target is still the member who needs the buff most, because a row can
+    span subgroups (a raid's pet bucket) and a group spell covers only the target's subgroup.
   - `RefreshSpells` updates the addon's defs **in place**; the defs table belongs to one engine.
   - The library has no frames or timers: the addon calls `PruneCache` (on roster changes) and
     throttles refreshes itself. Durations are stored by the addon, keyed by the spell name seen.

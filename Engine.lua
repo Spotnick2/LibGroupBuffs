@@ -233,12 +233,15 @@ function Methods:IsValidTarget(unit)
     return true
 end
 
--- Who a click should land on.
---   anyValid = true  (group spell): anybody alive and online will do; the
---                    spell covers their whole subgroup regardless.
---   anyValid = false (single target): the first member actually missing the
---                    buff, else whoever has the least time left, else the
---                    first valid member.
+-- Who a click should land on: the first member actually missing the buff,
+-- else whoever has the least time left, else the first valid member.
+--   anyValid = true  (group spell): only changes which spell is range-checked.
+--                    It still aims at a member who needs the buff, because a
+--                    row can span subgroups - a raid's pet bucket mixes pets
+--                    from every party - and a group spell only covers the
+--                    target's own subgroup. Aiming at "anybody valid" kept
+--                    landing on the same, already buffed, pet.
+--   anyValid = false (single target): range-checked against the single form.
 -- A member whose auras cannot be read is never picked as "missing" - under
 -- combat secrecy that would aim at the first name in the list - but can still
 -- be the last-resort fallback.
@@ -257,7 +260,6 @@ local function PickCandidate(self, members, def, anyValid, requireInRange, st)
         if self:IsValidTarget(m.unit)
             and (not requireInRange or lib.API.SpellRange(m.unit, spell) == "IN_RANGE")
         then
-            if anyValid then return m.unit end
             firstValid = firstValid or m.unit
             local rem, state
             local known = st and st.byUnit and st.byUnit[m.unit]

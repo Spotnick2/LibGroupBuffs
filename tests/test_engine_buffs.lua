@@ -240,7 +240,16 @@ H.eq(E:PickTarget(members, fort, false), "party2", "single target picks the one 
 WoW.SetAura("party2", "Power Word: Fortitude", 3600, 500)
 H.eq(E:PickTarget(members, fort, false), "party2",
     "with nobody missing it picks the lowest remaining")
-H.eq(E:PickTarget(members, fort, true), "party1", "a group spell just needs any valid member")
+H.eq(E:PickTarget(members, fort, true), "party2",
+    "a group spell also refreshes whoever has the least time left")
+
+-- A group spell only covers the target's own subgroup, and a raid's pet
+-- bucket mixes pets from several parties: aiming at the first valid pet kept
+-- recasting on one already buffed while the others stayed missing.
+fort, members = party3()
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 3000)
+H.eq(E:PickTarget(members, fort, true), "party2",
+    "a group spell is aimed at a member still missing the buff")
 
 -- Range matters.
 fort, members = party3()
