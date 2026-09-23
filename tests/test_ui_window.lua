@@ -609,6 +609,15 @@ ui:ApplyAppearance()
 H.eq(ui.headers[1]._textColor and ui.headers[1]._textColor[2], 0.5,
     "a new header colour recolours the existing group labels")
 
+-- The popover's divider follows the appearance too: Wildly draws it orange.
+H.eq(ui.pop.hdiv._colorTexture[3], 0.55, "the divider starts in the default colour")
+host.look = { popDivider = { 0.95, 0.47, 0.06, 0.55 } }
+ui:ApplyAppearance()
+H.eq(ui.pop.hdiv._colorTexture[1], 0.95, "a new divider colour reaches the open popover")
+host.look = nil
+ui:ApplyAppearance()
+H.eq(ui.pop.hdiv._colorTexture[1], 0.32, "and dropping the override restores the default")
+
 -- Every built-in icon is a real texture path, backslashes intact: Lua reads
 -- "\I" in a string as a plain "I", so a lost backslash is silent.
 for class, icon in pairs(lib.UI.CLASS_ICONS) do

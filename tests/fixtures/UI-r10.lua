@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 10
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -106,7 +106,6 @@ for key, colour in pairs({
     footerLine = { 0.40, 0.40, 0.65, 0.40 },
     popBg      = { 0.05, 0.05, 0.12 },
     popBorder  = { 0.42, 0.42, 0.65, 1 },
-    popDivider = { 0.32, 0.32, 0.55, 0.55 },    -- under the popover's header
     groupText  = { 0.52, 0.52, 0.70 },
 }) do
     local t = UI.DEFAULT_APPEARANCE[key] or {}
@@ -472,8 +471,7 @@ function Methods:Init()
     pop.hdrTxt:SetTextColor(1.0, 0.82, 0.22)
 
     local hdiv = pop:CreateTexture(nil, "ARTWORK")
-    pop.hdiv = hdiv
-    hdiv:SetColorTexture(unpack(look.popDivider))
+    hdiv:SetColorTexture(0.32, 0.32, 0.55, 0.55)
     hdiv:SetHeight(1)
     hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  5, -(POP_HDR_H + 2))
     hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -5, -(POP_HDR_H + 2))
@@ -636,12 +634,6 @@ function Methods:ApplyAppearance()
     if look.title then main.title:SetText(look.title) end
     pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
     pop:SetBackdropBorderColor(unpack(look.popBorder))
-    -- A window an older copy built (before r11) has no hdiv: the frames are
-    -- built once, and an upgrade does not rebuild them. rawget: a plain
-    -- lookup falls through to the frame's metatable, and the test stub
-    -- answers every name there.
-    local hdiv = rawget(pop, "hdiv")
-    if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────
