@@ -278,8 +278,19 @@ local function makeFrame(name, parent, template)
         if set then set[ev] = nil end
         return self
     end
-    f.CreateTexture    = function(self) return makeFrame(nil, self) end
-    f.CreateFontString = function(self) return makeFrame(nil, self) end
+    -- Regions are listed on their parent, as the client's GetRegions() reports
+    -- them (varargs, in creation order), and know their object type.
+    local function region(parent, objectType)
+        local r = makeFrame(nil, parent)
+        r._objectType = objectType
+        parent._regions = parent._regions or {}
+        parent._regions[#parent._regions + 1] = r
+        return r
+    end
+    f.CreateTexture    = function(self) return region(self, "Texture") end
+    f.CreateFontString = function(self) return region(self, "FontString") end
+    f.GetRegions       = function(self) return unpack(self._regions or {}) end
+    f.GetObjectType    = function(self) return self._objectType or "Frame" end
     f.CreateAnimationGroup = function() return makeFrame() end
     f.GetThumbTexture  = function() return makeFrame() end
     -- The FIRST anchor, which is what the client's GetPoint() returns.

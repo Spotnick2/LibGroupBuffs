@@ -487,24 +487,49 @@ function Methods:Init()
     return true
 end
 
--- The line under the popover's header, built on first use. Not only from
--- Init: an older copy of the library (before r11) built windows without one,
--- and frames are built once, so a window it made reaches this copy with no
--- divider to colour. Building it here gives that window one the first time
--- its colours are applied out of combat. Not in combat: the popover parents
--- secure buttons, and adding a region to a protected frame under lockdown has
--- not been measured - the next rebuild after the fight comes back here.
--- Underscored, so it reads nil when absent in the client and the test stub
--- alike (the stub answers any other name with a method).
+-- Where the divider sits: the one thing that identifies it among the
+-- popover's regions.
+local DIVIDER_X, DIVIDER_Y = 5, -(POP_HDR_H + 2)
+
+-- A divider an older copy of the library (before r11) built. It drew the same
+-- line but kept it in a local, so the only way to reach it is by where it is:
+-- a texture whose first anchor is the popover's TOPLEFT at the divider's
+-- offset. Reading regions and anchors is not a protected call.
+local function FindOlderDivider(pop)
+    for _, r in ipairs({ pop:GetRegions() }) do
+        if r ~= pop.hdrIcon and r:GetObjectType() == "Texture" then
+            local point, relativeTo, _, x, y = r:GetPoint()
+            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X and y == DIVIDER_Y then
+                return r
+            end
+        end
+    end
+end
+
+-- The line under the popover's header. Not only built in Init: frames are
+-- built once, so a window an older copy made reaches this one with a divider
+-- nothing here holds. That line is ADOPTED, never drawn over - a second
+-- half-opaque line in the same place would blend the addon's colour with the
+-- old one. Only a window with no divider at all gets one built, and not in
+-- combat: the popover parents secure buttons, and adding a region to a
+-- protected frame under lockdown has not been measured, so the next rebuild
+-- after the fight comes back here. Underscored, so it reads nil when absent
+-- in the client and the test stub alike (the stub answers any other name
+-- with a method).
 function Methods:PopDivider()
     local pop = self.pop
     if not pop then return nil end
     if pop._hdiv then return pop._hdiv end
+    local older = FindOlderDivider(pop)
+    if older then
+        pop._hdiv = older
+        return older
+    end
     if InCombatLockdown() then return nil end
     local hdiv = pop:CreateTexture(nil, "ARTWORK")
     hdiv:SetHeight(1)
-    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  5, -(POP_HDR_H + 2))
-    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -5, -(POP_HDR_H + 2))
+    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  DIVIDER_X, DIVIDER_Y)
+    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -DIVIDER_X, DIVIDER_Y)
     pop._hdiv = hdiv
     return hdiv
 end

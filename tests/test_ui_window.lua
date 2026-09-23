@@ -635,6 +635,20 @@ sameColour(ui.pop._hdiv._colorTexture, ORANGE, "an override present at build tim
 H.eq(ui.main.hdrLine._colorTexture and ui.main.hdrLine._colorTexture[1],
     lib.UI.DEFAULT_APPEARANCE.headerLine[1], "while the keys it leaves out keep their defaults")
 
+-- A popover that has no divider at all - nothing to adopt - gets exactly one,
+-- built out of combat and never under lockdown.
+setup()
+ui:Init()
+local lost = ui.pop._hdiv
+lost:ClearAllPoints()           -- no longer where a divider sits, so not adoptable
+ui.pop._hdiv = nil
+WoW.inCombat = true
+H.eq(ui:PopDivider(), nil, "in combat, a missing divider is not built")
+WoW.inCombat = false
+local rebuilt = ui:PopDivider()
+H.check(rebuilt ~= nil and rebuilt ~= lost, "out of combat it is built")
+H.eq(ui:PopDivider(), rebuilt, "once: asking again returns the same line")
+
 -- And one that changes later, on a window already built.
 setup()
 ui:Init()
