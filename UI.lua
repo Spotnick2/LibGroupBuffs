@@ -1011,14 +1011,20 @@ end
 -- present from the cache, and one applied mid-fight is invisible. What can
 -- still be known is worth saying precisely, which is what `basis` is for:
 --
---   MISS      seen without it, before the reads closed
---   ran out   its own clock expired during the fight - arithmetic, not a read
---   offline   nothing to do with auras
---   ?         never seen: joined mid-fight, or out of range at the pull
+-- Each row carries its own timing, because the list mixes two kinds of thing
+-- and one heading cannot be true of both:
+--
+--   was missing  seen without it, at the last look before the reads closed
+--   ran out      its own clock expired DURING the fight - arithmetic, not a read
+--   offline      nothing to do with auras, and no way to tell when it happened
+--   ?            never seen: joined mid-fight, or out of range at the pull
 function Methods:AddNeedsList(row, def)
     if not InCombatLockdown() or not row._members then return end
     local S = lib.Engine.STATES
     local st = self.engine:GroupStat(row._members, def)
+    -- Not "are we in combat": if a future build stops hiding party auras, the
+    -- reads work and the list is current again.
+    local lastKnown = lib.API.AurasAreSecret()
     local needs = {}
     for _, m in ipairs(row._members) do
         local known = st.byUnit[m.unit]
@@ -1028,17 +1034,21 @@ function Methods:AddNeedsList(row, def)
             -- Never seen, so not claimed as missing.
             needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
         elseif not known or (known.rem or 0) <= 0 then
-            local ranOut = known and known.basis == "expired"
-            needs[#needs + 1] = { m.name, ranOut and "ran out" or "MISS", COLOUR.MISS }
+            local marker = "MISS"
+            if known and known.basis == "expired" then
+                marker = "ran out"          -- had it when the fight started
+            elseif lastKnown then
+                marker = "was missing"      -- at the last look, which is all there is
+            end
+            needs[#needs + 1] = { m.name, marker, COLOUR.MISS }
         end
     end
-    -- Not "are we in combat": if a future build stops hiding party auras, the
-    -- reads work and the list is current again.
-    local lastKnown = lib.API.AurasAreSecret()
     if #needs == 0 then
         GameTooltip:AddLine(" ")
         if lastKnown then
-            GameTooltip:AddLine("Nobody was missing it when the fight started.",
+            -- Covers the same ground as the heading: nobody was missing it at
+            -- the last look, and nothing has run out or gone offline since.
+            GameTooltip:AddLine("Nobody needs it, from what can still be seen.",
                 0.40, 0.85, 0.40)
         else
             GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
@@ -1046,7 +1056,10 @@ function Methods:AddNeedsList(row, def)
         return
     end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(lastKnown and "Missing when the fight started:" or "Needs it:",
+    -- One heading for a list that mixes "was missing at the last look" with
+    -- "ran out since": saying "missing when the fight started" would be false
+    -- of half of it. The rows say which is which.
+    GameTooltip:AddLine(lastKnown and "Needs it, from what can still be seen:" or "Needs it:",
         1.00, 0.82, 0.22)
     for _, line in ipairs(needs) do
         GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))

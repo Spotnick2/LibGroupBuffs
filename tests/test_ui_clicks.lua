@@ -297,7 +297,7 @@ H.eq(WoW.tooltipText(), "", "and leaving it hides it")
 ------------------------------------------------------------
 
 local function needsSection(text)
-    return text:match("Missing when the fight started:(.*)$")
+    return text:match("Needs it, from what can still be seen:(.*)$")
         or text:match("Needs it:(.*)$") or ""
 end
 
@@ -312,8 +312,10 @@ H.check(text:find("Power Word: Fortitude"), "only the click lines: " .. text)
 
 H.secrecy(true)
 text = hint(row)
-H.check(text:find("Missing when the fight started"),
-    "in combat the list is what was known then, because auras cannot be read: " .. text)
+H.check(text:find("Needs it, from what can still be seen"),
+    "in combat the heading says how current the list is: " .. text)
+H.check(needsSection(text):find("was missing"),
+    "and a member seen without it says when that was: " .. needsSection(text))
 local listed = needsSection(text)
 H.check(listed:find("Sten Thornbeard") and listed:find("Mirel Dawnsong"),
     "naming those who needed it: " .. listed)
@@ -338,15 +340,19 @@ ui:RefreshTimers()
 text = WoW.tooltipText()
 H.check(not text:find("Everyone here has it"),
     "a stripped buff is invisible, so the tooltip never claims everyone has it: " .. text)
-H.check(text:find("Nobody was missing it when the fight started"),
+H.check(text:find("Nobody needs it, from what can still be seen"),
     "it says what it actually knows: " .. text)
 
 -- What the ticker CAN see while hovering: a cached buff running out...
 WoW.time = WoW.time + 1600
 ui:RefreshTimers()
 listed = needsSection(WoW.tooltipText())
+-- A buff that ran out DURING the fight is not a start-of-fight absence, and
+-- the row says so rather than the heading lying about the whole list.
 H.check(listed:find("Sten Thornbeard") and listed:find("ran out"),
     "a cached buff running out appears without leaving the row, as that: " .. listed)
+H.check(not listed:find("Sten Thornbeard  was missing", 1, true),
+    "and is never called missing at the start, because it was not: " .. listed)
 
 -- ...and somebody going offline.
 WoW.units.party2.connected = false
@@ -374,7 +380,7 @@ H.check(listed:find("?"), "an unreadable member is listed with a question mark: 
 -- it is the only per-member view there is.
 host.ui_config.hints = false
 text = hint(row)
-H.check(text:find("Missing when the fight started") or text:find("Nobody was missing it"),
+H.check(text:find("Needs it, from what can still be seen") or text:find("Nobody needs it"),
     "with hints off, combat still shows who needs it: " .. text)
 H.check(not text:find("Left") and not text:find("Right"),
     "and only that - the click lines stay off: " .. text)
