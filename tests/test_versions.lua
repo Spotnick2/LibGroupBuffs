@@ -420,6 +420,44 @@ H.check(r6b.ui.main:IsShown(), "and leaves the window itself alone")
 WoW.flushTimers(1)
 
 ------------------------------------------------------------
+-- An r10 window has no popover divider of its own
+--
+-- r11 made the divider's colour an appearance key and keeps the texture on
+-- the popover. Frames are built once, so a window r10 built reaches the
+-- newer copy without one. Colouring it must neither crash nor be quietly
+-- dropped: the divider is built the first time the colours are applied out
+-- of combat, and a fight only postpones that.
+------------------------------------------------------------
+
+freshLibStub()
+load(R10, "r10")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local r10Host = H.PriestUI()
+r10Host.config.visible.shadow = false
+r10Host.engine:RefreshSpells()
+r10Host.ui:Update()
+H.check(r10Host.ui.main:IsShown(), "r10 built and opened the window")
+H.eq(r10Host.ui.pop._hdiv, nil, "with no divider this copy can reach")
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "the current copy took over")
+r10Host.look = { popDivider = { 0.95, 0.47, 0.06, 0.55 } }
+
+WoW.inCombat = true
+H.check(pcall(r10Host.ui.ApplyAppearance, r10Host.ui), "colouring an r10 window in combat does not throw")
+H.eq(r10Host.ui.pop._hdiv, nil, "and adds nothing to the protected popover under lockdown")
+
+WoW.inCombat = false
+H.check(pcall(r10Host.ui.Update, r10Host.ui), "the first rebuild after the fight runs on the r10 window")
+local r10Divider = r10Host.ui.pop._hdiv
+H.check(r10Divider ~= nil, "and gives it a divider")
+H.eq(r10Divider and r10Divider._colorTexture and r10Divider._colorTexture[1], 0.95,
+    "in the colour the addon asked for, not silently the old one")
+
+------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
 ------------------------------------------------------------
 

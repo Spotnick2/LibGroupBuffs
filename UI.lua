@@ -372,8 +372,6 @@ end
 function Methods:Init()
     if self.main then return true end
     if InCombatLockdown() then return false end
-    local look = self:Appearance()
-    local alpha = self:Alpha()
     local nGroups, nRows, nPop = self:Capacity()
     self.capacity = { groups = nGroups, rows = nRows, popRows = nPop }
 
@@ -385,19 +383,15 @@ function Methods:Init()
     main:SetClampedToScreen(true)
     main:SetMovable(true)
     Backdrop(main, 14)
-    main:SetBackdropColor(look.mainBg[1], look.mainBg[2], look.mainBg[3], alpha)
-    main:SetBackdropBorderColor(unpack(look.border))
     main:Hide()
 
     local hdrBg = main:CreateTexture(nil, "ARTWORK")
-    hdrBg:SetColorTexture(unpack(look.header))
     hdrBg:SetPoint("TOPLEFT",  main, "TOPLEFT",  4, -4)
     hdrBg:SetPoint("TOPRIGHT", main, "TOPRIGHT", -4, -4)
     hdrBg:SetHeight(HDR_H)
     main.hdrBg = hdrBg
 
     local hdrLine = main:CreateTexture(nil, "ARTWORK")
-    hdrLine:SetColorTexture(unpack(look.headerLine))
     hdrLine:SetHeight(1)
     hdrLine:SetPoint("TOPLEFT",  hdrBg, "BOTTOMLEFT",  0, 0)
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
@@ -440,7 +434,6 @@ function Methods:Init()
 
     for i = 1, nGroups do
         local fs = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        fs:SetTextColor(unpack(look.groupText))
         fs:Hide()
         self.headers[i] = fs
     end
@@ -454,8 +447,6 @@ function Methods:Init()
     pop:SetFrameLevel(200)
     pop:SetClampedToScreen(true)
     Backdrop(pop, 12)
-    pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
-    pop:SetBackdropBorderColor(unpack(look.popBorder))
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
@@ -471,12 +462,7 @@ function Methods:Init()
     pop.hdrTxt:SetJustifyH("LEFT")
     pop.hdrTxt:SetTextColor(1.0, 0.82, 0.22)
 
-    local hdiv = pop:CreateTexture(nil, "ARTWORK")
-    pop.hdiv = hdiv
-    hdiv:SetColorTexture(unpack(look.popDivider))
-    hdiv:SetHeight(1)
-    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  5, -(POP_HDR_H + 2))
-    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -5, -(POP_HDR_H + 2))
+    self:PopDivider()
 
     for i = 1, nPop do self.popRows[i] = MakePopRow(self, pop, i) end
 
@@ -488,13 +474,39 @@ function Methods:Init()
 
     -- ── Footer ──────────────────────────────────────────────────────────
     main.ftrLine = main:CreateTexture(nil, "ARTWORK")
-    main.ftrLine:SetColorTexture(unpack(look.footerLine))
     main.ftrLine:SetHeight(1)
     main.ftrLine:Hide()
 
     -- ── Ticker ──────────────────────────────────────────────────────────
     main:SetScript("OnUpdate", function(m, dt) return m._ui:MainTick(dt) end)
+
+    -- Colours and icon: the one place they are applied, so a new appearance
+    -- key cannot be applied at build time and forgotten on a change, or the
+    -- reverse.
+    self:ApplyAppearance()
     return true
+end
+
+-- The line under the popover's header, built on first use. Not only from
+-- Init: an older copy of the library (before r11) built windows without one,
+-- and frames are built once, so a window it made reaches this copy with no
+-- divider to colour. Building it here gives that window one the first time
+-- its colours are applied out of combat. Not in combat: the popover parents
+-- secure buttons, and adding a region to a protected frame under lockdown has
+-- not been measured - the next rebuild after the fight comes back here.
+-- Underscored, so it reads nil when absent in the client and the test stub
+-- alike (the stub answers any other name with a method).
+function Methods:PopDivider()
+    local pop = self.pop
+    if not pop then return nil end
+    if pop._hdiv then return pop._hdiv end
+    if InCombatLockdown() then return nil end
+    local hdiv = pop:CreateTexture(nil, "ARTWORK")
+    hdiv:SetHeight(1)
+    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  5, -(POP_HDR_H + 2))
+    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -5, -(POP_HDR_H + 2))
+    pop._hdiv = hdiv
+    return hdiv
 end
 
 -- ─── Visuals ────────────────────────────────────────────────────────────────
@@ -636,11 +648,7 @@ function Methods:ApplyAppearance()
     if look.title then main.title:SetText(look.title) end
     pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
     pop:SetBackdropBorderColor(unpack(look.popBorder))
-    -- A window an older copy built (before r11) has no hdiv: the frames are
-    -- built once, and an upgrade does not rebuild them. rawget: a plain
-    -- lookup falls through to the frame's metatable, and the test stub
-    -- answers every name there.
-    local hdiv = rawget(pop, "hdiv")
+    local hdiv = self:PopDivider()
     if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
 end
 

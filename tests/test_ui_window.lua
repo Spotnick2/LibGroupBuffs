@@ -609,14 +609,41 @@ ui:ApplyAppearance()
 H.eq(ui.headers[1]._textColor and ui.headers[1]._textColor[2], 0.5,
     "a new header colour recolours the existing group labels")
 
--- The popover's divider follows the appearance too: Wildly draws it orange.
-H.eq(ui.pop.hdiv._colorTexture[3], 0.55, "the divider starts in the default colour")
-host.look = { popDivider = { 0.95, 0.47, 0.06, 0.55 } }
+------------------------------------------------------------
+-- The popover's divider follows the appearance: Wildly draws it orange
+------------------------------------------------------------
+
+local function sameColour(got, want, msg)
+    H.check(type(got) == "table", msg .. ": a colour was set")
+    for i = 1, 4 do
+        H.eq(got and got[i], want[i], msg .. " (component " .. i .. ")")
+    end
+end
+local DEFAULT_DIVIDER = lib.UI.DEFAULT_APPEARANCE.popDivider
+local ORANGE = { 0.95, 0.47, 0.06, 0.55 }
+
+-- Building alone, with nothing else run: Init is where it must be coloured.
+setup()
+ui:Init()
+sameColour(ui.pop._hdiv._colorTexture, DEFAULT_DIVIDER, "a freshly built divider is the default colour")
+
+-- An override the addon already has when the window is built.
+setup()
+host.look = { popDivider = ORANGE }
+ui:Init()
+sameColour(ui.pop._hdiv._colorTexture, ORANGE, "an override present at build time is used from the start")
+H.eq(ui.main.hdrLine._colorTexture and ui.main.hdrLine._colorTexture[1],
+    lib.UI.DEFAULT_APPEARANCE.headerLine[1], "while the keys it leaves out keep their defaults")
+
+-- And one that changes later, on a window already built.
+setup()
+ui:Init()
+host.look = { popDivider = ORANGE }
 ui:ApplyAppearance()
-H.eq(ui.pop.hdiv._colorTexture[1], 0.95, "a new divider colour reaches the open popover")
+sameColour(ui.pop._hdiv._colorTexture, ORANGE, "a changed divider colour recolours the built popover")
 host.look = nil
 ui:ApplyAppearance()
-H.eq(ui.pop.hdiv._colorTexture[1], 0.32, "and dropping the override restores the default")
+sameColour(ui.pop._hdiv._colorTexture, DEFAULT_DIVIDER, "and dropping the override restores the default")
 
 -- Every built-in icon is a real texture path, backslashes intact: Lua reads
 -- "\I" in a string as a plain "I", so a lost backslash is silent.
