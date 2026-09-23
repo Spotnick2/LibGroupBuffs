@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 10
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 9
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1008,47 +1008,32 @@ end
 --
 -- While auras are secret this is LAST KNOWN, and the wording says so. Every
 -- aura read is refused in combat, so a buff stripped mid-fight still reads as
--- present from the cache, and one applied mid-fight is invisible. What can
--- still be known is worth saying precisely, which is what `basis` is for:
---
--- Each row carries its own timing, because the list mixes two kinds of thing
--- and one heading cannot be true of both:
---
---   was missing  seen without it, at the last look before the reads closed
---   ran out      its own clock expired DURING the fight - arithmetic, not a read
---   offline      nothing to do with auras, and no way to tell when it happened
---   ?            never seen: joined mid-fight, or out of range at the pull
+-- present from the cache, and one applied mid-fight is invisible: "everyone
+-- has it" would be a claim the client cannot support. What the ticker can
+-- still see is a cached buff running out, and somebody going offline.
 function Methods:AddNeedsList(row, def)
     if not InCombatLockdown() or not row._members then return end
     local S = lib.Engine.STATES
     local st = self.engine:GroupStat(row._members, def)
-    -- Not "are we in combat": if a future build stops hiding party auras, the
-    -- reads work and the list is current again.
-    local lastKnown = lib.API.AurasAreSecret()
     local needs = {}
     for _, m in ipairs(row._members) do
         local known = st.byUnit[m.unit]
         if not UnitIsConnected(m.unit) then
             needs[#needs + 1] = { m.name, "offline", COLOUR.OFFLINE }
         elseif known and known.state == S.UNKNOWN then
-            -- Never seen, so not claimed as missing.
+            -- Unreadable, not absent: worth showing, because it may be a miss.
             needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
         elseif not known or (known.rem or 0) <= 0 then
-            local marker = "MISS"
-            if known and known.basis == "expired" then
-                marker = "ran out"          -- had it when the fight started
-            elseif lastKnown then
-                marker = "was missing"      -- at the last look, which is all there is
-            end
-            needs[#needs + 1] = { m.name, marker, COLOUR.MISS }
+            needs[#needs + 1] = { m.name, "MISS", COLOUR.MISS }
         end
     end
+    -- Not "are we in combat": if a future build stops hiding party auras, the
+    -- reads work and the list is current again.
+    local lastKnown = lib.API.AurasAreSecret()
     if #needs == 0 then
         GameTooltip:AddLine(" ")
         if lastKnown then
-            -- Covers the same ground as the heading: nobody was missing it at
-            -- the last look, and nothing has run out or gone offline since.
-            GameTooltip:AddLine("Nobody needs it, from what can still be seen.",
+            GameTooltip:AddLine("Nobody needed it when auras were last readable.",
                 0.40, 0.85, 0.40)
         else
             GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
@@ -1056,10 +1041,7 @@ function Methods:AddNeedsList(row, def)
         return
     end
     GameTooltip:AddLine(" ")
-    -- One heading for a list that mixes "was missing at the last look" with
-    -- "ran out since": saying "missing when the fight started" would be false
-    -- of half of it. The rows say which is which.
-    GameTooltip:AddLine(lastKnown and "Needs it, from what can still be seen:" or "Needs it:",
+    GameTooltip:AddLine(lastKnown and "Needs it, when last readable:" or "Needs it:",
         1.00, 0.82, 0.22)
     for _, line in ipairs(needs) do
         GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))

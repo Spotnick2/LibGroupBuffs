@@ -82,16 +82,69 @@ WoW.secret = true                              -- flag on...
 WoW.auraReadsThrow = false                     -- ...but reads still work
 WoW.ClearAuras("party1")
 WoW.SetAura("party1", "Renew", 15, 10)         -- still has *something*
-rem, dur, state = E:BuffRem("party1", fort)
+local basis
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
 H.eq(state, MISSING,
     "a readable aura list beats the cache: losing the buff is seen, not masked by stale state")
+H.eq(basis, "live", "and it is this moment's read")
 
+-- An empty aura list under secrecy is not evidence of being unbuffed, so the
+-- read is refused - but the definite absence seen a moment ago is remembered,
+-- which is better than the UNKNOWN this used to report.
 WoW.ClearAuras("party1")
-rem, dur, state = E:BuffRem("party1", fort)
-H.eq(state, UNKNOWN,
-    "an empty aura list under secrecy is not evidence of being unbuffed - and the "
-    .. "cache was already cleared by the definite read above, so: unknown")
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "the absence just confirmed still stands")
+H.eq(basis, "remembered", "as remembered, not as a fresh read")
 H.secrecy(false)
+
+------------------------------------------------------------
+-- A confirmed absence is remembered, and reported as remembered
+--
+-- It is the last thing anybody can learn before combat closes the reads.
+-- Dropping it turned a member checked a second ago into UNKNOWN the moment a
+-- fight started; keeping it can go stale, so it never passes as a live read.
+------------------------------------------------------------
+
+fort = setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "seen without the buff")
+H.eq(basis, "live", "live, while it could be read")
+
+H.secrecy(true)
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "and still missing once the reads close")
+H.eq(basis, "remembered", "from what was last seen, not a fresh read")
+H.secrecy(false)
+
+-- Never seen at all is still UNKNOWN: remembering absences is not guessing.
+WoW.SetUnit("party2", { name = "Sten Thornbeard", guid = "P2" })
+H.secrecy(true)
+H.eq(select(3, E:BuffRem("party2", fort)), UNKNOWN, "a member never read is unknown")
+H.eq(select(5, E:BuffRem("party2", fort)), nil, "with no basis to report")
+H.secrecy(false)
+
+-- A buff of their own clears the remembered absence.
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+E:BuffRem("party1", fort)
+H.secrecy(true)
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, HAS, "buffed since: the absence is gone")
+H.eq(basis, "remembered", "counting down from what was seen")
+
+-- ...and once that runs out mid-fight, it is arithmetic, not a read.
+WoW.time = WoW.time + 1900
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "a cached buff that ran out during the fight")
+H.eq(basis, "expired", "reported as expired rather than merely remembered")
+H.secrecy(false)
+
+-- Remembered absences age out with everything else.
+E:PruneCache()
+H.check(E.cache["P1"] ~= nil, "a fresh entry survives pruning")
+WoW.time = WoW.time + 7200
+E:PruneCache()
+H.check(E.cache["P1"] == nil, "a stale one does not")
 
 -- A permanent aura has no expiry, and is neither expired nor infinite.
 fort = setup()
@@ -216,6 +269,7 @@ H.secrecy(true)
 for k in pairs(E.cache) do E.cache[k] = nil end
 st = E:GroupStat(members, fort)
 H.eq(st.nUnknown, 3, "with no cache under secrecy everyone is unknown")
+H.eq(st.byUnit.party1.basis, nil, "and no basis is claimed for them")
 H.eq(st.nMiss, 0, "and nobody is reported as missing")
 H.check(st.allHave == false, "unknown is not 'everyone has it' either")
 H.secrecy(false)

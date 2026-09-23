@@ -30,7 +30,7 @@
 
 -- Same MINOR as every runtime file; see Settings.lua for why the guard is two
 -- checks, and tests/test_versions.lua for the load orders.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 10
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 9
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.engineMinor == MINOR then return end
@@ -186,15 +186,9 @@ function Methods:PruneCache()
     end
 end
 
--- Returns remaining, duration, state, matchedSpellName, basis
---
--- `basis` says where the answer came from, which matters once auras go
--- unreadable: "live" is this moment's read, "remembered" is the last thing
--- seen (a buff still counting down, or a confirmed absence), "expired" is a
--- remembered buff whose own clock has run out since. nil with UNKNOWN means
--- nothing was ever seen.
+-- Returns remaining, duration, state, matchedSpellName
 function Methods:BuffRem(unit, def)
-    if not unit or not UnitExists(unit) then return 0, 0, ST_MISSING, nil, "live" end
+    if not unit or not UnitExists(unit) then return 0, 0, ST_MISSING end
     local API = lib.API
     local key = API.UnitKey(unit)
 
@@ -210,36 +204,25 @@ function Methods:BuffRem(unit, def)
                 exp = exp or 0, dur = dur or 0, spell = matched, stamp = GetTime(),
             }
         end
-        return rem, dur, ST_HAS, matched, "live"
+        return rem, dur, ST_HAS, matched
     end
 
     if status == "NONE" then
-        -- Remember the absence, not just the buff. A confirmed "they do not
-        -- have it" is the last thing anybody can learn before combat closes
-        -- the aura reads, and dropping it turned somebody we had just checked
-        -- into UNKNOWN the moment a fight started. It can go stale - another
-        -- buffer can fix them mid-fight - so it is reported as remembered,
-        -- never as a live read.
-        if key then
-            CacheFor(self, key)[def.id] = { missing = true, stamp = GetTime() }
-        end
-        return 0, 0, ST_MISSING, nil, "live"
+        if key and self.cache[key] then self.cache[key][def.id] = nil end
+        return 0, 0, ST_MISSING
     end
 
-    -- BLOCKED: fall back to what this character was last seen with.
+    -- BLOCKED: fall back to what this character last had.
     local cached = key and self.cache[key] and self.cache[key][def.id]
     if not cached then return 0, 0, ST_UNKNOWN end
-    if cached.missing then return 0, 0, ST_MISSING, nil, "remembered" end
     local r
     if cached.exp == 0 then
         r = PERMANENT
     else
         r = math.max(0, cached.exp - GetTime())
     end
-    if r > 0 then return r, cached.dur, ST_HAS, cached.spell, "remembered" end
-    -- Its own clock ran out during the fight, which is arithmetic rather than
-    -- a read: that much can still be known.
-    return 0, cached.dur, ST_MISSING, cached.spell, "expired"
+    if r > 0 then return r, cached.dur, ST_HAS, cached.spell end
+    return 0, cached.dur, ST_MISSING, cached.spell    -- it genuinely ran out mid-fight
 end
 
 -- ─── Targets ────────────────────────────────────────────────────────────────
@@ -445,8 +428,8 @@ function Methods:GroupStat(members, def)
         if not UnitIsConnected(m.unit) then
             miss[#miss + 1] = m
         else
-            local r, d, state, spell, basis = self:BuffRem(m.unit, def)
-            byUnit[m.unit] = { rem = r, state = state, basis = basis }
+            local r, d, state, spell = self:BuffRem(m.unit, def)
+            byUnit[m.unit] = { rem = r, state = state }
             if state == ST_UNKNOWN then
                 unknown = unknown + 1
             elseif r <= 0 then
@@ -465,9 +448,8 @@ function Methods:GroupStat(members, def)
         nMiss    = #miss,
         nUnknown = unknown,
         nTotal   = #members,
-        -- Each member's state during this pass, with where it came from, so
-        -- PickTarget can reuse it instead of re-reading every aura and the
-        -- addon can say how current it is.
+        -- Each member's state during this pass, so PickTarget can reuse it
+        -- instead of re-reading every aura.
         byUnit   = byUnit,
     }
 end
