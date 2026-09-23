@@ -245,6 +245,7 @@ local function makeFrame(name, parent, template)
     f.GetText = function(self) return self._text end
     f.SetTexture = function(self, tex) self._texture = tex return self end
     f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
+    f.SetColorTexture = function(self, r, g, b, a) self._colorTexture = { r, g, b, a } return self end
     f.GetTexture = function(self) return self._texture end
     f.StartMoving = function(self) self._moving = true return self end
     f.StopMovingOrSizing = function(self) self._moving = false return self end
@@ -277,8 +278,19 @@ local function makeFrame(name, parent, template)
         if set then set[ev] = nil end
         return self
     end
-    f.CreateTexture    = function(self) return makeFrame(nil, self) end
-    f.CreateFontString = function(self) return makeFrame(nil, self) end
+    -- Regions are listed on their parent, as the client's GetRegions() reports
+    -- them (varargs, in creation order), and know their object type.
+    local function region(parent, objectType)
+        local r = makeFrame(nil, parent)
+        r._objectType = objectType
+        parent._regions = parent._regions or {}
+        parent._regions[#parent._regions + 1] = r
+        return r
+    end
+    f.CreateTexture    = function(self) return region(self, "Texture") end
+    f.CreateFontString = function(self) return region(self, "FontString") end
+    f.GetRegions       = function(self) return unpack(self._regions or {}) end
+    f.GetObjectType    = function(self) return self._objectType or "Frame" end
     f.CreateAnimationGroup = function() return makeFrame() end
     f.GetThumbTexture  = function() return makeFrame() end
     -- The FIRST anchor, which is what the client's GetPoint() returns.

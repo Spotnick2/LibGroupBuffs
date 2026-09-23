@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 10
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -106,7 +106,6 @@ for key, colour in pairs({
     footerLine = { 0.40, 0.40, 0.65, 0.40 },
     popBg      = { 0.05, 0.05, 0.12 },
     popBorder  = { 0.42, 0.42, 0.65, 1 },
-    popDivider = { 0.32, 0.32, 0.55, 0.55 },    -- under the popover's header
     groupText  = { 0.52, 0.52, 0.70 },
 }) do
     local t = UI.DEFAULT_APPEARANCE[key] or {}
@@ -372,6 +371,8 @@ end
 function Methods:Init()
     if self.main then return true end
     if InCombatLockdown() then return false end
+    local look = self:Appearance()
+    local alpha = self:Alpha()
     local nGroups, nRows, nPop = self:Capacity()
     self.capacity = { groups = nGroups, rows = nRows, popRows = nPop }
 
@@ -383,15 +384,19 @@ function Methods:Init()
     main:SetClampedToScreen(true)
     main:SetMovable(true)
     Backdrop(main, 14)
+    main:SetBackdropColor(look.mainBg[1], look.mainBg[2], look.mainBg[3], alpha)
+    main:SetBackdropBorderColor(unpack(look.border))
     main:Hide()
 
     local hdrBg = main:CreateTexture(nil, "ARTWORK")
+    hdrBg:SetColorTexture(unpack(look.header))
     hdrBg:SetPoint("TOPLEFT",  main, "TOPLEFT",  4, -4)
     hdrBg:SetPoint("TOPRIGHT", main, "TOPRIGHT", -4, -4)
     hdrBg:SetHeight(HDR_H)
     main.hdrBg = hdrBg
 
     local hdrLine = main:CreateTexture(nil, "ARTWORK")
+    hdrLine:SetColorTexture(unpack(look.headerLine))
     hdrLine:SetHeight(1)
     hdrLine:SetPoint("TOPLEFT",  hdrBg, "BOTTOMLEFT",  0, 0)
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
@@ -434,6 +439,7 @@ function Methods:Init()
 
     for i = 1, nGroups do
         local fs = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        fs:SetTextColor(unpack(look.groupText))
         fs:Hide()
         self.headers[i] = fs
     end
@@ -447,6 +453,8 @@ function Methods:Init()
     pop:SetFrameLevel(200)
     pop:SetClampedToScreen(true)
     Backdrop(pop, 12)
+    pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
+    pop:SetBackdropBorderColor(unpack(look.popBorder))
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
@@ -462,7 +470,11 @@ function Methods:Init()
     pop.hdrTxt:SetJustifyH("LEFT")
     pop.hdrTxt:SetTextColor(1.0, 0.82, 0.22)
 
-    self:PopDivider()
+    local hdiv = pop:CreateTexture(nil, "ARTWORK")
+    hdiv:SetColorTexture(0.32, 0.32, 0.55, 0.55)
+    hdiv:SetHeight(1)
+    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  5, -(POP_HDR_H + 2))
+    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -5, -(POP_HDR_H + 2))
 
     for i = 1, nPop do self.popRows[i] = MakePopRow(self, pop, i) end
 
@@ -474,64 +486,13 @@ function Methods:Init()
 
     -- ── Footer ──────────────────────────────────────────────────────────
     main.ftrLine = main:CreateTexture(nil, "ARTWORK")
+    main.ftrLine:SetColorTexture(unpack(look.footerLine))
     main.ftrLine:SetHeight(1)
     main.ftrLine:Hide()
 
     -- ── Ticker ──────────────────────────────────────────────────────────
     main:SetScript("OnUpdate", function(m, dt) return m._ui:MainTick(dt) end)
-
-    -- Colours and icon: the one place they are applied, so a new appearance
-    -- key cannot be applied at build time and forgotten on a change, or the
-    -- reverse.
-    self:ApplyAppearance()
     return true
-end
-
--- Where the divider sits: the one thing that identifies it among the
--- popover's regions.
-local DIVIDER_X, DIVIDER_Y = 5, -(POP_HDR_H + 2)
-
--- A divider an older copy of the library (before r11) built. It drew the same
--- line but kept it in a local, so the only way to reach it is by where it is:
--- a texture whose first anchor is the popover's TOPLEFT at the divider's
--- offset. Reading regions and anchors is not a protected call.
-local function FindOlderDivider(pop)
-    for _, r in ipairs({ pop:GetRegions() }) do
-        if r ~= pop.hdrIcon and r:GetObjectType() == "Texture" then
-            local point, relativeTo, _, x, y = r:GetPoint()
-            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X and y == DIVIDER_Y then
-                return r
-            end
-        end
-    end
-end
-
--- The line under the popover's header. Not only built in Init: frames are
--- built once, so a window an older copy made reaches this one with a divider
--- nothing here holds. That line is ADOPTED, never drawn over - a second
--- half-opaque line in the same place would blend the addon's colour with the
--- old one. Only a window with no divider at all gets one built, and not in
--- combat: the popover parents secure buttons, and adding a region to a
--- protected frame under lockdown has not been measured, so the next rebuild
--- after the fight comes back here. Underscored, so it reads nil when absent
--- in the client and the test stub alike (the stub answers any other name
--- with a method).
-function Methods:PopDivider()
-    local pop = self.pop
-    if not pop then return nil end
-    if pop._hdiv then return pop._hdiv end
-    local older = FindOlderDivider(pop)
-    if older then
-        pop._hdiv = older
-        return older
-    end
-    if InCombatLockdown() then return nil end
-    local hdiv = pop:CreateTexture(nil, "ARTWORK")
-    hdiv:SetHeight(1)
-    hdiv:SetPoint("TOPLEFT",  pop, "TOPLEFT",  DIVIDER_X, DIVIDER_Y)
-    hdiv:SetPoint("TOPRIGHT", pop, "TOPRIGHT", -DIVIDER_X, DIVIDER_Y)
-    pop._hdiv = hdiv
-    return hdiv
 end
 
 -- ─── Visuals ────────────────────────────────────────────────────────────────
@@ -673,8 +634,6 @@ function Methods:ApplyAppearance()
     if look.title then main.title:SetText(look.title) end
     pop:SetBackdropColor(look.popBg[1], look.popBg[2], look.popBg[3], alpha)
     pop:SetBackdropBorderColor(unpack(look.popBorder))
-    local hdiv = self:PopDivider()
-    if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────

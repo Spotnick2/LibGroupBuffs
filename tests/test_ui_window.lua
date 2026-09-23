@@ -609,6 +609,56 @@ ui:ApplyAppearance()
 H.eq(ui.headers[1]._textColor and ui.headers[1]._textColor[2], 0.5,
     "a new header colour recolours the existing group labels")
 
+------------------------------------------------------------
+-- The popover's divider follows the appearance: Wildly draws it orange
+------------------------------------------------------------
+
+local function sameColour(got, want, msg)
+    H.check(type(got) == "table", msg .. ": a colour was set")
+    for i = 1, 4 do
+        H.eq(got and got[i], want[i], msg .. " (component " .. i .. ")")
+    end
+end
+local DEFAULT_DIVIDER = lib.UI.DEFAULT_APPEARANCE.popDivider
+local ORANGE = { 0.95, 0.47, 0.06, 0.55 }
+
+-- Building alone, with nothing else run: Init is where it must be coloured.
+setup()
+ui:Init()
+sameColour(ui.pop._hdiv._colorTexture, DEFAULT_DIVIDER, "a freshly built divider is the default colour")
+
+-- An override the addon already has when the window is built.
+setup()
+host.look = { popDivider = ORANGE }
+ui:Init()
+sameColour(ui.pop._hdiv._colorTexture, ORANGE, "an override present at build time is used from the start")
+H.eq(ui.main.hdrLine._colorTexture and ui.main.hdrLine._colorTexture[1],
+    lib.UI.DEFAULT_APPEARANCE.headerLine[1], "while the keys it leaves out keep their defaults")
+
+-- A popover that has no divider at all - nothing to adopt - gets exactly one,
+-- built out of combat and never under lockdown.
+setup()
+ui:Init()
+local lost = ui.pop._hdiv
+lost:ClearAllPoints()           -- no longer where a divider sits, so not adoptable
+ui.pop._hdiv = nil
+WoW.inCombat = true
+H.eq(ui:PopDivider(), nil, "in combat, a missing divider is not built")
+WoW.inCombat = false
+local rebuilt = ui:PopDivider()
+H.check(rebuilt ~= nil and rebuilt ~= lost, "out of combat it is built")
+H.eq(ui:PopDivider(), rebuilt, "once: asking again returns the same line")
+
+-- And one that changes later, on a window already built.
+setup()
+ui:Init()
+host.look = { popDivider = ORANGE }
+ui:ApplyAppearance()
+sameColour(ui.pop._hdiv._colorTexture, ORANGE, "a changed divider colour recolours the built popover")
+host.look = nil
+ui:ApplyAppearance()
+sameColour(ui.pop._hdiv._colorTexture, DEFAULT_DIVIDER, "and dropping the override restores the default")
+
 -- Every built-in icon is a real texture path, backslashes intact: Lua reads
 -- "\I" in a string as a plain "I", so a lost backslash is silent.
 for class, icon in pairs(lib.UI.CLASS_ICONS) do

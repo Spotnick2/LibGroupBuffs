@@ -101,8 +101,8 @@ local function Fixtures(minor)
     end
     return out
 end
-local R7, R8, R9 = Fixtures(7), Fixtures(8), Fixtures(9)
-H.check(CURRENT > 9, "the current MINOR is newer than every fixture")
+local R7, R8, R9, R10 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10)
+H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
     LibStub = nil
@@ -170,7 +170,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -418,6 +418,65 @@ r6b.ui:OnCombatEnd()
 H.check(not r6b.ui.pop:IsShown(), "the newer copy hides it when the fight ends")
 H.check(r6b.ui.main:IsShown(), "and leaves the window itself alone")
 WoW.flushTimers(1)
+
+------------------------------------------------------------
+-- An r10 window's popover divider is one this copy does not hold
+--
+-- r11 made the divider's colour an appearance key and keeps the texture on
+-- the popover. r10 drew the same line but kept it in a local, so a window it
+-- built reaches the newer copy with a divider nothing points at. Colouring it
+-- must neither crash, nor be quietly dropped, nor draw a second line over the
+-- first: two half-opaque lines in one place blend the asked colour with the
+-- old one. r10's own line is adopted.
+------------------------------------------------------------
+
+-- Every texture anchored where the divider goes.
+local function dividers(pop)
+    local found = {}
+    for _, r in ipairs({ pop:GetRegions() }) do
+        local point, rel, _, x, y = r:GetPoint()
+        if r:GetObjectType() == "Texture" and point == "TOPLEFT" and rel == pop and x == 5 and y == -26 then
+            found[#found + 1] = r
+        end
+    end
+    return found
+end
+
+freshLibStub()
+load(R10, "r10")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local r10Host = H.PriestUI()
+r10Host.config.visible.shadow = false
+r10Host.engine:RefreshSpells()
+r10Host.ui:Update()
+H.check(r10Host.ui.main:IsShown(), "r10 built and opened the window")
+H.eq(r10Host.ui.pop._hdiv, nil, "with a divider this copy holds no reference to")
+local r10Lines = dividers(r10Host.ui.pop)
+H.eq(#r10Lines, 1, "r10 drew exactly one divider")
+local r10Line = r10Lines[1]
+local regionsBefore = select("#", r10Host.ui.pop:GetRegions())
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "the current copy took over")
+r10Host.look = { popDivider = { 0.95, 0.47, 0.06, 0.55 } }
+
+-- In combat: adopting and colouring an existing line touches no protected call.
+WoW.inCombat = true
+local blockedBefore = #WoW.blockedCalls
+H.check(pcall(r10Host.ui.ApplyAppearance, r10Host.ui), "colouring an r10 window in combat does not throw")
+H.eq(r10Host.ui.pop._hdiv, r10Line, "the newer copy adopts r10's own divider")
+H.eq(select("#", r10Host.ui.pop:GetRegions()), regionsBefore, "and adds no region to the protected popover")
+H.eq(#WoW.blockedCalls, blockedBefore, "with no call the client would refuse")
+H.eq(r10Line._colorTexture and r10Line._colorTexture[1], 0.95,
+    "and r10's line takes the colour the addon asked for, not silently the old one")
+
+WoW.inCombat = false
+H.check(pcall(r10Host.ui.Update, r10Host.ui), "the first rebuild after the fight runs on the r10 window")
+H.eq(#dividers(r10Host.ui.pop), 1, "and there is still exactly one divider - no second line blending over it")
+H.eq(r10Host.ui.pop._hdiv, r10Line, "the same one")
 
 ------------------------------------------------------------
 -- The XML the client loads is the list the tests load.
