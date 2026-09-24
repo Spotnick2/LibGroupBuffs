@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 13
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 12
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1215,7 +1215,6 @@ function Methods:Close(manual)
     -- Cancel any show queued earlier: the player has since asked for the
     -- window to close, and honouring the older request would reopen it.
     self.pendingShow = false
-    self.openDue = nil
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
     if self.closePending then
@@ -1233,29 +1232,9 @@ end
 -- Rebuild and show the window after `delay` seconds, unless it is closed in
 -- the meantime. Everything that opens the window later goes through here, so
 -- a close always wins over an older request.
--- Coalesced, like ScheduleRefresh: the events that open a window arrive in
--- pairs - RAID_ROSTER_UPDATE with GROUP_ROSTER_UPDATE on joining a raid,
--- PLAYER_TALENT_UPDATE with SPELLS_CHANGED on a respec - and each queued
--- Update is a full rebuild: the roster gathered, every member's auras read,
--- and a SetAttribute on every secure row.
---
--- A sooner request supersedes a pending later one rather than being dropped,
--- so a 0.2s show queued behind a 0.6s one still happens at 0.2s. The
--- generation check stays, which is why a host cannot do this for itself: a
--- host-side coalescer would have to call Update directly and lose it, and a
--- close would stop beating an older queued show.
 function Methods:Open(delay)
-    delay = delay or 0
-    local due = GetTime() + delay
-    -- Something at least as soon is already waiting: let it do the work.
-    if self.openDue and self.openDue <= due then return end
-    self.openDue = due
-
     local gen = self.showGen
-    After(delay, function()
-        -- A later call asked for an earlier time and has its own timer.
-        if self.openDue ~= due then return end
-        self.openDue = nil
+    After(delay or 0, function()
         if self.showGen ~= gen then return end
         self:Update()
     end)

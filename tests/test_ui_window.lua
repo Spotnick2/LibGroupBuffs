@@ -293,6 +293,52 @@ ui:Open(0.5)
 WoW.flushTimers(1)
 H.check(ui:IsVisible(), "a show queued after the close does open it")
 
+-- Opening coalesces too. The events that open a window arrive in pairs -
+-- RAID_ROSTER_UPDATE with GROUP_ROSTER_UPDATE, PLAYER_TALENT_UPDATE with
+-- SPELLS_CHANGED - and each queued Update is a full rebuild.
+setup()
+host.layouts = 0
+ui:Open(0.5); ui:Open(0.5); ui:Open(0.5)
+WoW.flushTimers(1)
+H.eq(host.layouts, 1, "three shows queued in one frame are one rebuild")
+
+-- A sooner request supersedes a pending later one rather than being dropped.
+setup()
+ui:Update()
+host.layouts = 0
+ui:Close()
+ui:Open(0.6)
+ui:Open(0.2)
+WoW.flushTimers(0.3)
+H.eq(host.layouts, 1, "a 0.2s show queued behind a 0.6s one happens at 0.2s")
+WoW.flushTimers(1)
+H.eq(host.layouts, 1, "and the later timer does not rebuild again")
+
+-- A later request behind a sooner one is absorbed AND does not push the
+-- rebuild back: dropping the "something sooner is already waiting" check
+-- leaves one rebuild either way, but at 0.6s instead of 0.2s.
+setup()
+ui:Update()
+host.layouts = 0
+ui:Close()
+ui:Open(0.2)
+ui:Open(0.6)
+WoW.flushTimers(0.3)
+H.eq(host.layouts, 1, "the sooner show still happens at 0.2s")
+WoW.flushTimers(1)
+H.eq(host.layouts, 1, "and the later one is absorbed rather than rebuilding again")
+
+-- Closing still beats a queued show, which is why this lives in the library:
+-- a host-side coalescer would call Update directly and lose the check.
+setup()
+ui:Open(0.5)
+ui:Close()
+WoW.flushTimers(1)
+H.check(not ui:IsVisible(), "a close after a queued show still wins")
+ui:Open(0.5)
+WoW.flushTimers(1)
+H.check(ui:IsVisible(), "and a show queued after that close opens it")
+
 -- ScheduleRefresh never opens a closed window, and coalesces bursts.
 setup()
 ui:ScheduleRefresh()
