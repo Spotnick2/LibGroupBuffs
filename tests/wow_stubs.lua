@@ -15,6 +15,19 @@
 --
 -- Frames record their secure attributes, so tests can assert what a click
 -- would actually have cast.
+--
+-- CONSUMING ADDONS SHARE THIS FILE, the way they share tests/config_scan.lua:
+-- every client absence and refusal measured here is measured once. A host
+-- loads it from its library checkout and layers its own differences on top:
+--
+--     dofile(H.libraryRoot() .. "/tests/wow_stubs.lua")
+--     WoW.SetPlayerDefaults({ name = "Wildly Testcase", class = "DRUID" })
+--     WoW.allowGlobal("Wildly", "WildlyDB")   -- the host's own globals
+--     function EJ_GetNumTiers() ... end       -- APIs only the host calls
+--
+-- Both calls work after the file has run: the defaults are read on every
+-- WoW.reset(), and the allow-list is consulted when a global is read, not
+-- when strictGlobals() is installed.
 ------------------------------------------------------------
 
 WoW = {}
@@ -63,7 +76,19 @@ function WoW.reset()
     WoW.auraReadsThrow = false   -- combat secrecy: index reads throw
     WoW.aurasAreSecret = false   -- combat secrecy: the struct's fields throw
 
-    WoW.SetUnit("player", { name = "Priestly Testcase", class = "PRIEST", level = 20 })
+    WoW.SetUnit("player", WoW.playerDefaults)
+end
+
+-- Who "player" is, and what any unit is when a test does not say. A host sets
+-- these once after loading the file; every WoW.reset() then uses them.
+WoW.playerDefaults = { name = "Priestly Testcase", class = "PRIEST", level = 20 }
+
+function WoW.SetPlayerDefaults(info)
+    for k, v in pairs(info or {}) do WoW.playerDefaults[k] = v end
+    -- Applied now as well as on the next reset, so a host that sets them at
+    -- the top of its stub layer does not need a reset to see them.
+    if WoW.units and WoW.units.player then WoW.SetUnit("player", WoW.playerDefaults) end
+    return WoW.playerDefaults
 end
 
 function WoW.SetUnit(unit, info)
@@ -71,10 +96,13 @@ function WoW.SetUnit(unit, info)
     WoW.units[unit] = {
         name      = info.name or unit,
         guid      = info.guid or ("GUID-" .. (info.name or unit)),
-        class     = info.class or "PRIEST",
+        class     = info.class or WoW.playerDefaults.class,
         connected = info.connected ~= false,
         dead      = info.dead or false,
-        level     = info.level or 20,
+        level     = info.level or WoW.playerDefaults.level,
+        -- Declared in the 69913 dump, never measured on this client. Tests
+        -- that care set it; nothing should assume the live value.
+        role      = info.role or "NONE",
     }
     return WoW.units[unit]
 end
@@ -486,9 +514,22 @@ function InCombatLockdown() return WoW.inCombat end
 -- is what let a call to it survive into a shipped build.
 function strtrim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
 function strmatch(s, pattern) return string.match(s, pattern) end
+-- The real strsplit KEEPS empty fields: strsplit("-", "a--b") is "a", "", "b",
+-- and a trailing separator yields a trailing "". A gmatch over "[^sep]+" drops
+-- them, which turns a missing field into a shifted one - the kind of bug a
+-- test using the stub would never see. `sep` is a set of characters, as in
+-- game.
 function strsplit(sep, s)
-    local out = {}
-    for piece in tostring(s):gmatch("([^" .. sep .. "]+)") do out[#out + 1] = piece end
+    s = tostring(s)
+    local class = "[" .. (tostring(sep):gsub("(%W)", "%%%1")) .. "]"
+    local out, start = {}, 1
+    while true do
+        local a, b = s:find(class, start)
+        if not a then break end
+        out[#out + 1] = s:sub(start, a - 1)
+        start = b + 1
+    end
+    out[#out + 1] = s:sub(start)
     return unpack(out)
 end
 function date(fmt) return "2026-09-20 00:00:00" end
@@ -545,13 +586,35 @@ function UnitLevel(unit)
     local u = unitInfo(unit)
     return u and u.level or 1
 end
+-- Two tokens can be the same player: "party1" and "raid3", or "player" and
+-- whichever raid index you occupy. Identity is the GUID, not the token.
+function UnitIsUnit(a, b)
+    if a == b then return true end
+    local x, y = unitInfo(a), unitInfo(b)
+    return (x ~= nil and y ~= nil and x.guid == y.guid)
+end
+function UnitGroupRolesAssigned(unit)
+    local u = unitInfo(unit)
+    return u and u.role or "NONE"
+end
 
 function IsInRaid() return WoW.inRaid end
 function GetNumGroupMembers() return WoW.groupMembers end
+-- Undocumented on this client: the 69913 dump lists the name with no
+-- signature, so only the first three returns are measured (Engine.lua reads
+-- name and subgroup). The rest is Retail's shape, which is what the Mainline
+-- codebase should give - a host that starts depending on one of them should
+-- probe it first rather than trust this line.
 function GetRaidRosterInfo(i)
     local e = WoW.raidRoster[i]
     if not e then return nil end
-    return e.name, e.rank or 0, e.subgroup or 1
+    local u = e.unit and WoW.units[e.unit]
+    local class = e.class or (u and u.class) or WoW.playerDefaults.class
+    return e.name, e.rank or 0, e.subgroup or 1,
+        e.level or (u and u.level) or WoW.playerDefaults.level,
+        class, class, e.zone or "", e.online ~= false,
+        e.isDead or (u and u.dead) or false,
+        e.role or (u and u.role) or "NONE", e.isML or false, e.combatRole or "NONE"
 end
 function GetInstanceInfo()
     -- Outdoors the live client returns the continent name with instanceType
@@ -791,7 +854,11 @@ function WoW.strictGlobals()
     })
 end
 
-function WoW.allowGlobal(name) KNOWN_ABSENT[name] = true end
+-- Consulted when a global is READ, so a host can call this after this file
+-- has installed strictGlobals - which is the only order available to it.
+function WoW.allowGlobal(...)
+    for i = 1, select("#", ...) do KNOWN_ABSENT[(select(i, ...))] = true end
+end
 
 WoW.reset()
 WoW.strictGlobals()

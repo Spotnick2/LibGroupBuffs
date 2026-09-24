@@ -100,9 +100,15 @@ Vanilla content, Retail codebase.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
-- `tests/` — Lua 5.1, no game client. `tests/config_scan.lua` is also used by consumers: their
-  tests `dofile` it from their library checkout to fail on writes to their SavedVariables outside
-  a `config-owner` region. It is not shipped.
+- `tests/` — Lua 5.1, no game client. Two files are also used by consumers, `dofile`d from their
+  library checkout (neither is shipped):
+  - `tests/config_scan.lua` — fails their run on a write to their SavedVariables outside a
+    `config-owner` region.
+  - `tests/wow_stubs.lua` — the stub itself. A host sets `WoW.SetPlayerDefaults` (it is not a
+    priest), `WoW.allowGlobal(...)` for its own globals, and defines any API only it calls. Both
+    work after the file has run, which is the only order a host has. Keeping a copy is what let
+    Priestly's drift out of the combat refusal model, so every refusal measured here is measured
+    once. `tests/test_stub.lua` is that contract: the seam and the returns hosts read.
 - `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the
   packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
   `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is
