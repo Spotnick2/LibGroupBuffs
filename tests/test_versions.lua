@@ -101,7 +101,7 @@ local function Fixtures(minor)
     end
     return out
 end
-local R7, R8, R9, R10, R11 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11)
+local R7, R8, R9, R10, R11, R12 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -170,7 +170,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")

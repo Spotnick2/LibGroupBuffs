@@ -97,6 +97,11 @@ Vanilla content, Retail codebase.
     handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
     `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
     `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
+  - **`Open` coalesces**, like `ScheduleRefresh`: the events that open a window arrive in pairs
+    (`RAID_ROSTER_UPDATE` with `GROUP_ROSTER_UPDATE`, `PLAYER_TALENT_UPDATE` with
+    `SPELLS_CHANGED`) and each queued `Update` is a full rebuild. The earliest pending deadline
+    wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
+    this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
