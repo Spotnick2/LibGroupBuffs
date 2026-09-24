@@ -156,6 +156,16 @@ an **allowlist**: it fails the run on the read of any global it does not define,
 client's *absences* and odd shapes as well as its presences. That discipline came from real misses,
 where a stub more forgiving than the client let broken code pass a green suite.
 
+Your addon's tests can use that stub rather than keeping a copy, so the absences and the combat
+refusals are measured once:
+
+```lua
+dofile(libraryRoot .. "/tests/wow_stubs.lua")
+WoW.SetPlayerDefaults({ name = "Wildly Testcase", class = "DRUID" })
+WoW.allowGlobal("Wildly", "WildlyDB")     -- your own globals
+function EJ_GetNumTiers() return 1 end    -- an API only you call
+```
+
 ## License
 
 MIT, same as the addons that use it.
