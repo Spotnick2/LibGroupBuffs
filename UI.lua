@@ -1215,7 +1215,7 @@ function Methods:Close(manual)
     -- Cancel any show queued earlier: the player has since asked for the
     -- window to close, and honouring the older request would reopen it.
     self.pendingShow = false
-    self.openDue = nil
+    self.openDue, self.openToken = nil, nil
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
     if self.closePending then
@@ -1249,13 +1249,20 @@ function Methods:Open(delay)
     local due = GetTime() + delay
     -- Something at least as soon is already waiting: let it do the work.
     if self.openDue and self.openDue <= due then return end
-    self.openDue = due
+
+    -- The pending request is identified by this table, not by its deadline:
+    -- a close and a reopen in the same frame produce the SAME deadline, and
+    -- the cancelled timer would then recognise the live request as its own,
+    -- clear it, and bail on the generation check - leaving the window shut
+    -- with nothing queued.
+    local token = {}
+    self.openDue, self.openToken = due, token
 
     local gen = self.showGen
     After(delay, function()
         -- A later call asked for an earlier time and has its own timer.
-        if self.openDue ~= due then return end
-        self.openDue = nil
+        if self.openToken ~= token then return end
+        self.openDue, self.openToken = nil, nil
         if self.showGen ~= gen then return end
         self:Update()
     end)

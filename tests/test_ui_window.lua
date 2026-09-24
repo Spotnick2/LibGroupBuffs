@@ -339,6 +339,20 @@ ui:Open(0.5)
 WoW.flushTimers(1)
 H.check(ui:IsVisible(), "and a show queued after that close opens it")
 
+-- The same, without the clock moving in between: a close and a reopen in one
+-- frame queue two timers with the IDENTICAL deadline. If the pending request
+-- were identified by its deadline, the cancelled timer would recognise the
+-- live request as its own, clear it, and then bail on the generation check -
+-- and the window would never open.
+setup()
+host.layouts = 0
+ui:Open(0.5)
+ui:Close()
+ui:Open(0.5)
+WoW.flushTimers(1)
+H.check(ui:IsVisible(), "a reopen at the same deadline as the show it cancelled still opens")
+H.eq(host.layouts, 1, "once")
+
 -- ScheduleRefresh never opens a closed window, and coalesces bursts.
 setup()
 ui:ScheduleRefresh()
