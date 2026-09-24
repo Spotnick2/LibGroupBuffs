@@ -14,7 +14,10 @@ local H = dofile("tests/harness.lua")
 local lib = H.loadLibrary()
 local Settings = lib.Settings
 
+-- FIXED is NEWER than BROKEN, which is the whole point now: builds compare
+-- as numbers, and anything at or below BROKEN is presumed broken.
 local BROKEN, MEASURED, FIXED = "69913", "69913", "70123"
+local OLDER = "69800"   -- a build BEHIND the one loading broke on
 
 -- A host with a per-character store and an account-wide check table, like
 -- Priestly. The tables are globals in the addon; plain upvalues here, reached
@@ -38,7 +41,8 @@ local function Host(owner, opts)
         owner = owner,
         scopes = scopes,
         measuredOnBuild = opts.measured or MEASURED,
-        svBrokenOnBuild = opts.broken or BROKEN,
+        svBrokenSince = (not opts.specAlias) and (opts.broken or BROKEN) or nil,
+        svBrokenOnBuild = opts.specAlias and (opts.broken or BROKEN) or nil,
         report = function(text, kind) h.said[#h.said + 1] = { text = text, kind = kind } end,
         onChanged = function(key) h.changed[#h.changed + 1] = key end,
     })
@@ -60,7 +64,7 @@ end
 local function spec(over)
     local s = {
         owner = "Test", report = function() end,
-        measuredOnBuild = "1", svBrokenOnBuild = "1",
+        measuredOnBuild = "1", svBrokenSince = "1",
         scopes = { { label = "x", get = function() return {} end } },
     }
     for k, v in pairs(over) do s[k] = v end
@@ -170,31 +174,66 @@ H.check(h.char.svLoadCheck == marker, "a zone change leaves the marker alone")
 h.settings:HandleEnteringWorld(false, true)
 H.check(h.char.svLoadCheck ~= marker, "a /reload renews it")
 
--- The fix: a new build, and the markers came back on a real login.
+-- A build BEHIND the one loading broke on is presumed broken too. Nothing
+-- was ever measured there, and a relog on it looks the same as everywhere
+-- else - a player who has not updated must not be told the bug is gone.
+h = freshSession(OLDER)
+h.char = { svLoadCheck = { stamp = "then", build = OLDER } }
+h.settings:HandleEnteringWorld(true, false)
+-- The build notice fires here too - it is a different detector, and this
+-- build is not the measured one either - so ask about the settings message.
+H.eq(saidKind(h, "settingsUnverified"), "",
+    "a build older than svBrokenSince announces nothing either")
+
+-- A build PAST it: unproven, not fixed. Something is said, because a real fix
+-- is worth catching, but it claims nothing and carries no green kind.
+h = freshSession(BROKEN)
+h.settings:HandleEnteringWorld(true, false)
 WoW.build = FIXED
 h.settings:HandleEnteringWorld(true, false)
-local msg = saidKind(h, "settingsLoaded")
+local msg = saidKind(h, "settingsUnverified")
 H.check(msg:find("came back", 1, true),
-    "a real login on a new build announces it, tagged so the host can style it: " .. msg)
-H.check(msg:find("fully exited", 1, true), "conditional on a full exit: " .. msg)
-H.check(msg:find("proves nothing", 1, true), "and says a relog or /reload proves nothing: " .. msg)
+    "a returning marker on a newer build is reported, tagged for the host: " .. msg)
+H.check(msg:find("has not been checked", 1, true), "as unchecked, not as a fix: " .. msg)
+H.check(not msg:find("the settings bug is fixed", 1, true),
+    "never claiming the fix, which a relog would fake: " .. msg)
+H.check(msg:find("fully exited", 1, true) and msg:find("rather than relogging", 1, true),
+    "naming the one procedure that would make it news: " .. msg)
+H.check(msg:find("report", 1, true), "and asking for that report: " .. msg)
 H.check(msg:find("per-character", 1, true) and msg:find("account-wide", 1, true),
     "naming the scopes that came back: " .. msg)
 H.check(msg:find(FIXED, 1, true), "and the build: " .. msg)
 H.check(not msg:find("|c", 1, true), "plain text: colour is the host's business")
+H.eq(saidKind(h, "settingsLoaded"), "",
+    "the old kind is gone, so a host's green styling cannot fire on a guess")
 
--- Once only: the latch persists by then, because the store works.
+-- Once per build: the latch persists by then, because the store works.
 local n = #h.said
 h.settings:HandleEnteringWorld(true, false)
 local repeated = false
-for i = n + 1, #h.said do if h.said[i].kind == "settingsLoaded" then repeated = true end end
-H.check(not repeated, "it does not repeat at the next login")
+for i = n + 1, #h.said do
+    if h.said[i].kind == "settingsUnverified" then repeated = true end
+end
+H.check(not repeated, "it does not repeat at the next login on that build")
 
--- One scope fixed on its own is worth knowing.
+-- But a LATER build is a different claim about a different client, so the
+-- latch does not carry over. This is what the old single-build check got
+-- wrong in the other direction: a patch that does not fix loading also
+-- changes the build.
+WoW.build = "70500"
+n = #h.said
+h.settings:HandleEnteringWorld(true, false)
+msg = ""
+for i = n + 1, #h.said do
+    if h.said[i].kind == "settingsUnverified" then msg = h.said[i].text end
+end
+H.check(msg:find("70500", 1, true), "a later build asks again, naming it: " .. msg)
+
+-- One scope coming back on its own is worth knowing.
 h = freshSession(FIXED)
 h.account = { svLoadCheck = { stamp = "then", build = FIXED } }
 h.settings:HandleEnteringWorld(true, false)
-msg = saidKind(h, "settingsLoaded")
+msg = saidKind(h, "settingsUnverified")
 H.check(msg:find("account-wide", 1, true) and not msg:find("per-character", 1, true),
     "a fix to one scope alone is reported as that: " .. msg)
 
@@ -212,7 +251,27 @@ lib.API.ClientBuild = realClientBuild
 h = freshSession(FIXED, { oneScope = true })
 h.char = { svLoadCheck = { stamp = "then" } }
 h.settings:HandleEnteringWorld(true, false)
-H.check(saidKind(h, "settingsLoaded"):find("came back", 1, true), "a single-scope host is checked the same way")
+H.check(saidKind(h, "settingsUnverified"):find("came back", 1, true),
+    "a single-scope host is checked the same way")
+
+-- A build string that will not compare is presumed broken, not assumed newer.
+h = freshSession(FIXED)
+h.char = { svLoadCheck = { stamp = "then" } }
+local realBuild = lib.API.ClientBuild
+lib.API.ClientBuild = function() return "1.60.1-ptr" end
+h.settings:HandleEnteringWorld(true, false)
+H.eq(saidKind(h, "settingsUnverified"), "", "a build that is not a number announces nothing")
+lib.API.ClientBuild = realBuild
+
+-- The old spec name still works, because three addons pin their own tags and
+-- adopt on their own schedule. Both names at once is refused instead.
+h = freshSession(FIXED, { specAlias = true })
+h.char = { svLoadCheck = { stamp = "then" } }
+h.settings:HandleEnteringWorld(true, false)
+H.check(saidKind(h, "settingsUnverified"):find("came back", 1, true),
+    "svBrokenOnBuild is accepted as the old name for svBrokenSince")
+H.check(not pcall(Settings.New, spec({ svBrokenSince = "1", svBrokenOnBuild = "1" })),
+    "but not both at once, which would disagree the moment one moved")
 
 ------------------------------------------------------------
 -- The build watch

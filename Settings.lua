@@ -15,7 +15,7 @@
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
 --         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         svBrokenOnBuild = "69977",     -- they are independent; see below
+--         svBrokenSince   = "69977",     -- loading broken from this build ON
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })
@@ -63,10 +63,20 @@ function Settings.New(spec)
     if spec.onChanged ~= nil and type(spec.onChanged) ~= "function" then
         Fail("onChanged must be a function or nil")
     end
-    for _, key in ipairs({ "measuredOnBuild", "svBrokenOnBuild" }) do
-        if type(spec[key]) ~= "string" or spec[key] == "" then
-            Fail(key .. " must be a build number string")
-        end
+    if type(spec.measuredOnBuild) ~= "string" or spec.measuredOnBuild == "" then
+        Fail("measuredOnBuild must be a build number string")
+    end
+    -- svBrokenOnBuild was the name when this meant a SINGLE build. It means
+    -- "from this build on" now (#27) - which is what every host's value
+    -- already said in practice, so the alias needs no host change. Both at
+    -- once is ambiguous rather than harmless: they would disagree the moment
+    -- one of them moved.
+    if spec.svBrokenSince ~= nil and spec.svBrokenOnBuild ~= nil then
+        Fail("pass svBrokenSince or svBrokenOnBuild, not both - svBrokenSince is the name")
+    end
+    local brokenSince = spec.svBrokenSince or spec.svBrokenOnBuild
+    if type(brokenSince) ~= "string" or brokenSince == "" then
+        Fail("svBrokenSince must be a build number string")
     end
     if type(spec.scopes) ~= "table" or #spec.scopes == 0 then
         Fail("scopes must list at least one saved table; the first is the settings store")
@@ -85,7 +95,7 @@ function Settings.New(spec)
         report = spec.report,
         onChanged = spec.onChanged,
         measuredOnBuild = spec.measuredOnBuild,
-        svBrokenOnBuild = spec.svBrokenOnBuild,
+        svBrokenSince = brokenSince,
     }, lib.SettingsMeta)
 end
 
@@ -158,17 +168,39 @@ end
 --     Never announced (`announce` is false).
 --   * Logging out to character select and back in is an initial login in the
 --     same process, and can be served from the same cache. Lua cannot tell it
---     from a real start. So on svBrokenOnBuild - the build where loading is
---     measured broken - a returning marker is treated as that cache and
---     ignored. The fix needs a client patch, and a patch changes the build.
+--     from a real start, and no clock helps: GetTime on this client is system
+--     uptime, not client uptime, so it does not reset across a restart either.
 --   * Every login after a real fix. The announcement is latched in the marker,
---     which by then persists.
+--     which by then persists - per build, so a later build can speak again.
 --
--- On a newer build a relog is still indistinguishable, so the message says
--- what it means under each procedure rather than claiming the fix.
+-- Since the relog cannot be ruled out, BROKEN IS THE DEFAULT and stays so from
+-- svBrokenSince onward. This used to be equality against a single build, on
+-- the reasoning that "the fix needs a client patch, and a patch changes the
+-- build" - which holds in one direction only. A patch that does NOT fix
+-- loading also changes the build: 69913 -> 69977 arrived with the bug intact,
+-- and until each addon re-measured and shipped, every relog announced a fix
+-- that never happened, in three of them at once (#27).
+--
+-- A build past svBrokenSince is therefore unproven, not fixed, and the message
+-- says exactly that: no claim, and a plain `kind` a host has no green styling
+-- for. Whoever reads it can do the one thing this code cannot - exit the game
+-- fully, come back, and see.
+-- Builds compare as numbers; anything that will not is treated as broken, so
+-- a build string this code did not expect loses an announcement rather than
+-- inventing one.
+local function BuildNumber(build)
+    return tonumber(tostring(build or ""):match("^%d+$") or "")
+end
+
+function Methods:PresumedBroken(build)
+    local now, since = BuildNumber(build), BuildNumber(self.svBrokenSince)
+    if not now or not since then return true end
+    return now <= since
+end
+
 function Methods:CheckLoad(announce)
     local build = CurrentBuild()
-    local trustworthy = announce and build ~= nil and build ~= self.svBrokenOnBuild
+    local trustworthy = announce and build ~= nil and not self:PresumedBroken(build)
     local key = Settings.LOAD_CHECK_KEY
 
     local cameBack = {}
@@ -177,13 +209,15 @@ function Methods:CheckLoad(announce)
         if type(holder) == "table" then
             local previous = holder[key]
             local back = type(previous) == "table" and previous.stamp ~= nil
-            local already = back and previous.announced == true
+            -- Latched per build: said once here, and again on a later build,
+            -- which is a different claim about a different client.
+            local already = back and previous.announced == build
             local tell = trustworthy and back and not already
             if tell then cameBack[#cameBack + 1] = scope.label end
             holder[key] = {
                 stamp = (type(date) == "function" and date("%Y-%m-%d %H:%M:%S")) or "?",
                 build = build,
-                announced = (already or tell) or nil,
+                announced = ((already or tell) and build) or nil,
             }
         end
     end
@@ -191,9 +225,9 @@ function Methods:CheckLoad(announce)
 
     if #cameBack > 0 then
         self.report("Saved settings came back (" .. table.concat(cameBack, " and ")
-            .. ", build " .. tostring(build) .. "). If you fully exited the game since you "
-            .. "last played, the settings bug is fixed. After only a relog or /reload this "
-            .. "proves nothing.", "settingsLoaded")
+            .. ", build " .. tostring(build) .. "). This build has not been checked. If you "
+            .. "fully exited the game since you last played rather than relogging, that is "
+            .. "news - please report it.", "settingsUnverified")
     end
 end
 
