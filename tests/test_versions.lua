@@ -101,7 +101,7 @@ local function Fixtures(minor)
     end
     return out
 end
-local R7, R8, R9, R10 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10)
+local R7, R8, R9, R10, R11 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -170,7 +170,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -477,6 +477,85 @@ WoW.inCombat = false
 H.check(pcall(r10Host.ui.Update, r10Host.ui), "the first rebuild after the fight runs on the r10 window")
 H.eq(#dividers(r10Host.ui.pop), 1, "and there is still exactly one divider - no second line blending over it")
 H.eq(r10Host.ui.pop._hdiv, r10Line, "the same one")
+
+------------------------------------------------------------
+-- lib.Status: is this copy usable?
+--
+-- Every host carried this check by hand - the marker names, a type() test per
+-- entry point - and got it wrong the same way twice. The library answers it
+-- now, from its own list of files, so a fifth file added here does not need
+-- every consumer edited in lockstep.
+------------------------------------------------------------
+
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+
+H.eq(lib.Status(CURRENT), "ok", "a complete copy at the host's floor is ok")
+H.eq(lib.Status(CURRENT - 1), "ok", "and one newer than the floor")
+H.eq(select(2, lib.Status(CURRENT)), CURRENT, "with the active MINOR for the host's message")
+H.eq(lib.Status(CURRENT + 1), "too-old", "older than the host needs is too-old, not broken")
+H.eq(lib.Status(), "ok", "no floor given: only completeness is judged")
+
+-- The list is the copy's own, and covers every file the XML loads.
+local expected = {}
+for _, name in ipairs(lib.FILES) do expected[name] = true end
+for _, file in ipairs(H.xmlScripts()) do
+    if file ~= "LibStub/LibStub.lua" then
+        local name = file:gsub("%.lua$", "")
+        H.check(expected[name], name .. " is in lib.FILES, so Status accounts for it")
+    end
+end
+H.eq(#lib.FILES, #H.xmlScripts() - 1, "and lib.FILES names no file the XML does not load")
+
+-- A file that threw before its last line leaves no record.
+for _, name in ipairs(lib.FILES) do
+    local kept = lib.fileMinors[name]
+    lib.fileMinors[name] = nil
+    H.eq(lib.Status(CURRENT), "incomplete", name .. " missing its record is incomplete")
+    -- An older copy's record under a newer MINOR is the same thing: half a
+    -- table, with that file's functions still the old copy's.
+    lib.fileMinors[name] = CURRENT - 1
+    H.eq(lib.Status(CURRENT), "incomplete", name .. " recorded by an older copy is incomplete")
+    lib.fileMinors[name] = kept
+end
+H.eq(lib.Status(CURRENT), "ok", "and putting them back makes it ok again")
+
+-- Incomplete beats too-old: a half-loaded ancient copy is broken, not merely
+-- behind, and the host should say so.
+do
+    local kept = lib.fileMinors.Engine
+    lib.fileMinors.Engine = nil
+    H.eq(lib.Status(CURRENT + 5), "incomplete", "a broken copy reports broken, not too-old")
+    lib.fileMinors.Engine = kept
+end
+
+-- Status is installed by the LAST file, so its own absence is the answer for
+-- a copy whose UI.lua threw. Proved by loading everything except that file.
+do
+    freshLibStub()
+    local partial = {}
+    for _, file in ipairs(CURRENT_FILES) do
+        if file.name ~= "UI.lua" then partial[#partial + 1] = file end
+    end
+    load(partial, "no UI")
+    local half = LibStub("LibGroupBuffs-1.0")
+    H.eq(half.Status, nil, "a copy whose last file threw has no Status to call")
+    H.eq(half.fileMinors.UI, nil, "and no record for it")
+    H.check(half.fileMinors.Engine == CURRENT, "though the files before it did finish")
+end
+
+-- An upgrade keeps the same tables, like everything else public here.
+freshLibStub()
+load(R11, "r11")
+lib = LibStub("LibGroupBuffs-1.0")
+H.eq(lib.Status, nil, "r11 predates Status")
+load(CURRENT_FILES, "current")
+H.eq(lib.Status(CURRENT), "ok", "and a newer copy installs it over the upgraded library")
+local records = lib.fileMinors
+load(withMinor(CURRENT_FILES, CURRENT + 1, {}), "next")
+H.check(lib.fileMinors == records, "the record table survives the next upgrade")
+H.eq(lib.Status(CURRENT), "ok", "and every file re-recorded itself")
 
 ------------------------------------------------------------
 -- The XML the client loads is the list the tests load.

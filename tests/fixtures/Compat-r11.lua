@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 12
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -550,19 +550,7 @@ function API.ClickEdges()
     return "LeftButtonDown", "RightButtonDown", "LeftButtonUp", "RightButtonUp"
 end
 
--- The files THIS copy consists of, declared by the file that claims the
--- version, so it is always the active copy's own list. lib.Status walks it: a
--- newer copy with a fifth file says so here, and a host that never heard of
--- that file still gets a correct answer.
-lib.FILES = { "Compat", "Settings", "Engine", "UI" }
-
--- Each file records itself here on its last line, so a file that threw partway
--- leaves no record. Reused across upgrades, and every entry is compared with
--- the active MINOR rather than merely being present: after a newer copy threw,
--- the older copy's entries are still here.
-lib.fileMinors = lib.fileMinors or {}
-
--- Last, so a copy that threw partway through is not marked complete. The
--- named markers are what hosts written before lib.Status still read.
+-- Last, so a copy that threw partway through is not marked complete. A
+-- consumer checks this equals the active MINOR: after a newer copy threw, the
+-- older copy's marker is still here, and a bare "is it set" would accept it.
 lib.compatMinor = MINOR
-lib.fileMinors.Compat = MINOR

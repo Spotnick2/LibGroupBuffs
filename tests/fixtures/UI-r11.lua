@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 12
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1455,44 +1455,5 @@ function Methods:Update()
     end
 end
 
--- ─── Is this copy usable? ───────────────────────────────────────────────────
---
--- Installed by the LAST file the XML loads, so that its own presence is part
--- of the answer: if UI.lua threw, there is no Status to call, and a host
--- treats that absence as "incomplete".
---
---     local status = lib.Status and lib.Status(NEEDS_MINOR)
---
--- Returns one of:
---
---   "ok"          every file this copy declares finished loading, and the
---                 active MINOR is at least the host's floor
---   "incomplete"  a file did not reach its last line - or an older copy's
---                 record is still here under a newer active MINOR, which is
---                 the same thing: half a table
---   "too-old"     complete, but older than the host needs. Nothing is broken;
---                 a host must not tell the player something crashed.
---
--- Second return is the active MINOR, for the host's message. The library
--- still never prints: what the player is told is the addon's business.
---
--- Hosts used to carry this check themselves - the marker names, one type()
--- test per entry point - which is the library's internals living in every
--- consumer, and it went wrong the same way twice (Spotnick2/priestly#52).
-function lib.Status(needsMinor)
-    local _, active = LibStub:GetLibrary(MAJOR, true)
-    if type(active) ~= "number" then return "incomplete" end
-    local expected = lib.FILES
-    if type(expected) ~= "table" then return "incomplete", active end
-    for _, name in ipairs(expected) do
-        if lib.fileMinors[name] ~= active then return "incomplete", active end
-    end
-    if type(needsMinor) == "number" and active < needsMinor then
-        return "too-old", active
-    end
-    return "ok", active
-end
-
 -- Last, so a file that threw partway through is not marked installed.
 lib.uiMinor = MINOR
-lib.fileMinors.UI = MINOR

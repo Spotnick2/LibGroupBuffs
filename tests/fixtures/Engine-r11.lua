@@ -30,7 +30,7 @@
 
 -- Same MINOR as every runtime file; see Settings.lua for why the guard is two
 -- checks, and tests/test_versions.lua for the load orders.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 12
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.engineMinor == MINOR then return end
@@ -521,4 +521,3 @@ end
 
 -- Last, so a file that threw partway through is not marked installed.
 lib.engineMinor = MINOR
-lib.fileMinors.Engine = MINOR

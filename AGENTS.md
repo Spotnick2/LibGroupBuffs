@@ -38,6 +38,13 @@ Vanilla content, Retail codebase.
 
 ## Layout
 
+- **`lib.Status(needsMinor)`** answers "is this copy usable?", so a consumer stops carrying the
+  library's internals: `"ok"`, `"incomplete"` (a file did not finish, or an older copy's record
+  survives under a newer active MINOR) or `"too-old"` (complete, just behind - nothing crashed, and
+  a host must not say otherwise), plus the active MINOR for the host's message. `Compat.lua`
+  declares `lib.FILES`, the list this copy consists of, and the LAST file the XML loads installs
+  `Status`, so its own absence answers for a copy whose last file threw. **A new runtime file must
+  be added to `lib.FILES`** - and then no consumer needs editing.
 - `Compat.lua` — `lib.API`, every removed or moved API. **Nothing outside this file may call a
   moved API directly.**
 - `LibGroupBuffs-1.0.xml` — load order; the entry point a consuming addon references. It lists
@@ -134,7 +141,8 @@ Vanilla content, Retail codebase.
   checks `LibStub:GetLibrary(MAJOR)` reports its own `MINOR` (else an older copy is loading after a
   newer one) and that it has not installed already (`lib.settingsMinor == MINOR`: equal after
   equal, where reinstalling would replace functions consumers hold). It records that marker as its
-  **last** line, so a file that threw partway is not marked installed. `Compat.lua` does the same
+  **last** line, so a file that threw partway is not marked installed, and records itself in
+  `lib.fileMinors` beside that marker, which is what `lib.Status` reads. `Compat.lua` does the same
   with `compatMinor`. **A consumer checks every marker EQUALS the active MINOR** (the second value
   `LibStub("LibGroupBuffs-1.0", true)` returns), never merely that it is set: when a newer copy
   throws partway, the older copy's markers and functions are still on the shared table.
