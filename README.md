@@ -137,6 +137,8 @@ local ui = LibStub("LibGroupBuffs-1.0").UI.New({
     setPos = function(pos) settings:Set("pos", pos) end,
 })
 ui:Open(0.5)                        -- from PLAYER_LOGIN, when your addon wants it shown
+-- Open coalesces: call it from every event that should show the window. A burst is one
+-- rebuild, and the soonest request wins.
 -- and from events: ui:ScheduleRefresh(), ui:OnCombatEnd(), ui:Close(manual) ...
 ```
 
