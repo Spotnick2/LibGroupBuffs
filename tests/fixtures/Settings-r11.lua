@@ -31,7 +31,7 @@
 -- claims the version, so this file only installs when that claim is ours:
 -- older after newer, the active MINOR is not ours; equal after equal, it is
 -- already installed and reinstalling would replace functions others hold.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 12
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 11
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.settingsMinor == MINOR then return end
@@ -229,4 +229,3 @@ end
 
 -- Last, so a file that threw partway through is not marked installed.
 lib.settingsMinor = MINOR
-lib.fileMinors.Settings = MINOR
