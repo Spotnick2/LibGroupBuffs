@@ -46,7 +46,12 @@ function WoW.reset()
     WoW.time        = 10000
     WoW.inCombat    = false
     WoW.secret      = false      -- C_Secrets.ShouldAurasBeSecret()
-    WoW.build       = "69913"
+    -- The CLIENT's build, not any host's measuredOnBuild. Hosts re-probe at
+    -- different times - one can be sitting on an older measured build on
+    -- purpose, with its login notice firing - and a stub that follows a host
+    -- would then model a client nobody is running. .build.info in the World
+    -- of Warcraft root names the installed build without launching the game.
+    WoW.build       = "69977"    -- 1.60.1.69977, built Sep 22 2026
     WoW.locale      = "enUS"
     WoW.units       = {}         -- [unit] = { name, guid, class, connected, dead, level }
     WoW.auras       = {}         -- [unit] = { auraData, ... }
@@ -507,7 +512,7 @@ NUM_BAG_SLOTS = 4                -- measured on this client
 
 function GetTime() return WoW.time end
 function GetLocale() return WoW.locale end
-function GetBuildInfo() return "1.60.1", WoW.build, "Sep 17 2026", 16001 end
+function GetBuildInfo() return "1.60.1", WoW.build, "Sep 22 2026", 16001 end
 function InCombatLockdown() return WoW.inCombat end
 -- NOT defined on purpose: MouseIsOver does not exist on this client. The stub
 -- must model the client's absences, not just its presences - defining it here

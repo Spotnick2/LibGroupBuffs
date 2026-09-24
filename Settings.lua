@@ -15,7 +15,7 @@
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
 --         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         svBrokenOnBuild = "69913",
+--         svBrokenOnBuild = "69977",     -- they are independent; see below
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })

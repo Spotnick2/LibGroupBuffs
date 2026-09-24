@@ -114,6 +114,11 @@ Vanilla content, Retail codebase.
     work after the file has run, which is the only order a host has. Keeping a copy is what let
     Priestly's drift out of the combat refusal model, so every refusal measured here is measured
     once. `tests/test_stub.lua` is that contract: the seam and the returns hosts read.
+    `WoW.build`'s default is the **installed client's** build (`.build.info` in the World of
+    Warcraft root names it without launching the game), never a host's `measuredOnBuild`: hosts
+    re-probe at different times, and one can be sitting on an older measured build deliberately,
+    with its login notice firing. Bump it here when the client moves, and the date in
+    `GetBuildInfo` with it.
 - `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the
   packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
   `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is

@@ -43,6 +43,22 @@ WoW.SetPlayerDefaults({ name = "Priestly Testcase", class = "PRIEST", level = 20
 WoW.reset()
 
 ------------------------------------------------------------
+-- The build the stub models
+------------------------------------------------------------
+
+-- Hosts assert this against their own pinned build, so it is part of the
+-- contract rather than a detail. It is the CLIENT's build: a host that has
+-- not re-probed a new client yet keeps an older measuredOnBuild on purpose,
+-- and the stub must not follow it there - every test file runs under this
+-- default, and it should show them what a player sees.
+WoW.reset()
+H.eq(WoW.build, "69977", "the stub models the installed client build")
+H.eq(select(2, GetBuildInfo()), "69977", "which is what GetBuildInfo reports")
+H.eq(select(3, GetBuildInfo()), "Sep 22 2026", "with that build's date, not an older one")
+WoW.build = "70000"
+H.eq(select(2, GetBuildInfo()), "70000", "and a test can move it")
+
+------------------------------------------------------------
 -- The allow-list, after strictGlobals is already installed
 ------------------------------------------------------------
 
