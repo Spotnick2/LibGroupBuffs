@@ -101,7 +101,7 @@ local function Fixtures(minor)
     end
     return out
 end
-local R7, R8, R9, R10, R11, R12 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12)
+local R7, R8, R9, R10, R11, R12, R13 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12), Fixtures(13)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -170,7 +170,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -251,6 +251,40 @@ H.check(type(lib.API.eventFailuresByOwner) == "table", "including per-consumer f
 H.check(type(lib.Settings.New) == "function", "and Settings")
 H.check(lib.API.eventFailures == failures, "keeping r2's failure table, not replacing it")
 H.eq(lib.API.eventFailures.PROBE, "recorded by r2", "or what r2 recorded in it")
+
+------------------------------------------------------------
+-- A newer copy after r13: the load check changes behaviour, not just shape.
+--
+-- r13 trusted a returning marker on every build but svBrokenOnBuild, so a
+-- relog to character select on any other build announced a fix. A copy that
+-- kept MINOR 13 would return early here and leave that running; the object
+-- r13 made must run the new rule once the newer copy loads.
+------------------------------------------------------------
+
+freshLibStub()
+load(R13, "r13")
+lib = LibStub("LibGroupBuffs-1.0")
+local r13Said = {}
+local r13Store = {}
+local r13Settings = lib.Settings.New({
+    owner = "Priestly", report = function(text) r13Said[#r13Said + 1] = text end,
+    measuredOnBuild = WoW.build, svBrokenOnBuild = "1",
+    scopes = { { label = "per-character", get = function() return r13Store end } },
+})
+r13Store.svLoadCheck = { stamp = "then", build = WoW.build }
+r13Settings:CheckLoad(true)
+H.eq(#r13Said, 1, "r13 announces a marker back on the same build - the relog false positive")
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "newer-after-r13 claims the library")
+H.eq(lib.settingsMinor, CURRENT, "and installs its Settings")
+r13Said = {}
+r13Store.svLoadCheck = { stamp = "then", build = WoW.build }
+r13Settings:CheckLoad(true)
+H.eq(#r13Said, 0, "and the object r13 made stops announcing a same-build marker")
+r13Store.svLoadCheck = { stamp = "then", build = "1" }
+r13Settings:CheckLoad(true)
+H.eq(#r13Said, 1, "while a marker from another build is still the fix")
 
 ------------------------------------------------------------
 -- A settings object made by one copy runs the next copy's methods.

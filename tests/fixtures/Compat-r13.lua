@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 14
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 13
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 

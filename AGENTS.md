@@ -103,6 +103,16 @@ Vanilla content, Retail codebase.
     wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
     this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
+- `Settings` — whether saved settings came back is decided by **the marker's own build**, not by
+  any constant. The marker records the build it was written on; a build only changes when the
+  client is patched, and applying a patch requires a full exit, so a marker returning under a
+  *different* build cannot be the client's in-process cache. Same build says nothing — that is
+  what a relog to character select looks like, and no clock helps, since `GetTime` here is system
+  uptime and does not reset across a restart. Once a restart has proven loading, the marker
+  latches `loads` and carries it while it keeps coming back, so later patches on a healthy client
+  say nothing. A regression drops the marker, and the latch with it, so the next fix is announced
+  again. Each scope names its own marker's build. `svBrokenSince` / `svBrokenOnBuild` are
+  accepted and **unused**; hosts may drop them.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. Two files are also used by consumers, `dofile`d from their

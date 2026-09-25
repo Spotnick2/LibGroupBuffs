@@ -15,7 +15,7 @@
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
 --         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         -- svBrokenSince / svBrokenOnBuild are accepted and no longer used; see CheckLoad
+--         svBrokenOnBuild = "69913",
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })
@@ -31,7 +31,7 @@
 -- claims the version, so this file only installs when that claim is ours:
 -- older after newer, the active MINOR is not ours; equal after equal, it is
 -- already installed and reinstalling would replace functions others hold.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 14
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 13
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.settingsMinor == MINOR then return end
@@ -63,17 +63,9 @@ function Settings.New(spec)
     if spec.onChanged ~= nil and type(spec.onChanged) ~= "function" then
         Fail("onChanged must be a function or nil")
     end
-    if type(spec.measuredOnBuild) ~= "string" or spec.measuredOnBuild == "" then
-        Fail("measuredOnBuild must be a build number string")
-    end
-    -- Which build loading is broken on is no longer part of the decision:
-    -- the marker carries the build it was written on, and that settles it
-    -- (CheckLoad). Both names stay ACCEPTED so the three addons that pass one
-    -- keep working until they drop it, and a wrong TYPE is still refused -
-    -- silence about a field you passed is worse than an error.
-    for _, key in ipairs({ "svBrokenSince", "svBrokenOnBuild" }) do
-        if spec[key] ~= nil and (type(spec[key]) ~= "string" or spec[key] == "") then
-            Fail(key .. " must be a build number string (it is no longer used; you may drop it)")
+    for _, key in ipairs({ "measuredOnBuild", "svBrokenOnBuild" }) do
+        if type(spec[key]) ~= "string" or spec[key] == "" then
+            Fail(key .. " must be a build number string")
         end
     end
     if type(spec.scopes) ~= "table" or #spec.scopes == 0 then
@@ -93,6 +85,7 @@ function Settings.New(spec)
         report = spec.report,
         onChanged = spec.onChanged,
         measuredOnBuild = spec.measuredOnBuild,
+        svBrokenOnBuild = spec.svBrokenOnBuild,
     }, lib.SettingsMeta)
 end
 
@@ -165,97 +158,43 @@ end
 --     Never announced (`announce` is false).
 --   * Logging out to character select and back in is an initial login in the
 --     same process, and can be served from the same cache. Lua cannot tell it
---     from a real start, and no clock helps: GetTime on this client is system
---     uptime, not client uptime, so it does not reset across a restart either.
---   * Every login after a real fix, and every later patch. The marker
---     latches `loads` once a restart has proven loading works, and carries it
---     forward for as long as it keeps coming back.
+--     from a real start. So on svBrokenOnBuild - the build where loading is
+--     measured broken - a returning marker is treated as that cache and
+--     ignored. The fix needs a client patch, and a patch changes the build.
+--   * Every login after a real fix. The announcement is latched in the marker,
+--     which by then persists.
 --
--- THE MARKER ANSWERS THIS ITSELF, and no constant is needed for it.
---
--- It records the build it was written on. A build only changes when the
--- client is patched, and applying a patch requires a full exit - so a marker
--- that comes back carrying a DIFFERENT build than the one now running cannot
--- have come from the cache. That process is gone. It was read from disk, and
--- loading works.
---
--- The same build is the ambiguous case, and stays silent: it is what a relog
--- to character select looks like, and it is also what a healthy client looks
--- like session after session. Nothing is lost by saying nothing there. The
--- transition this check exists to catch - broken, then fixed - always arrives
--- WITH a patch, so it always arrives as a build change.
---
--- What this replaces, and why it was wrong in both directions: trusting any
--- build except one named constant announced a fix on every relog (#27, three
--- addons at once, on 69913 -> 69977, which patched WITHOUT fixing loading).
--- Presuming broken from a constant onward then took the noise away but left
--- the detector needing a human to re-measure and ship a new constant before
--- it could ever speak. This needs neither: it is the one comparison that is
--- actually decisive, and it is in data the addon already writes.
-local function Marker(holder)
-    local previous = holder[Settings.LOAD_CHECK_KEY]
-    if type(previous) ~= "table" or previous.stamp == nil then return nil end
-    return previous
-end
-
--- A marker written by a build other than the one running now survived a
--- client restart. That proves loading works now, not that it was ever broken:
--- the first such marker is the fix, and the `loads` latch keeps each later
--- patch on a healthy client from announcing it again. An older copy of this library may not have stamped a build
--- at all; unknown is not evidence, so it stays silent.
-local function CrossedARestart(previous, build)
-    return previous ~= nil and build ~= nil
-        and type(previous.build) == "string" and previous.build ~= ""
-        and previous.build ~= build
-end
-
+-- On a newer build a relog is still indistinguishable, so the message says
+-- what it means under each procedure rather than claiming the fix.
 function Methods:CheckLoad(announce)
     local build = CurrentBuild()
+    local trustworthy = announce and build ~= nil and build ~= self.svBrokenOnBuild
     local key = Settings.LOAD_CHECK_KEY
 
     local cameBack = {}
     for _, scope in ipairs(self.scopes) do
         local holder = scope.get()
         if type(holder) == "table" then
-            local previous = Marker(holder)
-            local crossed = CrossedARestart(previous, build)
-            local proven = previous ~= nil and previous.loads == true
-            if announce and crossed and not proven then
-                cameBack[#cameBack + 1] = { label = scope.label, build = previous.build }
-            end
-            -- Rewritten with the build running NOW, which is what stops this
-            -- repeating within a build: every later login reads its own build
-            -- back. `loads` stops it repeating across builds: once a restart
-            -- has proven loading, the next patch on a healthy client is not
-            -- news. It lives only as long as the marker keeps coming back, so
-            -- a REGRESSION clears it - the marker stops loading, a fresh one
-            -- is written without it - and the fix after that speaks again.
-            -- A /reload never sets it: it cannot follow a patch, so it would
-            -- latch a claim nobody was told.
+            local previous = holder[key]
+            local back = type(previous) == "table" and previous.stamp ~= nil
+            local already = back and previous.announced == true
+            local tell = trustworthy and back and not already
+            if tell then cameBack[#cameBack + 1] = scope.label end
             holder[key] = {
                 stamp = (type(date) == "function" and date("%Y-%m-%d %H:%M:%S")) or "?",
                 build = build,
-                loads = (proven or (announce and crossed)) or nil,
+                announced = (already or tell) or nil,
             }
         end
     end
     self:Changed(key)
 
-    if #cameBack == 0 then return end
-    local labels, builds, oneBuild = {}, {}, true
-    for i, entry in ipairs(cameBack) do
-        labels[i] = entry.label
-        builds[i] = entry.build .. " (" .. entry.label .. ")"
-        if entry.build ~= cameBack[1].build then oneBuild = false end
+    if #cameBack > 0 then
+        self.report("Saved settings came back (" .. table.concat(cameBack, " and ")
+            .. ", build " .. tostring(build) .. "). If you fully exited the game since you "
+            .. "last played, the settings bug is fixed. After only a relog or /reload this "
+            .. "proves nothing.", "settingsLoaded")
     end
-    -- Each scope's marker carries its own build: one character can last have
-    -- played on an older build than the account-wide table another updated.
-    local saved = oneBuild and ("game build " .. cameBack[1].build)
-        or ("game builds " .. table.concat(builds, " and "))
-    self.report("Saved settings came back (" .. table.concat(labels, " and ")
-        .. "). They were saved on " .. saved .. " and read back on " .. tostring(build)
-        .. ", so the game was fully restarted in between - the settings bug is fixed.",
-        "settingsLoaded")
 end
 
 -- --- Which build were the findings measured on? -----------------------------
