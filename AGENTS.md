@@ -103,13 +103,13 @@ Vanilla content, Retail codebase.
     wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
     this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
-- `Settings` — `svBrokenSince` means "loading is broken from this build **on**", not "on this one
-  build". Broken is the default, because a relog to character select is served from the client's
-  cache and cannot be told from a real start — no clock helps, since `GetTime` here is system
-  uptime and does not reset across a restart. Past that build a returning marker is reported as
-  **unproven**, with the kind `settingsUnverified`, which no host styles green; `settingsLoaded`
-  is gone, so a host's green branch is dead code to delete. `svBrokenOnBuild` is still accepted as
-  the old name.
+- `Settings` — whether saved settings came back is decided by **the marker's own build**, not by
+  any constant. The marker records the build it was written on; a build only changes when the
+  client is patched, and applying a patch requires a full exit, so a marker returning under a
+  *different* build cannot be the client's in-process cache. Same build says nothing — that is
+  what a relog to character select looks like, and no clock helps, since `GetTime` here is system
+  uptime and does not reset across a restart. `svBrokenSince` / `svBrokenOnBuild` are accepted and
+  **unused**; hosts may drop them.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. Two files are also used by consumers, `dofile`d from their

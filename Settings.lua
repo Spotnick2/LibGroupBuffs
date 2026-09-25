@@ -15,7 +15,7 @@
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
 --         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         svBrokenSince   = "69977",     -- loading broken from this build ON
+--         -- svBrokenSince is accepted and no longer used; see CheckLoad
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })
@@ -66,17 +66,15 @@ function Settings.New(spec)
     if type(spec.measuredOnBuild) ~= "string" or spec.measuredOnBuild == "" then
         Fail("measuredOnBuild must be a build number string")
     end
-    -- svBrokenOnBuild was the name when this meant a SINGLE build. It means
-    -- "from this build on" now (#27) - which is what every host's value
-    -- already said in practice, so the alias needs no host change. Both at
-    -- once is ambiguous rather than harmless: they would disagree the moment
-    -- one of them moved.
-    if spec.svBrokenSince ~= nil and spec.svBrokenOnBuild ~= nil then
-        Fail("pass svBrokenSince or svBrokenOnBuild, not both - svBrokenSince is the name")
-    end
-    local brokenSince = spec.svBrokenSince or spec.svBrokenOnBuild
-    if type(brokenSince) ~= "string" or brokenSince == "" then
-        Fail("svBrokenSince must be a build number string")
+    -- Which build loading is broken on is no longer part of the decision:
+    -- the marker carries the build it was written on, and that settles it
+    -- (CheckLoad). Both names stay ACCEPTED so the three addons that pass one
+    -- keep working until they drop it, and a wrong TYPE is still refused -
+    -- silence about a field you passed is worse than an error.
+    for _, key in ipairs({ "svBrokenSince", "svBrokenOnBuild" }) do
+        if spec[key] ~= nil and (type(spec[key]) ~= "string" or spec[key] == "") then
+            Fail(key .. " must be a build number string (it is no longer used; you may drop it)")
+        end
     end
     if type(spec.scopes) ~= "table" or #spec.scopes == 0 then
         Fail("scopes must list at least one saved table; the first is the settings store")
@@ -95,7 +93,6 @@ function Settings.New(spec)
         report = spec.report,
         onChanged = spec.onChanged,
         measuredOnBuild = spec.measuredOnBuild,
-        svBrokenSince = brokenSince,
     }, lib.SettingsMeta)
 end
 
@@ -173,51 +170,66 @@ end
 --   * Every login after a real fix. The announcement is latched in the marker,
 --     which by then persists - per build, so a later build can speak again.
 --
--- Since the relog cannot be ruled out, BROKEN IS THE DEFAULT and stays so from
--- svBrokenSince onward. This used to be equality against a single build, on
--- the reasoning that "the fix needs a client patch, and a patch changes the
--- build" - which holds in one direction only. A patch that does NOT fix
--- loading also changes the build: 69913 -> 69977 arrived with the bug intact,
--- and until each addon re-measured and shipped, every relog announced a fix
--- that never happened, in three of them at once (#27).
+-- THE MARKER ANSWERS THIS ITSELF, and no constant is needed for it.
 --
--- A build past svBrokenSince is therefore unproven, not fixed, and the message
--- says exactly that: no claim, and a plain `kind` a host has no green styling
--- for. Whoever reads it can do the one thing this code cannot - exit the game
--- fully, come back, and see.
--- Builds compare as numbers; anything that will not is treated as broken, so
--- a build string this code did not expect loses an announcement rather than
--- inventing one.
-local function BuildNumber(build)
-    return tonumber(tostring(build or ""):match("^%d+$") or "")
+-- It records the build it was written on. A build only changes when the
+-- client is patched, and applying a patch requires a full exit - so a marker
+-- that comes back carrying a DIFFERENT build than the one now running cannot
+-- have come from the cache. That process is gone. It was read from disk, and
+-- loading works.
+--
+-- The same build is the ambiguous case, and stays silent: it is what a relog
+-- to character select looks like, and it is also what a healthy client looks
+-- like session after session. Nothing is lost by saying nothing there. The
+-- transition this check exists to catch - broken, then fixed - always arrives
+-- WITH a patch, so it always arrives as a build change.
+--
+-- What this replaces, and why it was wrong in both directions: trusting any
+-- build except one named constant announced a fix on every relog (#27, three
+-- addons at once, on 69913 -> 69977, which patched WITHOUT fixing loading).
+-- Presuming broken from a constant onward then took the noise away but left
+-- the detector needing a human to re-measure and ship a new constant before
+-- it could ever speak. This needs neither: it is the one comparison that is
+-- actually decisive, and it is in data the addon already writes.
+local function Marker(holder)
+    local previous = holder[Settings.LOAD_CHECK_KEY]
+    if type(previous) ~= "table" or previous.stamp == nil then return nil end
+    return previous
 end
 
-function Methods:PresumedBroken(build)
-    local now, since = BuildNumber(build), BuildNumber(self.svBrokenSince)
-    if not now or not since then return true end
-    return now <= since
+-- A marker written by a build other than the one running now survived a
+-- client restart. An older copy of this library may not have stamped a build
+-- at all; unknown is not evidence, so it stays silent.
+local function CrossedARestart(previous, build)
+    return previous ~= nil and build ~= nil
+        and type(previous.build) == "string" and previous.build ~= ""
+        and previous.build ~= build
 end
 
 function Methods:CheckLoad(announce)
     local build = CurrentBuild()
-    local trustworthy = announce and build ~= nil and not self:PresumedBroken(build)
     local key = Settings.LOAD_CHECK_KEY
 
-    local cameBack = {}
+    local cameBack, wrote = {}, nil
     for _, scope in ipairs(self.scopes) do
         local holder = scope.get()
         if type(holder) == "table" then
-            local previous = holder[key]
-            local back = type(previous) == "table" and previous.stamp ~= nil
-            -- Latched per build: said once here, and again on a later build,
-            -- which is a different claim about a different client.
-            local already = back and previous.announced == build
-            local tell = trustworthy and back and not already
-            if tell then cameBack[#cameBack + 1] = scope.label end
+            local previous = Marker(holder)
+            local tell = announce and CrossedARestart(previous, build)
+            if tell then
+                cameBack[#cameBack + 1] = scope.label
+                wrote = previous.build
+            end
+            -- Rewritten with the build running NOW, which is what stops this
+            -- repeating: every later login this session reads its own build
+            -- back and has nothing to report. No separate latch flag - the
+            -- one here was dead, since a marker cannot both be rewritten and
+            -- still carry an older build. The next patch hands it back from
+            -- this build and says so again, which is also what keeps a
+            -- REGRESSION visible: if loading breaks, it stops coming back.
             holder[key] = {
                 stamp = (type(date) == "function" and date("%Y-%m-%d %H:%M:%S")) or "?",
                 build = build,
-                announced = ((already or tell) and build) or nil,
             }
         end
     end
@@ -225,9 +237,9 @@ function Methods:CheckLoad(announce)
 
     if #cameBack > 0 then
         self.report("Saved settings came back (" .. table.concat(cameBack, " and ")
-            .. ", build " .. tostring(build) .. "). This build has not been checked. If you "
-            .. "fully exited the game since you last played rather than relogging, that is "
-            .. "news - please report it.", "settingsUnverified")
+            .. "). They were saved on game build " .. tostring(wrote) .. " and read back on "
+            .. tostring(build) .. ", so the game was fully restarted in between - the settings "
+            .. "bug is fixed.", "settingsLoaded")
     end
 end
 

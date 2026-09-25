@@ -150,10 +150,10 @@ local function freshSession(build, opts)
     return Host("Priestly", opts)
 end
 
--- Today: broken build, nothing loaded. Nothing announced, markers written.
+-- Today: loading broken, nothing came back. Nothing announced, markers written.
 h = freshSession(BROKEN)
 h.settings:HandleEnteringWorld(true, false)
-H.eq(#h.said, 0, "no marker at login, nothing announced - today's state")
+H.eq(saidKind(h, "settingsLoaded"), "", "no marker at login, nothing announced")
 H.check(type(h.char.svLoadCheck) == "table", "the first scope's marker is written")
 H.check(type(h.account.svLoadCheck) == "table", "and the second's")
 H.eq(h.char.svLoadCheck.build, BROKEN, "with the build it was written on")
@@ -161,12 +161,13 @@ local reports = 0
 for _, key in ipairs(h.changed) do if key == "svLoadCheck" then reports = reports + 1 end end
 H.eq(reports, 1, "reported once for all scopes, not once per scope")
 
--- The broken build with the marker still in memory: a relog or /reload served
--- from the client's cache. Neither may announce.
+-- The marker back on the SAME build: a relog to character select, or a
+-- healthy client on an ordinary day. Indistinguishable, so it says nothing.
 h.settings:HandleEnteringWorld(true, false)
-H.eq(#h.said, 0, "on the broken build a returning marker is the client's cache, not a fix")
+H.eq(saidKind(h, "settingsLoaded"), "",
+    "a marker returning on the same build could be the client's cache, so it is not news")
 h.settings:HandleEnteringWorld(false, true)
-H.eq(#h.said, 0, "and a /reload never announces")
+H.eq(saidKind(h, "settingsLoaded"), "", "and a /reload never announces")
 
 local marker = h.char.svLoadCheck
 h.settings:HandleEnteringWorld(false, false)
@@ -174,104 +175,101 @@ H.check(h.char.svLoadCheck == marker, "a zone change leaves the marker alone")
 h.settings:HandleEnteringWorld(false, true)
 H.check(h.char.svLoadCheck ~= marker, "a /reload renews it")
 
--- A build BEHIND the one loading broke on is presumed broken too. Nothing
--- was ever measured there, and a relog on it looks the same as everywhere
--- else - a player who has not updated must not be told the bug is gone.
-h = freshSession(OLDER)
-h.char = { svLoadCheck = { stamp = "then", build = OLDER } }
-h.settings:HandleEnteringWorld(true, false)
--- The build notice fires here too - it is a different detector, and this
--- build is not the measured one either - so ask about the settings message.
-H.eq(saidKind(h, "settingsUnverified"), "",
-    "a build older than svBrokenSince announces nothing either")
-
--- A build PAST it: unproven, not fixed. Something is said, because a real fix
--- is worth catching, but it claims nothing and carries no green kind.
-h = freshSession(BROKEN)
-h.settings:HandleEnteringWorld(true, false)
+-- The fix, and the only thing that proves it: the marker comes back carrying
+-- a DIFFERENT build. A build only changes when the client is patched, and
+-- applying a patch requires a full exit - so the process that held the cache
+-- is gone, and this was read from disk.
 WoW.build = FIXED
 h.settings:HandleEnteringWorld(true, false)
-local msg = saidKind(h, "settingsUnverified")
+local msg = saidKind(h, "settingsLoaded")
 H.check(msg:find("came back", 1, true),
-    "a returning marker on a newer build is reported, tagged for the host: " .. msg)
-H.check(msg:find("has not been checked", 1, true), "as unchecked, not as a fix: " .. msg)
-H.check(not msg:find("the settings bug is fixed", 1, true),
-    "never claiming the fix, which a relog would fake: " .. msg)
-H.check(msg:find("fully exited", 1, true) and msg:find("rather than relogging", 1, true),
-    "naming the one procedure that would make it news: " .. msg)
-H.check(msg:find("report", 1, true), "and asking for that report: " .. msg)
+    "a marker written on an earlier build is the fix, announced: " .. msg)
+H.check(msg:find(BROKEN, 1, true) and msg:find(FIXED, 1, true),
+    "naming the build it was saved on and the one it was read on: " .. msg)
+H.check(msg:find("fully restarted", 1, true),
+    "and why that settles it - the game restarted in between: " .. msg)
+H.check(msg:find("is fixed", 1, true), "so it can say so plainly: " .. msg)
 H.check(msg:find("per-character", 1, true) and msg:find("account-wide", 1, true),
     "naming the scopes that came back: " .. msg)
-H.check(msg:find(FIXED, 1, true), "and the build: " .. msg)
 H.check(not msg:find("|c", 1, true), "plain text: colour is the host's business")
-H.eq(saidKind(h, "settingsLoaded"), "",
-    "the old kind is gone, so a host's green styling cannot fire on a guess")
 
--- Once per build: the latch persists by then, because the store works.
+-- Once: the marker is rewritten with the build running now, so every later
+-- login this session reads its own build back and has nothing to report.
 local n = #h.said
 h.settings:HandleEnteringWorld(true, false)
 local repeated = false
-for i = n + 1, #h.said do
-    if h.said[i].kind == "settingsUnverified" then repeated = true end
-end
+for i = n + 1, #h.said do if h.said[i].kind == "settingsLoaded" then repeated = true end end
 H.check(not repeated, "it does not repeat at the next login on that build")
+H.eq(h.char.svLoadCheck.build, FIXED, "because the marker now carries the current build")
 
--- But a LATER build is a different claim about a different client, so the
--- latch does not carry over. This is what the old single-build check got
--- wrong in the other direction: a patch that does not fix loading also
--- changes the build.
+-- The next patch hands it back again, from the build before it. Still true,
+-- still worth saying once - and it is what keeps a REGRESSION visible: if a
+-- patch breaks loading again, the marker simply stops coming back.
 WoW.build = "70500"
 n = #h.said
 h.settings:HandleEnteringWorld(true, false)
 msg = ""
 for i = n + 1, #h.said do
-    if h.said[i].kind == "settingsUnverified" then msg = h.said[i].text end
+    if h.said[i].kind == "settingsLoaded" then msg = h.said[i].text end
 end
-H.check(msg:find("70500", 1, true), "a later build asks again, naming it: " .. msg)
+H.check(msg:find("70500", 1, true) and msg:find(FIXED, 1, true),
+    "a later patch says it again, naming both builds: " .. msg)
+
+-- Not even one that WOULD be news. A /reload cannot follow a patch without a
+-- login in between, so this is insurance rather than a live case: whatever
+-- calls CheckLoad later, the rule stays "never on a /reload".
+do
+    local r = freshSession(FIXED)
+    r.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    r.settings:HandleEnteringWorld(false, true)
+    H.eq(saidKind(r, "settingsLoaded"), "",
+        "a /reload stays silent even holding a marker from an earlier build")
+end
+
+-- A marker with NO build: written by an older copy of this library, before it
+-- stamped one. Unknown is not evidence.
+h = freshSession(FIXED)
+h.char = { svLoadCheck = { stamp = "then" } }
+h.settings:HandleEnteringWorld(true, false)
+H.eq(saidKind(h, "settingsLoaded"), "", "a marker with no build announces nothing")
 
 -- One scope coming back on its own is worth knowing.
 h = freshSession(FIXED)
-h.account = { svLoadCheck = { stamp = "then", build = FIXED } }
+h.account = { svLoadCheck = { stamp = "then", build = BROKEN } }
 h.settings:HandleEnteringWorld(true, false)
-msg = saidKind(h, "settingsUnverified")
+msg = saidKind(h, "settingsLoaded")
 H.check(msg:find("account-wide", 1, true) and not msg:find("per-character", 1, true),
-    "a fix to one scope alone is reported as that: " .. msg)
+    "a scope that came back alone is reported as that: " .. msg)
 
 -- An unreadable build is not evidence of anything.
 h = freshSession(FIXED)
-h.char = { svLoadCheck = { stamp = "then" } }
+h.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
 local realClientBuild = lib.API.ClientBuild
-lib.API.ClientBuild = function() return "?" end    -- GetBuildInfo failed
+lib.API.ClientBuild = function() return nil end    -- GetBuildInfo failed
 h.settings:HandleEnteringWorld(true, false)
-H.eq(#h.said, 0, "an unknown build announces nothing")
+H.eq(saidKind(h, "settingsLoaded"), "", "an unknown build announces nothing")
 lib.API.ClientBuild = realClientBuild
 
 -- A host with one account-wide table, like Wildly and Magely: the marker lives
 -- in the settings store itself.
 h = freshSession(FIXED, { oneScope = true })
-h.char = { svLoadCheck = { stamp = "then" } }
+h.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
 h.settings:HandleEnteringWorld(true, false)
-H.check(saidKind(h, "settingsUnverified"):find("came back", 1, true),
+H.check(saidKind(h, "settingsLoaded"):find("came back", 1, true),
     "a single-scope host is checked the same way")
 
--- A build string that will not compare is presumed broken, not assumed newer.
-h = freshSession(FIXED)
-h.char = { svLoadCheck = { stamp = "then" } }
-local realBuild = lib.API.ClientBuild
-lib.API.ClientBuild = function() return "1.60.1-ptr" end
-h.settings:HandleEnteringWorld(true, false)
-H.eq(saidKind(h, "settingsUnverified"), "", "a build that is not a number announces nothing")
-lib.API.ClientBuild = realBuild
-
--- The old spec name still works, because three addons pin their own tags and
--- adopt on their own schedule. Both names at once is refused instead.
+-- The old constants are accepted and ignored, so the three addons that still
+-- pass one keep working; a wrong type is still refused, because silence about
+-- a field you passed is worse than an error.
 h = freshSession(FIXED, { specAlias = true })
-h.char = { svLoadCheck = { stamp = "then" } }
+h.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
 h.settings:HandleEnteringWorld(true, false)
-H.check(saidKind(h, "settingsUnverified"):find("came back", 1, true),
-    "svBrokenOnBuild is accepted as the old name for svBrokenSince")
-H.check(not pcall(Settings.New, spec({ svBrokenSince = "1", svBrokenOnBuild = "1" })),
-    "but not both at once, which would disagree the moment one moved")
+H.check(saidKind(h, "settingsLoaded"):find("came back", 1, true),
+    "a host still passing svBrokenOnBuild is unaffected")
+H.check(pcall(Settings.New, spec({ svBrokenSince = nil, svBrokenOnBuild = nil })),
+    "and a host that has dropped it entirely builds")
+H.check(not pcall(Settings.New, spec({ svBrokenSince = 7 })),
+    "but a non-string is refused rather than silently ignored")
 
 ------------------------------------------------------------
 -- The build watch
