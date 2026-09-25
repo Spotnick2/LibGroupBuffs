@@ -15,7 +15,7 @@
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
 --         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         -- svBrokenSince is accepted and no longer used; see CheckLoad
+--         -- svBrokenSince / svBrokenOnBuild are accepted and no longer used; see CheckLoad
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })
