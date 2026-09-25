@@ -46,7 +46,12 @@ function WoW.reset()
     WoW.time        = 10000
     WoW.inCombat    = false
     WoW.secret      = false      -- C_Secrets.ShouldAurasBeSecret()
-    WoW.build       = "69913"
+    -- The CLIENT's build, not any host's measuredOnBuild. Hosts re-probe at
+    -- different times - one can be sitting on an older measured build on
+    -- purpose, with its login notice firing - and a stub that follows a host
+    -- would then model a client nobody is running. .build.info in the World
+    -- of Warcraft root names the installed build without launching the game.
+    WoW.build       = "70009"    -- 1.60.1.70009, built Sep 23 2026
     WoW.locale      = "enUS"
     WoW.units       = {}         -- [unit] = { name, guid, class, connected, dead, level }
     WoW.auras       = {}         -- [unit] = { auraData, ... }
@@ -103,6 +108,7 @@ function WoW.SetUnit(unit, info)
         -- Declared in the 69913 dump, never measured on this client. Tests
         -- that care set it; nothing should assume the live value.
         role      = info.role or "NONE",
+        realm     = info.realm,     -- set it to get 69913's joined-name shape
     }
     return WoW.units[unit]
 end
@@ -507,7 +513,7 @@ NUM_BAG_SLOTS = 4                -- measured on this client
 
 function GetTime() return WoW.time end
 function GetLocale() return WoW.locale end
-function GetBuildInfo() return "1.60.1", WoW.build, "Sep 17 2026", 16001 end
+function GetBuildInfo() return "1.60.1", WoW.build, "Sep 23 2026", 16001 end
 function InCombatLockdown() return WoW.inCombat end
 -- NOT defined on purpose: MouseIsOver does not exist on this client. The stub
 -- must model the client's absences, not just its presences - defining it here
@@ -556,13 +562,19 @@ function UnitIsDeadOrGhost(unit)
     local u = unitInfo(unit)
     return u ~= nil and u.dead
 end
--- Measured on build 69913: UnitName returns the joined name only for the
--- player. For any other unit it returns the FIRST name, with the surname where
--- the realm normally sits. GetUnitName is the one that joins them for both.
+-- UnitName's SECOND return is the realm slot, and what lands in it is the
+-- unsettled part. Measured on 70009: every unit, player included, comes back
+-- split - `"Karuzo", "Elegia"` - so the surname sits where the realm goes.
+-- Measured on 69913: the player alone came back joined, with a real realm
+-- second. Whether the client changed or the two runs sat on different realms
+-- is unresolved, so the stub does the 70009 reading by default and a test
+-- that gives a unit a `realm` gets the other - which is also the only way to
+-- model a real realm arriving there, for code doing `local name, realm = ...`.
+-- GetUnitName joins under both, which is what hosts actually read.
 function UnitName(unit)
     local u = unitInfo(unit)
     if not u then return nil end
-    if unit == "player" then return u.name end
+    if u.realm then return u.name, u.realm end
     local first, surname = u.name:match("^(%S+)%s+(%S+)$")
     if first then return first, surname end
     return u.name
@@ -621,7 +633,10 @@ function GetInstanceInfo()
     -- "none" - it does not return an empty name.
     local t = WoW.instanceType
     if not t then t = (WoW.instanceName == "" and "none") or "party" end
-    return WoW.instanceName, t, 0, "", 5, 0, false, 0, 0
+    -- Eleven returns, measured on 70009 (nine on 69913): the last two are
+    -- new. A stub that models the old arity is a stub that disagrees with the
+    -- client, which is the one thing this file must not do.
+    return WoW.instanceName, t, 0, "", 5, 0, false, 0, 0, nil, false
 end
 function GetRealZoneText() return WoW.instanceName end
 
