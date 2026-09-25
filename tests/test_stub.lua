@@ -54,7 +54,19 @@ WoW.reset()
 WoW.reset()
 H.eq(WoW.build, "70009", "the stub models the installed client build")
 H.eq(select(2, GetBuildInfo()), "70009", "which is what GetBuildInfo reports")
-H.eq(select(3, GetBuildInfo()), "Sep 23 2026", "with that build's date, not an older one")
+H.eq(select(3, GetBuildInfo()), "Sep 23 2026", "with the date that build reports")
+H.eq(select("#", GetInstanceInfo()), 11, "and GetInstanceInfo returns this client's tuple")
+
+-- The realm slot: 70009 splits every unit, 69913 joined for the player and
+-- gave a real realm. Unresolved which changed, so both are reachable.
+WoW.SetUnit("player", { name = "Karuzo Elegia" })
+local first, second = UnitName("player")
+H.eq(first .. "|" .. second, "Karuzo|Elegia", "UnitName splits, surname in the realm slot")
+WoW.SetUnit("player", { name = "Karuzo Elegia", realm = "ClassicBetaPvE" })
+first, second = UnitName("player")
+H.eq(first .. "|" .. second, "Karuzo Elegia|ClassicBetaPvE",
+    "and a unit given a realm comes back joined, the way 69913 read")
+H.eq(GetUnitName("player"), "Karuzo Elegia", "GetUnitName joins under both")
 WoW.build = "70000"
 H.eq(select(2, GetBuildInfo()), "70000", "and a test can move it")
 
