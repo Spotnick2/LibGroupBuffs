@@ -202,18 +202,78 @@ for i = n + 1, #h.said do if h.said[i].kind == "settingsLoaded" then repeated = 
 H.check(not repeated, "it does not repeat at the next login on that build")
 H.eq(h.char.svLoadCheck.build, FIXED, "because the marker now carries the current build")
 
--- The next patch hands it back again, from the build before it. Still true,
--- still worth saying once - and it is what keeps a REGRESSION visible: if a
--- patch breaks loading again, the marker simply stops coming back.
+-- The next patch hands it back again, from the build before it. True, but
+-- not news: the fix was announced, and saying "the settings bug is fixed" at
+-- every patch of a healthy client would be noise in every addon at once. The
+-- marker latched `loads` when the restart proved it, and carries it on.
+H.eq(h.char.svLoadCheck.loads, true, "the announced marker latches that loading works")
+local function saidSince(host, from)
+    local text = ""
+    for i = from + 1, #host.said do
+        if host.said[i].kind == "settingsLoaded" then text = host.said[i].text end
+    end
+    return text
+end
 WoW.build = "70500"
 n = #h.said
 h.settings:HandleEnteringWorld(true, false)
-msg = ""
-for i = n + 1, #h.said do
-    if h.said[i].kind == "settingsLoaded" then msg = h.said[i].text end
+H.eq(saidSince(h, n), "", "a later patch on a healthy client announces nothing")
+H.eq(h.char.svLoadCheck.loads, true, "and the latch carries on to the new marker")
+H.eq(h.char.svLoadCheck.build, "70500", "which carries the new build")
+
+-- A REGRESSION clears it: a patch that breaks loading again means the marker
+-- stops coming back, and the fresh one is written without the latch...
+WoW.build = "70600"
+h.char, h.account = nil, nil
+n = #h.said
+h.settings:HandleEnteringWorld(true, false)
+H.eq(saidSince(h, n), "", "a patch that breaks loading says nothing")
+H.eq(h.char.svLoadCheck.loads, nil, "and the new marker has no latch")
+-- ...so the fix after that is news again.
+WoW.build = "70700"
+n = #h.said
+h.settings:HandleEnteringWorld(true, false)
+msg = saidSince(h, n)
+H.check(msg:find("70600", 1, true) and msg:find("70700", 1, true) and msg:find("is fixed", 1, true),
+    "the next fix after a regression is announced: " .. msg)
+
+-- A /reload never latches: it cannot follow a patch, and a latch set there
+-- would silence a fix nobody was told about.
+do
+    local r = freshSession(FIXED)
+    r.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    r.settings:HandleEnteringWorld(false, true)
+    H.eq(r.char.svLoadCheck.loads, nil, "a /reload does not latch")
 end
-H.check(msg:find("70500", 1, true) and msg:find(FIXED, 1, true),
-    "a later patch says it again, naming both builds: " .. msg)
+
+-- Each scope names the build ITS marker was saved on. Character A last played
+-- on 69977; character B moved the account-wide marker to 70009; A comes back
+-- on 70500 with both markers from different builds.
+do
+    local m = freshSession("70500")
+    m.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    m.account = { svLoadCheck = { stamp = "then", build = FIXED } }
+    m.settings:HandleEnteringWorld(true, false)
+    local text = saidKind(m, "settingsLoaded")
+    H.check(text:find(BROKEN .. " (per-character)", 1, true)
+        and text:find(FIXED .. " (account-wide)", 1, true),
+        "scopes saved on different builds are each named with their own: " .. text)
+    local both = freshSession("70500")
+    both.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    both.account = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    both.settings:HandleEnteringWorld(true, false)
+    text = saidKind(both, "settingsLoaded")
+    H.check(text:find("saved on game build " .. BROKEN .. " and", 1, true),
+        "and scopes saved on one build share one: " .. text)
+    -- A scope that already proved itself stays quiet while another speaks.
+    local mixed = freshSession("70500")
+    mixed.char = { svLoadCheck = { stamp = "then", build = BROKEN } }
+    mixed.account = { svLoadCheck = { stamp = "then", build = FIXED, loads = true } }
+    mixed.settings:HandleEnteringWorld(true, false)
+    text = saidKind(mixed, "settingsLoaded")
+    H.check(text:find("per-character", 1, true) and not text:find("account-wide", 1, true),
+        "a scope already proven is left out of the news: " .. text)
+end
 
 -- Not even one that WOULD be news. A /reload cannot follow a patch without a
 -- login in between, so this is insurance rather than a live case: whatever

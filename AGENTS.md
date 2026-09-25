@@ -108,8 +108,11 @@ Vanilla content, Retail codebase.
   client is patched, and applying a patch requires a full exit, so a marker returning under a
   *different* build cannot be the client's in-process cache. Same build says nothing — that is
   what a relog to character select looks like, and no clock helps, since `GetTime` here is system
-  uptime and does not reset across a restart. `svBrokenSince` / `svBrokenOnBuild` are accepted and
-  **unused**; hosts may drop them.
+  uptime and does not reset across a restart. Once a restart has proven loading, the marker
+  latches `loads` and carries it while it keeps coming back, so later patches on a healthy client
+  say nothing. A regression drops the marker, and the latch with it, so the next fix is announced
+  again. Each scope names its own marker's build. `svBrokenSince` / `svBrokenOnBuild` are
+  accepted and **unused**; hosts may drop them.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. Two files are also used by consumers, `dofile`d from their
