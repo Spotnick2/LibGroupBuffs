@@ -52,9 +52,9 @@ WoW.reset()
 -- and the stub must not follow it there - every test file runs under this
 -- default, and it should show them what a player sees.
 WoW.reset()
-H.eq(WoW.build, "69977", "the stub models the installed client build")
-H.eq(select(2, GetBuildInfo()), "69977", "which is what GetBuildInfo reports")
-H.eq(select(3, GetBuildInfo()), "Sep 22 2026", "with that build's date, not an older one")
+H.eq(WoW.build, "70009", "the stub models the installed client build")
+H.eq(select(2, GetBuildInfo()), "70009", "which is what GetBuildInfo reports")
+H.eq(select(3, GetBuildInfo()), "Sep 24 2026", "with that build's date, not an older one")
 WoW.build = "70000"
 H.eq(select(2, GetBuildInfo()), "70000", "and a test can move it")
 

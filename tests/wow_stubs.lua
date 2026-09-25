@@ -51,7 +51,7 @@ function WoW.reset()
     -- purpose, with its login notice firing - and a stub that follows a host
     -- would then model a client nobody is running. .build.info in the World
     -- of Warcraft root names the installed build without launching the game.
-    WoW.build       = "69977"    -- 1.60.1.69977, built Sep 22 2026
+    WoW.build       = "70009"    -- 1.60.1.70009, the client binary is dated Sep 24 2026
     WoW.locale      = "enUS"
     WoW.units       = {}         -- [unit] = { name, guid, class, connected, dead, level }
     WoW.auras       = {}         -- [unit] = { auraData, ... }
@@ -512,7 +512,7 @@ NUM_BAG_SLOTS = 4                -- measured on this client
 
 function GetTime() return WoW.time end
 function GetLocale() return WoW.locale end
-function GetBuildInfo() return "1.60.1", WoW.build, "Sep 22 2026", 16001 end
+function GetBuildInfo() return "1.60.1", WoW.build, "Sep 24 2026", 16001 end
 function InCombatLockdown() return WoW.inCombat end
 -- NOT defined on purpose: MouseIsOver does not exist on this client. The stub
 -- must model the client's absences, not just its presences - defining it here
