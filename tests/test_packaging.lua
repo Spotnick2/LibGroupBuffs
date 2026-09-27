@@ -75,9 +75,41 @@ if git then
 end
 H.check(#tracked > 0, "git ls-files lists the repository (run the tests from a git checkout)")
 
+-- Textures are the exception the rule needs: the client loads them by PATH,
+-- at draw time, so no XML names them and the check above cannot see them.
+-- They must ship, or the window draws untextured in every consuming addon.
+local function isMedia(path)
+    return path:sub(1, 6) == "Media/" and path:sub(-4) == ".tga"
+end
+
+local media = 0
 for _, file in ipairs(tracked) do
-    if not runtime[file] and file ~= "LICENSE" then
+    if isMedia(file) then
+        media = media + 1
+        H.check(not isIgnored(file), file .. " is drawn by Glass.lua, so it must ship")
+    elseif not runtime[file] and file ~= "LICENSE" then
         H.check(isIgnored(file), file .. " does not run in game, so .pkgmeta must ignore it")
+    end
+end
+H.check(media > 0, "the glass textures are tracked - Glass.lua draws nothing without them")
+
+-- Every texture the material names must be one that ships. A typo in a layer
+-- name is a file the client silently fails to find, and a window with a hole
+-- in it; nothing else in the suite compares the two lists.
+local shipped = {}
+for _, file in ipairs(tracked) do
+    if isMedia(file) then shipped[file:sub(7, -5)] = true end
+end
+local glassFile = assert(io.open("Glass.lua", "r"),
+    "Glass.lua must be readable from the repository root")
+local glassSrc = glassFile:read("*a")
+glassFile:close()
+do
+    for name in glassSrc:gmatch('MEDIA %.%. "([%w_]+)"') do
+        H.check(shipped[name], "Glass.lua draws " .. name .. ", so Media/" .. name .. ".tga must exist")
+    end
+    for name in glassSrc:gmatch('= "([%w_]+)", [%w]*[Mm]argin') do
+        H.check(shipped[name], "Glass.SIZES names " .. name .. ", so Media/" .. name .. ".tga must exist")
     end
 end
 

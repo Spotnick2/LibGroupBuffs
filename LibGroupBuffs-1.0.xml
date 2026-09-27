@@ -20,6 +20,7 @@
     -->
     <Script file="LibStub\LibStub.lua"/>
     <Script file="Compat.lua"/>
+    <Script file="Glass.lua"/>
     <Script file="Settings.lua"/>
     <Script file="Engine.lua"/>
     <Script file="UI.lua"/>

@@ -264,6 +264,17 @@ local function makeFrame(name, parent, template)
     -- exists, and a method the catch-all swallows can be called in combat
     -- without the refusal being recorded.
     f.SetAlpha = function(self, a) self._alpha = a return self end
+    -- Frame levels decide what draws over what, and the glass material does
+    -- arithmetic on them: a no-op that returned the frame itself made that a
+    -- "perform arithmetic on a table value" the moment it was called.
+    f.SetFrameLevel = function(self, level) self._level = level return self end
+    f.GetFrameLevel = function(self)
+        if self._level then return self._level end
+        local parent = self._parent
+        return (parent and parent.GetFrameLevel and parent:GetFrameLevel() + 1) or 1
+    end
+    f.SetFrameStrata = function(self, strata) self._strata = strata return self end
+    f.GetFrameStrata = function(self) return self._strata or "MEDIUM" end
     f.GetAlpha = function(self) return self._alpha or 1 end
     f.SetSize = function(self, w, h) self._width, self._height = w, h return self end
     f.SetScale = function(self, s) self._scale = s return self end
@@ -278,6 +289,33 @@ local function makeFrame(name, parent, template)
     f.SetText = function(self, text) self._text = text return self end
     f.GetText = function(self) return self._text end
     f.SetTexture = function(self, tex) self._texture = tex return self end
+    -- The glass material's layers. Every one of these was absorbed by the
+    -- catch-all below before it was written down, which is how a missing
+    -- widget method reaches the client: the suite stays green and the frame
+    -- simply does not draw. Recorded, so a test can assert the layer exists
+    -- and what it was given.
+    f.SetTextureSliceMargins = function(self, l, t, r, b)
+        self._slice = { l, t, r, b } return self
+    end
+    f.SetTextureSliceMode = function(self, mode) self._sliceMode = mode return self end
+    f.SetBlendMode = function(self, mode) self._blend = mode return self end
+    f.SetHorizTile = function(self, on) self._horizTile = on and true or false return self end
+    f.SetVertTile = function(self, on) self._vertTile = on and true or false return self end
+    f.SetGradient = function(self, orientation, from, to)
+        self._gradient = { orientation = orientation, from = from, to = to } return self
+    end
+    f.SetDesaturated = function(self, on) self._desaturated = on and true or false return self end
+    f.AddMaskTexture = function(self, mask)
+        self._masks = self._masks or {}
+        self._masks[#self._masks + 1] = mask
+        return self
+    end
+    f.RemoveMaskTexture = function(self, mask)
+        for i = #(self._masks or {}), 1, -1 do
+            if self._masks[i] == mask then table.remove(self._masks, i) end
+        end
+        return self
+    end
     f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
     f.SetColorTexture = function(self, r, g, b, a) self._colorTexture = { r, g, b, a } return self end
     f.GetTexture = function(self) return self._texture end
@@ -323,6 +361,33 @@ local function makeFrame(name, parent, template)
     end
     f.CreateTexture    = function(self) return region(self, "Texture") end
     f.CreateFontString = function(self) return region(self, "FontString") end
+    -- Below `region`, which these need: a local declared further down is a
+    -- GLOBAL inside a closure written above it, and would have thrown on the
+    -- first call rather than at load.
+    f.CreateMaskTexture = function(self)
+        local m = region(self, "MaskTexture")
+        m._isMask = true
+        return m
+    end
+    f.SetStatusBarTexture = function(self, tex)
+        if type(tex) == "string" then
+            self._barTexture = region(self, "Texture")
+            self._barTexture._texture = tex
+        else
+            self._barTexture = tex
+        end
+        return self._barTexture
+    end
+    f.GetStatusBarTexture = function(self) return self._barTexture end
+    f.SetStatusBarColor = function(self, r, g, b, a)
+        self._barColor = { r, g, b, a or 1 } return self
+    end
+    f.GetStatusBarColor = function(self)
+        local c = self._barColor or { 1, 1, 1, 1 }
+        return c[1], c[2], c[3], c[4]
+    end
+    f.SetMinMaxValues = function(self, lo, hi) self._range = { lo, hi } return self end
+    f.SetStatusBarDesaturated = function(self, on) self._barDesaturated = on return self end
     f.GetRegions       = function(self) return unpack(self._regions or {}) end
     f.GetObjectType    = function(self) return self._objectType or "Frame" end
     f.CreateAnimationGroup = function() return makeFrame() end
@@ -518,6 +583,24 @@ function InCombatLockdown() return WoW.inCombat end
 -- NOT defined on purpose: MouseIsOver does not exist on this client. The stub
 -- must model the client's absences, not just its presences - defining it here
 -- is what let a call to it survive into a shipped build.
+-- Real behaviour, not a no-op: Glass.Bar hooks SetHeight and SetFrameLevel to
+-- keep its overlay in step, and a stub that dropped the hook would hide a bar
+-- whose shading stopped following it.
+function hooksecurefunc(target, name, hook)
+    if type(target) == "string" then target, name, hook = _G, target, name end
+    local original = target[name]
+    target[name] = function(...)
+        local result = original and original(...)
+        hook(...)
+        return result
+    end
+end
+
+function CreateColor(r, g, b, a)
+    return { r = r, g = g, b = b, a = a,
+             GetRGBA = function(self) return self.r, self.g, self.b, self.a end }
+end
+
 function strtrim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
 function strmatch(s, pattern) return string.match(s, pattern) end
 -- The real strsplit KEEPS empty fields: strsplit("-", "a--b") is "a", "", "b",

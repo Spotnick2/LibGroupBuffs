@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 16
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 17
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -258,13 +258,49 @@ function Methods:Alpha()
     return type(a) == "number" and a or 0.96
 end
 
-local function Backdrop(f, edge)
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = edge,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
+-- ─── The glass material ──────────────────────────────────────────────────────
+--
+-- Glass.lua draws it; this decides where. A panel is the window and the
+-- popover; a fill is one coloured row inside them. The material is layered
+-- textures, not a shader - what it cannot do is blur what is behind it, so
+-- the world shows through sharp. See Glass.lua and its upstream write-up.
+--
+-- Nothing here is conditional on combat: every layer is created once, when the
+-- frame is built, and afterwards only colours and values change. Adding a
+-- texture to a protected frame is not one of the calls this client refuses.
+local function Panel(f)
+    return lib.Glass.Apply(f, "large")
+end
+
+-- A row's colour is its whole meaning - green has it, red does not - so the
+-- fill is a bar held at full value and recoloured, rather than a bar that
+-- moves. Rounded, masked, with the gloss and inner shadow that make it read
+-- as glass rather than a painted rectangle.
+--
+-- Made ON DEMAND, not in MakeRow, because of how this library upgrades. A row
+-- built by r16 is a plain frame with a flat background texture, and LibStub
+-- hands these newer methods that same row: asking it for a fill it was never
+-- built with is a nil index in the middle of a refresh. Rows are built once
+-- per session, so the cost is one check per row per refresh - and this is
+-- the only place a fill is made, because a second one built eagerly would
+-- be a path no test could fail.
+local function Fill(row, height)
+    if type(row.fill) == "table" and row.fill.SetStatusBarColor then return row.fill end
+    local bar = lib.Glass.Bar(row, height)
+    bar:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+    bar:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
+    bar:SetValue(1)
+    bar:SetFrameLevel(row:GetFrameLevel())
+    -- The older copy's flat background would otherwise show through the
+    -- rounded corners of the new one.
+    -- type(), not truthiness: on a row this copy built there is no `bg` at
+    -- all, and the test stub answers an unknown field with a callable rather
+    -- than nil - so `row.bg and ...` is true there and false in game.
+    if type(row.bg) == "table" and row.bg.SetColorTexture then
+        row.bg:SetColorTexture(0, 0, 0, 0)
+    end
+    row.fill = bar
+    return bar
 end
 
 local function MakeRow(ui, parent, i)
@@ -274,8 +310,6 @@ local function MakeRow(ui, parent, i)
     r:EnableMouse(true)
     r:RegisterForClicks(lib.API.ClickEdges())
 
-    r.bg = r:CreateTexture(nil, "BACKGROUND")
-    r.bg:SetAllPoints()
 
     r.icon = r:CreateTexture(nil, "ARTWORK")
     r.icon:SetSize(ICON_W - 2, ICON_W - 2)
@@ -314,8 +348,6 @@ local function MakePopRow(ui, parent, i)
     pr:RegisterForClicks(lib.API.ClickEdges())
     pr:SetFrameLevel(202)  -- above the popover's level 200
 
-    pr.bg = pr:CreateTexture(nil, "BACKGROUND")
-    pr.bg:SetAllPoints()
 
     pr.rangeTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 3, 0)
@@ -382,7 +414,7 @@ function Methods:Init()
     main:SetFrameStrata("HIGH")
     main:SetClampedToScreen(true)
     main:SetMovable(true)
-    Backdrop(main, 14)
+    main.glass = Panel(main)
     main:Hide()
 
     local hdrBg = main:CreateTexture(nil, "ARTWORK")
@@ -446,7 +478,7 @@ function Methods:Init()
     pop:SetFrameStrata("DIALOG")
     pop:SetFrameLevel(200)
     pop:SetClampedToScreen(true)
-    Backdrop(pop, 12)
+    pop.glass = Panel(pop)
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
@@ -543,14 +575,18 @@ function Methods:ApplyRowVisuals(r, st)
     -- Flat colours matching PallyPower: green when everyone has it, yellow
     -- when some are missing it, red when nobody does - and grey when it cannot
     -- be read at all.
+    -- The same four states as before, now as the fill's colour. Alpha is
+    -- higher than the flat version used: the bar sits on glass rather than on
+    -- an opaque dialog background, and a faint fill over a translucent panel
+    -- reads as neither colour.
     if st.nUnknown == st.nTotal then
-        r.bg:SetColorTexture(0.30, 0.30, 0.30, 0.60)
+        Fill(r, ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.75)
     elseif st.allHave then
-        r.bg:SetColorTexture(0.0, 0.70, 0.0, 0.50)
+        Fill(r, ROW_H):SetStatusBarColor(0.10, 0.65, 0.20, 0.80)
     elseif st.nMiss == st.nTotal then
-        r.bg:SetColorTexture(1.0, 0.0, 0.0, 0.50)
+        Fill(r, ROW_H):SetStatusBarColor(0.70, 0.13, 0.13, 0.80)
     else
-        r.bg:SetColorTexture(1.0, 1.0, 0.5, 0.50)
+        Fill(r, ROW_H):SetStatusBarColor(0.75, 0.55, 0.10, 0.80)
     end
 
     r.timer:Hide()
@@ -594,13 +630,13 @@ function Methods:ApplyPopRowVisuals(pr)
     local pct = has and UI.Pct(rem, dur) or 0
 
     if not UnitIsConnected(unit) then
-        pr.bg:SetColorTexture(0.30, 0.30, 0.30, 0.70)   -- offline
+        Fill(pr, POP_ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.75)   -- offline
     elseif state == S.UNKNOWN then
-        pr.bg:SetColorTexture(0.30, 0.30, 0.30, 0.60)   -- unreadable
+        Fill(pr, POP_ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.65)   -- unreadable
     elseif has then
-        pr.bg:SetColorTexture(0.0, 0.70, 0.0, 0.50)     -- buffed
+        Fill(pr, POP_ROW_H):SetStatusBarColor(0.10, 0.65, 0.20, 0.80)   -- buffed
     else
-        pr.bg:SetColorTexture(1.0, 0.0, 0.0, 0.50)      -- missing
+        Fill(pr, POP_ROW_H):SetStatusBarColor(0.70, 0.13, 0.13, 0.80)   -- missing
     end
 
     if range == "IN_RANGE" then

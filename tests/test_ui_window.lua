@@ -808,4 +808,78 @@ H.check(other.ui:IsVisible(), "closing one leaves the other open")
 H.eq(other.saved.visible, true, "and only the closed one's addon hears about it")
 H.check(getmetatable(ui) == getmetatable(other.ui), "both run one shared set of methods")
 
+------------------------------------------------------------
+-- The glass material
+--
+-- None of this asserts that it LOOKS right - only a client can say that.
+-- What it asserts is that the layers exist and carry what they were given,
+-- because the stub answers an unknown widget method with a no-op: a material
+-- that drew nothing at all would otherwise pass every test in this file.
+------------------------------------------------------------
+
+setup()
+ui:Update()
+
+-- The window is a glass panel, not a Blizzard dialog backdrop.
+local glass = ui.main.glass
+H.check(type(glass) == "table", "the window has a glass panel")
+H.check(glass.mask and glass.mask._isMask, "with a rounded mask")
+H.check(glass.tint and glass.tint._masks and #glass.tint._masks == 1,
+    "a tint clipped to it")
+H.check(glass.shadow and glass.shadow._slice ~= nil, "a nine-sliced drop shadow")
+H.check(glass.rim and glass.rim._slice ~= nil, "and a sliced rim")
+H.check(glass.top and glass.top:GetFrameLevel() > ui.main:GetFrameLevel(),
+    "with the rim's layer above the panel, so content cannot draw over it")
+
+-- Every texture the material names must be a file that ships: a typo here is
+-- a green suite and a missing texture in game.
+local media = lib.Glass.MEDIA
+H.check(type(media) == "string" and media:find("Media"), "media path: " .. tostring(media))
+H.check(glass.shadow._texture:find(media, 1, true) == 1,
+    "and the layers are loaded from it: " .. tostring(glass.shadow._texture))
+
+-- A row's colour is a glass bar's colour now.
+local row = ui.rows[1]
+H.check(type(row.fill) == "table", "a row has a glass fill")
+H.check(row.fill:GetStatusBarTexture() ~= nil, "with a fill texture")
+local r, g, b, a = row.fill:GetStatusBarColor()
+H.check(a and a > 0, "and a colour with some opacity: " .. tostring(a))
+
+-- Reused, never rebuilt. The client has no way to destroy a frame, so a bar
+-- made on every refresh would leak one per row per tick, for the session.
+local firstFill = row.fill
+ui:ApplyRowVisuals(row, { nUnknown = 0, nTotal = 3, nMiss = 0, allHave = true,
+                          minR = 600, minDur = 3600 })
+H.check(row.fill == firstFill, "the fill is kept, not built again on the next refresh")
+
+-- The four states still differ, which is the row's entire meaning.
+local seen = {}
+for _, st in ipairs({
+    { nUnknown = 3, nTotal = 3, nMiss = 0, allHave = false, minR = 0, minDur = 3600 },
+    { nUnknown = 0, nTotal = 3, nMiss = 0, allHave = true, minR = 600, minDur = 3600 },
+    { nUnknown = 0, nTotal = 3, nMiss = 3, allHave = false, minR = 0, minDur = 3600 },
+    { nUnknown = 0, nTotal = 3, nMiss = 1, allHave = false, minR = 300, minDur = 3600 },
+}) do
+    ui:ApplyRowVisuals(row, st)
+    local cr, cg, cb = row.fill:GetStatusBarColor()
+    local key = string.format("%.2f/%.2f/%.2f", cr, cg, cb)
+    H.check(not seen[key], "state colour is distinct: " .. key)
+    seen[key] = true
+end
+
+-- A row built by an OLDER copy has no fill: LibStub hands these methods the
+-- frames r16 created, and asking one for a bar it never had is a nil index in
+-- the middle of a refresh. It is built on demand instead.
+-- Shaped exactly like one r16 left behind: every widget it built, a flat
+-- background texture, and no fill.
+local legacyRow = ui.rows[2]
+legacyRow.fill = nil
+legacyRow.bg = legacyRow:CreateTexture(nil, "BACKGROUND")
+legacyRow.bg:SetColorTexture(1, 0, 0, 0.5)
+ui:ApplyRowVisuals(legacyRow,
+    { nUnknown = 0, nTotal = 2, nMiss = 2, allHave = false, minR = 0, minDur = 3600 })
+H.check(type(legacyRow.fill) == "table", "an older copy's row gets a fill when first drawn")
+H.eq(legacyRow.bg._colorTexture[4], 0,
+    "and its flat background is cleared, so it cannot show through the corners")
+
 H.done("test_ui_window")
