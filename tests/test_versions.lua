@@ -102,6 +102,7 @@ local function Fixtures(minor)
     return out
 end
 local R7, R8, R9, R10, R11, R12, R13 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12), Fixtures(13)
+local R14 = Fixtures(14)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -170,7 +171,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -285,6 +286,41 @@ H.eq(#r13Said, 0, "and the object r13 made stops announcing a same-build marker"
 r13Store.svLoadCheck = { stamp = "then", build = "1" }
 r13Settings:CheckLoad(true)
 H.eq(#r13Said, 1, "while a marker from another build is still the fix")
+
+------------------------------------------------------------
+-- The real r12 announces the fix, then a newer copy takes over (issue #31).
+--
+-- r12 latched "already told" as `announced = true`; r14 read only `loads` and
+-- told every such player again at the next patch. Run the released r12 code
+-- to write that marker, then the current copy across a patch.
+------------------------------------------------------------
+
+freshLibStub()
+load(R12, "r12")
+lib = LibStub("LibGroupBuffs-1.0")
+local r12Said = {}
+local r12Store = {}
+local r12Settings = lib.Settings.New({
+    owner = "Priestly", report = function(text) r12Said[#r12Said + 1] = text end,
+    measuredOnBuild = WoW.build, svBrokenOnBuild = "1",
+    scopes = { { label = "per-character", get = function() return r12Store end } },
+})
+r12Store.svLoadCheck = { stamp = "then", build = "1" }
+r12Settings:CheckLoad(true)
+H.eq(#r12Said, 1, "the real r12 announces the fix")
+H.eq(r12Store.svLoadCheck.announced, true, "and latches it its own way, as announced")
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "newer-after-r12 claims the library")
+r12Said = {}
+r12Settings:CheckLoad(true)
+H.eq(#r12Said, 0, "the current copy stays silent on the same build")
+local savedBuild = WoW.build
+WoW.build = "70900"
+r12Settings:CheckLoad(true)
+H.eq(#r12Said, 0, "and across the next patch: the player r12 told is not told again")
+H.eq(r12Store.svLoadCheck.loads, true, "the latch now reads as loads")
+WoW.build = savedBuild
 
 ------------------------------------------------------------
 -- A settings object made by one copy runs the next copy's methods.
