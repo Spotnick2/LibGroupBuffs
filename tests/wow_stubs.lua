@@ -267,6 +267,13 @@ local function makeFrame(name, parent, template)
     -- Recorded, including the nil that CLEARS it: a backdrop left under the
     -- glass shows through as a dark square-cornered rectangle, and a no-op
     -- could not tell the two apart.
+    f.SetVertexColor = function(self, r, g, b, a)
+        self._vertexColor = { r, g, b, a } return self
+    end
+    f.GetVertexColor = function(self)
+        local c = self._vertexColor or { 1, 1, 1, 1 }
+        return c[1], c[2], c[3], c[4]
+    end
     f.SetBackdrop = function(self, backdrop) self._backdrop = backdrop return self end
     f.GetBackdrop = function(self) return self._backdrop end
     -- Frame levels decide what draws over what, and the glass material does

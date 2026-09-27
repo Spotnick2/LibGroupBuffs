@@ -721,12 +721,25 @@ local function TintPanel(f, colour, alpha)
     g.tint:SetColorTexture(colour[1], colour[2], colour[3], base[4] * (alpha or 1))
 end
 
+-- The rim is where each addon's border colour went, and it is the one layer
+-- that can carry it: the tint is the body, the dark rim is the shadow side.
+-- Multiplied into the texture rather than replacing it, so the light stays
+-- where the material puts it - concentrated on the top edge, which is what
+-- reads as glass rather than as a bezel - and only its hue changes. Alpha is
+-- left alone for the same reason.
+local function RimColour(f, colour)
+    local g = Panel(f)
+    if not g or not g.rim or not colour then return end
+    g.rim:SetVertexColor(colour[1], colour[2], colour[3])
+end
+
 function Methods:ApplyAppearance()
     if not self.main then return end
     local look = self:Appearance()
     local alpha = self:Alpha()
     local main, pop = self.main, self.pop
     TintPanel(main, look.mainBg, alpha)
+    RimColour(main, look.border)
     main.hdrBg:SetColorTexture(unpack(look.header))
     main.hdrLine:SetColorTexture(unpack(look.headerLine))
     main.ftrLine:SetColorTexture(unpack(look.footerLine))
@@ -734,6 +747,7 @@ function Methods:ApplyAppearance()
     if look.icon then main.specIcon:SetTexture(look.icon) end
     if look.title then main.title:SetText(look.title) end
     TintPanel(pop, look.popBg, alpha)
+    RimColour(pop, look.popBorder)
     local hdiv = self:PopDivider()
     if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
 end

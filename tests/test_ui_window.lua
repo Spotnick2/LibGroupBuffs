@@ -910,6 +910,25 @@ ui:ApplyAppearance()
 H.near(ui.main.glass.tint._colorTexture[4], base, 0.001,
     "and at full opacity the material looks as it was designed to")
 
+-- Each addon's border colour is its identity - Wildly orange, Magely cyan -
+-- and it is the rim that carries it now. Multiplied in, so the light stays
+-- where the material puts it and only the hue changes.
+setup()
+ui:Update()
+host.look = { mainBg = { 0.05, 0.05, 0.08 }, border = { 1.0, 0.5, 0.1, 0.85 },
+              popBg = { 0.06, 0.06, 0.09 }, popBorder = { 0.1, 0.9, 0.9, 1 },
+              header = { 0, 0, 0, 0.4 }, headerLine = { 1, 1, 1, 0.1 },
+              footerLine = { 1, 1, 1, 0.1 }, groupText = { 0.8, 0.8, 0.8 },
+              popDivider = { 1, 1, 1, 0.1 } }
+ui:ApplyAppearance()
+local rr, rg, rb = ui.main.glass.rim:GetVertexColor()
+H.near(rr, 1.0, 0.001, "the window's rim takes the host's border colour")
+H.near(rg, 0.5, 0.001, "every channel of it")
+H.near(rb, 0.1, 0.001, "not just the first")
+local pr2, pg2, pb2 = ui.pop.glass.rim:GetVertexColor()
+H.near(pr2, 0.1, 0.001, "and the popover takes its own")
+H.near(pg2, 0.9, 0.001, "which differs from the window's")
+
 -- A row built by an OLDER copy has no fill: LibStub hands these methods the
 -- frames r16 created, and asking one for a bar it never had is a nil index in
 -- the middle of a refresh. It is built on demand instead.
