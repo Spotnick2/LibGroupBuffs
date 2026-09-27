@@ -867,6 +867,49 @@ for _, st in ipairs({
     seen[key] = true
 end
 
+-- A WINDOW built by an older copy has no glass either, and Init() returns
+-- early because the frames already exist - so without this it would keep the
+-- dialog backdrop for the whole session while its rows turned to glass.
+setup()
+ui:Update()
+-- Shaped as r16 left it: a dialog backdrop and no glass.
+ui.main.glass = nil
+ui.pop.glass = nil
+ui.main:SetBackdrop({ bgFile = "Interface\DialogFrame\UI-DialogBox-Background" })
+ui.pop:SetBackdrop({ bgFile = "Interface\DialogFrame\UI-DialogBox-Background" })
+ui:ApplyAppearance()
+H.check(type(ui.main.glass) == "table", "an older copy's window is adopted on the next refresh")
+H.check(type(ui.pop.glass) == "table", "and so is its popover")
+H.eq(ui.main:GetBackdrop(), nil,
+    "and the dialog backdrop is removed, not left under the glass")
+
+-- In combat it waits rather than touching a frame that parents secure
+-- buttons, and picks it up afterwards.
+setup()
+ui:Update()
+ui.main.glass = nil
+WoW.inCombat = true
+ui:ApplyAppearance()
+H.check(type(ui.main.glass) ~= "table", "in combat the adoption waits")
+WoW.inCombat = false
+ui:ApplyAppearance()
+H.check(type(ui.main.glass) == "table", "and happens once the fight ends")
+
+-- The host's opacity and panel colour have to reach the tint: it IS the
+-- panel now, so pointing them at the backdrop that used to be there made the
+-- opacity setting do nothing at all.
+setup()
+ui:Update()
+host.ui_config.alpha = 0.2
+ui:ApplyAppearance()
+local tint = ui.main.glass.tint._colorTexture
+local base = lib.Glass.STYLE.tint[4]
+H.near(tint[4], base * 0.2, 0.001, "the host's opacity scales the glass tint: " .. tostring(tint[4]))
+host.ui_config.alpha = 1
+ui:ApplyAppearance()
+H.near(ui.main.glass.tint._colorTexture[4], base, 0.001,
+    "and at full opacity the material looks as it was designed to")
+
 -- A row built by an OLDER copy has no fill: LibStub hands these methods the
 -- frames r16 created, and asking one for a bar it never had is a nil index in
 -- the middle of a refresh. It is built on demand instead.

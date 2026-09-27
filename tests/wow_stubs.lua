@@ -264,6 +264,11 @@ local function makeFrame(name, parent, template)
     -- exists, and a method the catch-all swallows can be called in combat
     -- without the refusal being recorded.
     f.SetAlpha = function(self, a) self._alpha = a return self end
+    -- Recorded, including the nil that CLEARS it: a backdrop left under the
+    -- glass shows through as a dark square-cornered rectangle, and a no-op
+    -- could not tell the two apart.
+    f.SetBackdrop = function(self, backdrop) self._backdrop = backdrop return self end
+    f.GetBackdrop = function(self) return self._backdrop end
     -- Frame levels decide what draws over what, and the glass material does
     -- arithmetic on them: a no-op that returned the frame itself made that a
     -- "perform arithmetic on a table value" the moment it was called.
