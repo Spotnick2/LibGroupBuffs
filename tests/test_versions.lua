@@ -102,7 +102,7 @@ local function Fixtures(minor)
     return out
 end
 local R7, R8, R9, R10, R11, R12, R13 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12), Fixtures(13)
-local R14 = Fixtures(14)
+local R14, R15 = Fixtures(14), Fixtures(15)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -171,7 +171,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -643,5 +643,78 @@ for _, file in ipairs(scripts) do
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")
     if f then f:close() end
 end
+
+------------------------------------------------------------
+-- An engine built by r15, running under r16
+--
+-- LibStub hands the NEW code the OLD tables, so a def created by r15 reaches
+-- r16 carrying a name r15 may already have resolved from the client - with no
+-- record of where it came from, because r15 kept none. Calling that the
+-- host's English literal would report a correctly localized addon as broken,
+-- which is the opposite of what the report is for.
+------------------------------------------------------------
+
+freshLibStub()
+load(R15, "r15")
+local r15lib = LibStub("LibGroupBuffs-1.0")
+local defs = { { id = "fort", label = "Fort", snglID = 1243, grpID = 21562,
+                 sngl = "Power Word: Fortitude", grp = "Prayer of Fortitude" } }
+local r15engine = r15lib.Engine.New({
+    defs = defs, bucketSize = 5,
+    config = { enabled = function() return true end },
+    store = { get = function() end, set = function() end },
+})
+
+-- r15 resolves it from a German client.
+WoW.reset()
+WoW.spells[1243] = { name = "Machtwort: Seelenstaerke", iconID = 1 }
+WoW.spells[21562] = { name = "Gebet der Seelenstaerke", iconID = 2 }
+WoW.locale = "deDE"
+r15engine:RefreshSpells()
+H.eq(defs[1].sngl, "Machtwort: Seelenstaerke", "r15 resolved the localized name")
+H.eq(defs[1].snglFrom, nil, "and recorded nothing about where it came from")
+
+-- r16 loads over it. The same def table, now under new code.
+load(CURRENT_FILES, "current")
+local nowLib = LibStub("LibGroupBuffs-1.0")
+H.eq(activeMinor(), CURRENT, "the newer copy is the active one")
+
+local report = r15engine:SpellReport()
+H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "the localized name survives the upgrade")
+H.eq(report[1].forms[1].from, "unknown",
+    "and is reported as unknown provenance, not as the host's English literal")
+H.eq(report.unresolved, 0, "so nothing claims the addon is unlocalized")
+
+-- A failed lookup afterwards must not turn "unknown" into "fallback": the
+-- name is still whatever r15 put there.
+local realName = nowLib.API.SpellName
+nowLib.API.SpellName = function() return nil end
+r15engine:RefreshSpells()
+report = r15engine:SpellReport()
+H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "a failed refresh keeps it")
+H.eq(report[1].forms[1].from, "unknown", "and still does not claim to know where it came from")
+H.eq(report.unresolved, 0, "nor count it against the addon")
+
+-- Once the client answers again, provenance is established for good.
+nowLib.API.SpellName = realName
+r15engine:RefreshSpells()
+report = r15engine:SpellReport()
+H.eq(report[1].forms[1].from, "resolved", "a successful lookup settles it")
+
+-- An engine built BY r16 starts stamped, so a name that never resolves is
+-- reported as the fallback it is - the signal the whole report exists for.
+nowLib.API.SpellName = function() return nil end
+local freshDefs = { { id = "fort", label = "Fort", snglID = 1243,
+                      sngl = "Power Word: Fortitude" } }
+local freshEngine = nowLib.Engine.New({
+    defs = freshDefs, bucketSize = 5,
+    config = { enabled = function() return true end },
+    store = { get = function() end, set = function() end },
+})
+freshEngine:RefreshSpells()
+report = freshEngine:SpellReport()
+H.eq(report[1].forms[1].from, "fallback", "a def this copy created is stamped from the start")
+H.eq(report.unresolved, 1, "so a name that never resolved is counted")
+nowLib.API.SpellName = realName
 
 H.done("test_versions")
