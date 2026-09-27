@@ -30,7 +30,7 @@
 
 -- Same MINOR as every runtime file; see Settings.lua for why the guard is two
 -- checks, and tests/test_versions.lua for the load orders.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 15
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 16
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.engineMinor == MINOR then return end
@@ -109,15 +109,73 @@ end
 -- does not know the spell at all. Cheap; rerun on SPELLS_CHANGED and talent
 -- changes, because what a character knows changes as they level. The def
 -- tables are updated in place, never replaced.
+--
+-- The fallback STAYS. A name that never resolved is the host's enUS literal,
+-- and on a client speaking another language it simply never matches an aura -
+-- the same outcome as having no name at all, and it cannot match the wrong
+-- aura, because a German buff is not called "Prayer of Fortitude". On an
+-- English client it is the correct name, so dropping it would only lose
+-- matches. What the fallback DOES hide is the failure itself: a whole addon
+-- reading every member as unbuffed looks identical to a raid that genuinely
+-- has no buffs (priestly#21, reported from a localized client and never
+-- diagnosed, because nothing said so).
+--
+-- So each form records how its name was arrived at, captured BEFORE the
+-- fallback is applied:
+--
+--   "resolved"   the client answered this time
+--   "remembered" it did not, but an earlier refresh did - the name is real
+--   "fallback"   it never has: this is the host's literal, in English
+--
+-- Per FORM, not per buff: the single spell resolving while the group one does
+-- not is the ordinary case at low level, and one flag could not say that.
+-- Nothing is inferred from comparing names, either: a locale that leaves a
+-- spell untranslated resolves to exactly the literal, and would look like a
+-- failure forever.
+local function Resolve(id, current, status)
+    local name = id and lib.API.SpellName(id) or nil
+    if name then return name, "resolved" end
+    -- Nothing came back. Keep what we have, and remember which it is.
+    return current, (status == "resolved" or status == "remembered")
+        and "remembered" or "fallback"
+end
+
 function Methods:RefreshSpells()
     local API = lib.API
     for _, d in ipairs(self.defs) do
-        d.sngl = API.SpellName(d.snglID) or d.sngl
-        if d.grpID then d.grp = API.SpellName(d.grpID) or d.grp end
+        d.sngl, d.snglFrom = Resolve(d.snglID, d.sngl, d.snglFrom)
+        if d.grpID then d.grp, d.grpFrom = Resolve(d.grpID, d.grp, d.grpFrom) end
         d.names = { d.sngl, d.grp }
         d.hasSingle = API.KnowsSpell(d.snglID) and true or false
         d.hasGroup = (d.grpID and API.KnowsSpell(d.grpID)) and true or false
     end
+end
+
+-- What the addon is actually matching auras against, for a bug report. The
+-- library answers with data and the host decides how to say it: only the host
+-- knows what it calls its buffs, and three addons track different ones.
+--
+-- `unresolved` is the field worth acting on: a form still on its English
+-- fallback is the signature of the bug above. It is not the same as a spell
+-- the player has not learned, which is ordinary and appears as known = false.
+function Methods:SpellReport()
+    local out = { locale = lib.API.Locale and lib.API.Locale() or "?", unresolved = 0 }
+    for _, d in ipairs(self.defs) do
+        local forms = {}
+        forms[#forms + 1] =
+            { role = "single", id = d.snglID, name = d.sngl,
+              from = d.snglFrom or "fallback", known = d.hasSingle == true }
+        if d.grpID then
+            forms[#forms + 1] =
+                { role = "group", id = d.grpID, name = d.grp,
+                  from = d.grpFrom or "fallback", known = d.hasGroup == true }
+        end
+        for _, form in ipairs(forms) do
+            if form.from == "fallback" then out.unresolved = out.unresolved + 1 end
+        end
+        out[#out + 1] = { id = d.id, label = d.label, forms = forms }
+    end
+    return out
 end
 
 -- Click mapping for one buff: primary (left) and secondary (right) spell.

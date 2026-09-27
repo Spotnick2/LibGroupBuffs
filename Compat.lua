@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 15
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 16
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -523,6 +523,13 @@ end
 function API.ClientBuild()
     local ok, _, build = pcall(GetBuildInfo)
     return ok and tostring(build) or "?"
+end
+
+-- The client's language. Worth reporting with a bug report and nothing else:
+-- spell names are resolved from IDs precisely so no code has to branch on it.
+function API.Locale()
+    local ok, locale = pcall(GetLocale)
+    return (ok and locale) or "?"
 end
 
 -- ─── click registration ─────────────────────────────────────────────────────

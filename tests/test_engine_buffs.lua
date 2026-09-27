@@ -423,4 +423,100 @@ H.check(pcall(E.AuraEventIsRelevant, E, "player", secretInfo),
     "a payload whose own fields are secret does not throw")
 H.check(E:AuraEventIsRelevant("player", secretInfo) == true, "and counts as relevant")
 
+------------------------------------------------------------
+-- Where each spell name came from, and saying so
+--
+-- A name that never resolved is the host's English literal. On a client
+-- speaking another language it matches no aura at all, so every member reads
+-- as unbuffed - a whole addon that looks broken in exactly the way a raid
+-- with no buffs looks. That is priestly#21, reported from a localized client
+-- and never diagnosed, because nothing said which names were being matched.
+------------------------------------------------------------
+
+setup()
+local report = E:SpellReport()
+H.eq(report.locale, "enUS", "the report carries the client's language")
+H.eq(report.unresolved, 0, "and nothing is unresolved when the client answers")
+
+local fort
+for _, entry in ipairs(report) do if entry.id == "fort" then fort = entry end end
+H.check(fort ~= nil, "every tracked buff is in the report")
+H.eq(fort.forms[1].role, "single", "the single form first")
+H.eq(fort.forms[1].from, "resolved", "resolved from the client")
+H.eq(fort.forms[1].name, H.NAME.FORT_SINGLE, "with the name it answered")
+H.check(fort.forms[1].known, "and whether the player knows it")
+H.eq(fort.forms[2].role, "group", "then the group form")
+
+-- A spell the player has not learned is ordinary, and must not look like a
+-- failure: the client still answers for it by ID.
+-- Teach only the single form: TeachSpells adds to what the client knows, so
+-- the group one has to be forgotten explicitly.
+setup()
+WoW.knownSpells[H.SPELL.FORT_GROUP] = nil
+E:RefreshSpells()
+report = E:SpellReport()
+for _, entry in ipairs(report) do
+    for _, form in ipairs(entry.forms) do
+        if form.id == H.SPELL.FORT_GROUP then
+            H.eq(form.from, "resolved", "an unlearned spell still resolves by ID")
+            H.check(not form.known, "and is reported as not known")
+        end
+    end
+end
+H.eq(report.unresolved, 0, "so nothing counts as unresolved")
+
+-- The failure itself: the client answers for nothing. The names stay as the
+-- host wrote them, and the report says that is what they are.
+setup()
+local realName = lib.API.SpellName
+lib.API.SpellName = function() return nil end
+local bare = H.PriestEngine()
+bare.engine:RefreshSpells()
+report = bare.engine:SpellReport()
+H.check(report.unresolved > 0, "names that never resolved are counted")
+for _, entry in ipairs(report) do
+    for _, form in ipairs(entry.forms) do
+        H.eq(form.from, "fallback", "and each is reported as the host's own literal")
+    end
+end
+
+-- Once a name HAS resolved, a later refresh that fails keeps it and says so:
+-- the name is a real one from the client, not an English guess.
+lib.API.SpellName = realName
+local recovered = H.PriestEngine()
+recovered.engine:RefreshSpells()
+lib.API.SpellName = function() return nil end
+recovered.engine:RefreshSpells()
+report = recovered.engine:SpellReport()
+H.eq(report.unresolved, 0, "a remembered name is not a fallback")
+H.eq(report[1].forms[1].from, "remembered", "it is reported as remembered")
+H.eq(report[1].forms[1].name, H.NAME.FORT_SINGLE, "and it is the client's own name")
+lib.API.SpellName = realName
+
+-- Per FORM. The single spell resolving while the group one does not is the
+-- ordinary case at low level, and a status kept per buff could not say it.
+setup()
+local realName2 = lib.API.SpellName
+lib.API.SpellName = function(id)
+    if id == H.SPELL.FORT_SINGLE then return H.NAME.FORT_SINGLE end
+    return nil
+end
+local split = H.PriestEngine()
+split.engine:RefreshSpells()
+report = split.engine:SpellReport()
+H.eq(report[1].forms[1].from, "resolved", "the form the client answered for is resolved")
+H.eq(report[1].forms[2].from, "fallback", "while the one it did not is still the host's literal")
+H.check(report.unresolved > 0, "and the count notices the half that failed")
+lib.API.SpellName = realName2
+
+-- Localized: the name follows the client, and nothing is left in English.
+setup()
+WoW.spells[H.SPELL.FORT_SINGLE] = { name = "Machtwort: Seelenstaerke", iconID = 1 }
+WoW.locale = "deDE"
+E:RefreshSpells()
+report = E:SpellReport()
+H.eq(report.locale, "deDE", "the report says which language")
+H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "and the name the client gave")
+H.eq(report[1].forms[1].from, "resolved", "resolved, not fallen back to")
+
 H.done("test_engine_buffs")
