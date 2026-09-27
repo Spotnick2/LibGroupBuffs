@@ -31,7 +31,7 @@
 -- claims the version, so this file only installs when that claim is ours:
 -- older after newer, the active MINOR is not ours; equal after equal, it is
 -- already installed and reinstalling would replace functions others hold.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 15
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 14
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.settingsMinor == MINOR then return end
@@ -219,12 +219,7 @@ function Methods:CheckLoad(announce)
         if type(holder) == "table" then
             local previous = Marker(holder)
             local crossed = CrossedARestart(previous, build)
-            -- r12 latched the same fact as `announced = true` (it read "told
-            -- once"); a marker it wrote has no `loads`. Ignoring it would tell
-            -- every player r12 already told, again, at the next patch - the
-            -- repeat #27 exists to stop (issue #31). Read either, write `loads`.
-            local proven = previous ~= nil
-                and (previous.loads == true or previous.announced == true)
+            local proven = previous ~= nil and previous.loads == true
             if announce and crossed and not proven then
                 cameBack[#cameBack + 1] = { label = scope.label, build = previous.build }
             end

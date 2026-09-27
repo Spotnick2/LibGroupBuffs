@@ -237,6 +237,35 @@ msg = saidSince(h, n)
 H.check(msg:find("70600", 1, true) and msg:find("70700", 1, true) and msg:find("is fixed", 1, true),
     "the next fix after a regression is announced: " .. msg)
 
+-- A marker r12 wrote after announcing the fix carries `announced = true`, not
+-- `loads`. It already told the player, so neither the same build nor the next
+-- patch may tell them again - and the latch moves to `loads` (issue #31).
+do
+    local r = freshSession(FIXED)
+    r.char = { svLoadCheck = { stamp = "then", build = FIXED, announced = true } }
+    r.account = { svLoadCheck = { stamp = "then", build = FIXED, announced = true } }
+    r.settings:HandleEnteringWorld(true, false)
+    H.eq(saidKind(r, "settingsLoaded"), "", "an r12 marker that announced stays silent on its build")
+    H.eq(r.char.svLoadCheck.loads, true, "and its latch is carried on as loads")
+    WoW.build = "70800"
+    local before = #r.said
+    r.settings:HandleEnteringWorld(true, false)
+    H.eq(saidSince(r, before), "", "and the next patch does not announce the fix a second time")
+    WoW.build = FIXED
+    -- The same marker from an OLDER build: r12 announced it there, and a
+    -- patch has passed since. Still told once, not twice.
+    local o = freshSession(FIXED)
+    o.char = { svLoadCheck = { stamp = "then", build = "69977", announced = true } }
+    o.settings:HandleEnteringWorld(true, false)
+    H.eq(saidKind(o, "settingsLoaded"), "", "an r12 marker from an earlier build, already announced, is silent")
+    -- And one r12 wrote WITHOUT announcing - nothing latched - is still news.
+    local fresh = freshSession(FIXED)
+    fresh.char = { svLoadCheck = { stamp = "then", build = "69977" } }
+    fresh.settings:HandleEnteringWorld(true, false)
+    H.check(saidKind(fresh, "settingsLoaded"):find("is fixed", 1, true),
+        "an r12 marker that never announced still announces the fix")
+end
+
 -- A /reload never latches: it cannot follow a patch, and a latch set there
 -- would silence a fix nobody was told about.
 do
