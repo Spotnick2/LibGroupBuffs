@@ -103,6 +103,18 @@ Vanilla content, Retail codebase.
     wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
     this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
+- `Engine:RefreshSpells` resolves names from IDs, and records **per form** how each was arrived at
+  — `resolved` (the client answered), `remembered` (it did not, but an earlier refresh did) or
+  `fallback` (never has: this is the host's English literal) or `unknown`. The fallback stays,
+  because on an English client it is correct and on any other it simply never matches; what it
+  hides is the failure, which is why `Engine:SpellReport()` exists. Never infer a failure by
+  comparing a name to the literal: a locale that leaves a spell untranslated resolves to exactly
+  that string.
+  `unknown` is the upgrade case, and the reason `Engine.New` stamps every def it accepts: a def
+  reaching `RefreshSpells` **unstamped** was built by a copy older than r16, so the name in it may
+  already be one the client gave that copy. Reporting it as the host's English literal would call
+  a correctly localized addon broken. Unstamped is not the same as never-resolved, and only
+  stamping at creation lets the two be told apart.
 - `Settings` — whether saved settings came back is decided by **the marker's own build**, not by
   any constant. The marker records the build it was written on; a build only changes when the
   client is patched, and applying a patch requires a full exit, so a marker returning under a
