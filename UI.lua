@@ -94,11 +94,16 @@ local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
 local function IconTile(parent, size, inset)
     local tile = parent:CreateTexture(nil, "ARTWORK")
     tile:SetSize(size, size)
-    -- The client's icons carry a border in the outer few percent of the
-    -- image, which is what makes them look square. Cropped off.
-    tile:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-    local mask = lib.Glass.Mask(parent, "bar_mask", 8, 0, tile)
+    -- The client's icons carry a border in the outer few percent of the image,
+    -- which is what makes them look square. It is cropped by INSETTING THE
+    -- MASK, not with SetTexCoord: on this client a mask is applied in the
+    -- texture's untransformed space, so cropping a masked texture moves the
+    -- mask off the art and leaves a fraction of the icon in one corner - which
+    -- is what r19 shipped and what the game showed. The mask does both jobs,
+    -- eating the border and rounding what is left.
+    inset = inset or math.max(1, math.floor(size * 0.08 + 0.5))
+    local mask = lib.Glass.Mask(parent, "bar_mask", 8, inset, tile)
     tile:AddMaskTexture(mask)
 
     local edge = parent:CreateTexture(nil, "OVERLAY")
@@ -432,6 +437,40 @@ local function SetFill(row, height, r, g, b, a)
     if fill then fill:SetColour(r, g, b, a) end
 end
 
+-- How much of the host's header colour survives. The header was the last flat
+-- thing on the window: an opaque band with square corners sitting on a
+-- translucent, round-cornered panel, which read as a title bar from a
+-- different addon. Here the host still chooses the HUE - Wildly's orange,
+-- Magely's per-spec - and the material chooses how solid it is, the same
+-- bargain TintPanel already makes for the panel itself.
+local HDR_TAG   = "glassHeader"
+local HDR_TINT  = 0.30
+
+local function HeaderGlass(main)
+    if type(main.hdr) == "table" and rawget(main.hdr, HDR_TAG) then return main.hdr end
+    if InCombatLockdown() then return nil end
+    local tint = main.hdrBg
+    if type(tint) ~= "table" or not tint.AddMaskTexture then return nil end
+
+    -- hdrBg itself becomes the tint, rather than a second band drawn over it:
+    -- an older copy upgrading in place already has this texture, and two of
+    -- them would simply add up.
+    local Glass = lib.Glass
+    local mask = Glass.Mask(main, "bar_mask", FILL_MASK_MARGIN, 0, tint)
+    tint:AddMaskTexture(mask)
+
+    local gloss = main:CreateTexture(nil, "ARTWORK", nil, 2)
+    gloss:SetAllPoints(tint)
+    gloss:SetTexture(Glass.MEDIA .. "gloss")
+    gloss:SetBlendMode("ADD")
+    gloss:SetAlpha(Glass.STYLE.gloss)
+    gloss:AddMaskTexture(mask)
+
+    local hdr = { tint = tint, gloss = gloss, mask = mask, [HDR_TAG] = true }
+    main.hdr = hdr
+    return hdr
+end
+
 local function MakeRow(ui, parent, i)
     local r = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
     r._ui = ui
@@ -579,7 +618,7 @@ function Methods:Init()
 
     local xTxt = Style(xBtn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
     xTxt:SetPoint("CENTER", xBtn, "CENTER", 0, 0)
-    xTxt:SetText("x")
+    xTxt:SetText("\195\151")
     xBtn.label = xTxt
 
     -- Brightens under the cursor, which is the only affordance a flat square
@@ -880,7 +919,10 @@ function Methods:ApplyAppearance()
     local main, pop = self.main, self.pop
     TintPanel(main, look.mainBg, alpha)
     RimColour(main, look.border)
-    main.hdrBg:SetColorTexture(unpack(look.header))
+    local hdr = HeaderGlass(main)
+    local hc = look.header
+    main.hdrBg:SetColorTexture(hc[1], hc[2], hc[3],
+        (hc[4] or 1) * (hdr and HDR_TINT or 1))
     main.hdrLine:SetColorTexture(unpack(look.headerLine))
     main.ftrLine:SetColorTexture(unpack(look.footerLine))
     for _, h in ipairs(self.headers) do h:SetTextColor(unpack(look.groupText)) end

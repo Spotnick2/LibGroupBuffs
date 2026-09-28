@@ -329,6 +329,19 @@ local function makeFrame(name, parent, template)
         self._gradient = { orientation = orientation, from = from, to = to } return self
     end
     f.SetDesaturated = function(self, on) self._desaturated = on and true or false return self end
+    -- Recorded because it does not compose with AddMaskTexture: this client
+    -- applies a mask in the texture's UNTRANSFORMED space, so a masked
+    -- texture that is also cropped shows a fraction of its art in one corner.
+    -- Nothing throws; it just draws wrong, which is why the suite has to know.
+    f.SetTexCoord = function(self, ...)
+        self._texCoord = { ... }
+        return self
+    end
+    f.GetTexCoord = function(self)
+        local c = self._texCoord
+        if not c then return nil end
+        return unpack(c)
+    end
     f.AddMaskTexture = function(self, mask)
         self._masks = self._masks or {}
         self._masks[#self._masks + 1] = mask

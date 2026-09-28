@@ -1006,7 +1006,7 @@ H.check(row.icon._masks and #row.icon._masks == 1,
 -- The close button is ours, not Blizzard's gold disc.
 local x = ui.main.closeBtn
 H.check(x ~= nil, "the window has a close button")
-H.eq(x.label:GetText(), "x", "drawn as an x we place")
+H.eq(x.label:GetText(), "\195\151", "drawn as a multiplication sign we place")
 H.check(x:IsMouseEnabled(), "which takes the mouse")
 H.check(x._ui ~= nil, "and knows the window it closes")
 
@@ -1063,5 +1063,63 @@ H.check(ui.pop.hdrIcon._masks and #ui.pop.hdrIcon._masks == 1,
     "and so is the popover's")
 H.check(ui.footerBtns[1].icon._masks and #ui.footerBtns[1].icon._masks == 1,
     "and the reagent's")
+
+------------------------------------------------------------
+-- No texture is both masked and cropped
+--
+-- This client applies a mask in the texture's UNTRANSFORMED space, so a
+-- texture that is masked AND carries a SetTexCoord shows a fraction of its
+-- art in one corner of the shape. Nothing throws and nothing here failed - it
+-- just drew wrong, which is exactly how it reached the game: r19 cropped the
+-- client's baked icon border with SetTexCoord and masked the same texture,
+-- and every icon on the window came out a sliver. The crop is the mask's
+-- inset now. Stated as a rule over every region the window builds rather than
+-- as a check on the icons, because the next texture to want both will not be
+-- an icon.
+------------------------------------------------------------
+
+setup()
+host.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
+ui:Update()
+ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
+
+local walked, both = 0, {}
+local function walk(frame, name, depth)
+    if depth > 4 or type(frame) ~= "table" then return end
+    for _, r in ipairs(frame._regions or {}) do
+        walked = walked + 1
+        if r._masks and #r._masks > 0 and r._texCoord then
+            both[#both + 1] = name
+        end
+        walk(r, name, depth + 1)
+    end
+    for _, child in ipairs(frame._children or {}) do walk(child, name, depth + 1) end
+end
+walk(ui.main, "the window", 0)
+walk(ui.pop, "the popover", 0)
+H.check(walked > 20, "the walk found the window's regions: " .. walked)
+H.eq(#both, 0,
+    "no region is masked and cropped at once, which this client draws wrong: "
+    .. (both[1] or "none"))
+
+-- The header is glass too, not an opaque band with square corners sitting on
+-- a translucent panel - which is the one piece r19 left flat.
+local hdr = ui.main.hdr
+H.check(hdr ~= nil and hdr.gloss ~= nil, "the header has the material's gloss")
+H.check(hdr.mask and hdr.mask._isMask, "and is rounded by a mask like the rows")
+local band = ui.main.hdrBg._colorTexture
+H.check(band and band[4] < 0.5,
+    "and lets the panel through rather than painting over it: " .. tostring(band and band[4]))
+
+-- The host still chooses the hue. Wildly's orange header and Magely's
+-- per-spec colours go through this, and the material only decides how solid
+-- it is.
+local before = ui.main.hdrBg._colorTexture[1]
+host.look = { header = { 0.9, 0.4, 0.1, 1 } }
+ui:ApplyAppearance()
+H.check(ui.main.hdrBg._colorTexture[1] > before,
+    "a host's header colour still reaches the band")
+H.check(ui.main.hdrBg._colorTexture[4] < 1,
+    "with the material deciding how solid it is, not the host")
 
 H.done("test_ui_window")
