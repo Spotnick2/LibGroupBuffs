@@ -104,7 +104,8 @@ end
 local R7, R8, R9, R10, R11, R12, R13 = Fixtures(7), Fixtures(8), Fixtures(9), Fixtures(10), Fixtures(11), Fixtures(12), Fixtures(13)
 local R14, R15, R16 = Fixtures(14), Fixtures(15), Fixtures(16)
 -- r17 added Glass.lua, so its fixture is five files rather than four.
-local R17 = Fixtures(17, { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "UI.lua" })
+local GLASS_FILES = { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "UI.lua" }
+local R17, R18 = Fixtures(17, GLASS_FILES), Fixtures(18, GLASS_FILES)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -173,7 +174,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -502,13 +503,18 @@ WoW.flushTimers(1)
 -- old one. r10's own line is adopted.
 ------------------------------------------------------------
 
--- Every texture anchored where the divider goes.
+-- Every texture anchored where the divider goes, at ANY header height this
+-- library has shipped: r19 made the header 30px, so a line r10 drew under a
+-- 24px one has to be found where r10 put it AND where it ends up.
+local DIV_YS = { -26, -32 }
 local function dividers(pop)
     local found = {}
     for _, r in ipairs({ pop:GetRegions() }) do
         local point, rel, _, x, y = r:GetPoint()
-        if r:GetObjectType() == "Texture" and point == "TOPLEFT" and rel == pop and x == 5 and y == -26 then
-            found[#found + 1] = r
+        if r:GetObjectType() == "Texture" and point == "TOPLEFT" and rel == pop and x == 5 then
+            for _, known in ipairs(DIV_YS) do
+                if y == known then found[#found + 1] = r end
+            end
         end
     end
     return found
@@ -549,6 +555,135 @@ WoW.inCombat = false
 H.check(pcall(r10Host.ui.Update, r10Host.ui), "the first rebuild after the fight runs on the r10 window")
 H.eq(#dividers(r10Host.ui.pop), 1, "and there is still exactly one divider - no second line blending over it")
 H.eq(r10Host.ui.pop._hdiv, r10Line, "the same one")
+-- And it was MOVED, not just kept: r10 put it under a 24px header, and this
+-- copy's header is 30. A line left where it was sits across the rows.
+local _, _, _, _, dy = r10Line:GetPoint()
+H.eq(dy, -32, "and the adopted line moved under THIS copy's header")
+
+------------------------------------------------------------
+-- An r18 window takes this copy's LAYOUT, not just its colours
+--
+-- Frames are built once: Init returns early when self.main exists. So a
+-- window r18 built reaches r19's code with 15px rows, a bare unmasked icon,
+-- the old font and Blizzard's close button - and every position r19 computes
+-- is measured against metrics the frames do not have. Panel and Fill already
+-- adopt around this; the geometry did not, until Codex found it on #37.
+------------------------------------------------------------
+
+freshLibStub()
+load(R18, "r18")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local oldHost = H.PriestUI()
+oldHost.config.visible.shadow = false
+-- With a reagent, so the footer's buttons exist BEFORE the upgrade: they are
+-- built lazily, one per item, so a window with no footer would leave that
+-- part of the pass untested while looking covered.
+oldHost.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
+oldHost.engine:RefreshSpells()
+oldHost.ui:Update()
+H.check(oldHost.ui.main:IsShown(), "r18 built and opened the window")
+
+local oldBtn = oldHost.ui.footerBtns[1]
+H.check(type(oldBtn) == "table", "with a reagent button r18 built")
+local oldBtnH = oldBtn:GetHeight()
+H.check(oldBtnH < 20, "at r18's footer height: " .. tostring(oldBtnH))
+H.check(type(oldBtn.iconEdge) ~= "table", "whose icon is a bare texture")
+
+local oldPopIcon = oldHost.ui.pop.hdrIcon
+H.check(type(oldHost.ui.pop.hdrEdge) ~= "table",
+    "and a popover header icon that is one too")
+
+local oldPop = oldHost.ui.popRows[1]
+local oldPopH = oldPop:GetHeight()
+H.check(oldPopH < 26, "whose popover rows are r18's height: " .. tostring(oldPopH))
+
+local oldRow = oldHost.ui.rows[1]
+local oldRowH = oldRow:GetHeight()
+local oldIcon = oldRow.icon
+H.check(oldRowH < 20, "whose rows are r18's height: " .. tostring(oldRowH))
+H.check(type(oldRow.iconEdge) ~= "table", "and whose icons are bare textures")
+
+-- Shown explicitly: a region in the stub starts hidden, so "the old icon is
+-- not shown" would hold whether or not anything hid it.
+oldIcon:Show()
+H.check(oldIcon:IsShown(), "r18's icon is on screen before the upgrade")
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "the current copy took over")
+H.check(pcall(oldHost.ui.Update, oldHost.ui), "and rebuilds the window r18 made")
+
+H.check(oldRow:GetHeight() > oldRowH,
+    "the existing row is resized to this copy's height: " .. tostring(oldRow:GetHeight()))
+H.check(type(oldRow.iconEdge) == "table", "its icon becomes a tile")
+H.check(oldRow.icon ~= oldIcon, "drawn by a new texture, since one cannot be destroyed")
+H.check(not oldIcon:IsShown(), "with r18's own icon hidden rather than left underneath")
+H.eq(oldIcon:GetTexture(), nil,
+    "and emptied, since a texture cannot be destroyed on this client")
+H.check(oldRow.timer:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and its text restyled, not left on r18's font")
+H.check(type(oldHost.ui.main.closeBtn.label) == "table",
+    "Blizzard's close button is replaced by ours")
+H.check(type(oldHost.ui.main.specEdge) == "table", "and the header icon gets its tile")
+-- The popover is built by the same Init and skipped by the same early return.
+H.check(oldPop:GetHeight() > oldPopH,
+    "the popover rows are resized too: " .. tostring(oldPop:GetHeight()))
+H.check(type(oldPop.classEdge) == "table", "and their class icons get tiles")
+H.check(oldPop.nameTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "with their names restyled")
+H.check(oldHost.ui.headers[1]:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and the group separators are restyled as well")
+H.eq(oldHost.ui.headers[1]:GetJustifyH(), "CENTER",
+    "and centred, which is what r19 changed them to")
+
+-- The popover's own header and the footer's buttons: built by the same Init,
+-- skipped by the same early return, and missed by the first version of this
+-- pass. An adopted window reached _layout == 2 with both still on r18.
+H.eq(oldHost.ui.main.dragHandle:GetHeight(), oldHost.ui.main.hdrBg:GetHeight(),
+    "the drag strip still covers the whole header, which is taller now")
+H.check(type(oldHost.ui.pop.hdrEdge) == "table",
+    "the popover's header icon gets its tile")
+H.check(oldHost.ui.pop.hdrIcon ~= oldPopIcon, "drawn by a new texture")
+H.check(oldHost.ui.pop.hdrTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and its title is restyled")
+H.check(oldBtn:GetHeight() > oldBtnH,
+    "the reagent button is resized: " .. tostring(oldBtn:GetHeight()))
+H.check(type(oldBtn.iconEdge) == "table", "its icon gets a tile")
+H.check(oldBtn.countTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and its count is restyled")
+
+-- Once, not on every rebuild: this walks every row and popover row.
+local builtBefore = select("#", oldRow:GetRegions())
+oldHost.ui:Update()
+H.eq(select("#", oldRow:GetRegions()), builtBefore,
+    "a second rebuild adopts nothing further - the pass runs once")
+
+-- In combat it must not touch a thing: rows are secure buttons and resizing
+-- one is a protected call.
+freshLibStub()
+load(R18, "r18 again")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local combatHost = H.PriestUI()
+combatHost.config.visible.shadow = false
+combatHost.engine:RefreshSpells()
+combatHost.ui:Update()
+load(CURRENT_FILES, "current again")
+WoW.inCombat = true
+local blocked = #WoW.blockedCalls
+H.check(pcall(combatHost.ui.Update, combatHost.ui), "a rebuild in combat on an r18 window does not throw")
+H.eq(#WoW.blockedCalls, blocked, "and makes no call the client would refuse")
+-- Called DIRECTLY, because Update returns on lockdown long before it would
+-- reach the pass: going through Update here asserts nothing about the guard,
+-- and a version of this test that did passed with the guard deleted.
+H.eq(combatHost.ui:AdoptLayout(), false, "the pass itself refuses under lockdown")
+H.eq(#WoW.blockedCalls, blocked, "having touched no protected call on the way out")
+H.check(combatHost.ui.main._layout == nil, "so the layout is not adopted")
+WoW.inCombat = false
+H.check(pcall(combatHost.ui.Update, combatHost.ui), "the first rebuild after the fight runs")
+H.check(combatHost.ui.main._layout ~= nil, "and adopts it then")
 
 ------------------------------------------------------------
 -- lib.Status: is this copy usable?

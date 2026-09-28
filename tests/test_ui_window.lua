@@ -651,7 +651,12 @@ local headers = 0
 for _, h in ipairs(w.headers) do if h:IsShown() then headers = headers + 1 end end
 H.eq(#H.ActiveRows(w), 1, "a raid with a tank only in group 1 gets one row")
 H.eq(headers, 1, "and one header - group 2 has nobody to buff, so no header")
-H.eq(w.headers[1]:GetText(), "-- Group 1 --", "the header is group 1's")
+-- Em dashes, written as UTF-8 bytes so this file stays ASCII: the client
+-- takes the bytes either way, and a literal dash here would depend on how
+-- the editor saved it.
+local EM = "\226\128\148"
+H.eq(w.headers[1]:GetText(), EM .. " Group 1 " .. EM, "the header is group 1's")
+H.eq(w.headers[1]:GetJustifyH(), "CENTER", "centred across the row, not tucked against it")
 H.eq(#H.ActiveRows(w)[1]._members, 1, "the row covers just the tank")
 
 ------------------------------------------------------------
@@ -975,5 +980,280 @@ ui:ApplyRowVisuals(legacyRow,
 H.check(type(legacyRow.fill) == "table", "an older copy's row gets a fill when first drawn")
 H.eq(legacyRow.bg._colorTexture[4], 0,
     "and its flat background is cleared, so it cannot show through the corners")
+
+-- The box a region really occupies, or nil when it cannot be told. A region
+-- given an explicit size answers for itself; one stretched between two
+-- anchors on another region is that region's box less the two insets - which
+-- is exactly how every mask here is built, and the only reason this check can
+-- see them at all. GetWidth() would answer with the stub's stand-in and the
+-- assertion below would be comparing two constants.
+local function Box(r)
+    if r._width and r._height then return r._width, r._height end
+    local pts = r._points
+    if not pts or #pts < 2 then return nil end
+    -- Which corner is which, rather than which call came first: the sign of an
+    -- offset means the opposite at the two ends. +x on TOPLEFT pulls the edge
+    -- in; +x on BOTTOMRIGHT pushes it out. Taking absolute values made the
+    -- panel's shadow - anchored OUTSIDE its host, which is the whole point of
+    -- a shadow - read as 44px narrower than the window instead of 44 wider,
+    -- and the assertion below failed on a region that was never wrong.
+    local tl, br
+    for _, p in ipairs(pts) do
+        if p[1] == "TOPLEFT" then tl = p elseif p[1] == "BOTTOMRIGHT" then br = p end
+    end
+    if not (tl and br and tl[2] and tl[2] == br[2]) then return nil end
+    local pw, ph = Box(tl[2])
+    if not pw then return nil end
+    return pw - (tl[4] or 0) + (br[4] or 0),
+           ph + (tl[5] or 0) - (br[5] or 0)
+end
+
+------------------------------------------------------------
+-- The glass layout
+--
+-- Sizes and positions, not looks. What these pin is the reasoning: a row
+-- shorter than about twice the mask's 8px corner radius has its corners
+-- squeezed flat and the fill reads as a painted rectangle again, which is
+-- how the first pass at 15px looked in game.
+------------------------------------------------------------
+
+setup()
+ui:Update()
+
+local row = ui.rows[1]
+H.check(row:GetHeight() >= 16,
+    "a row is tall enough for the mask's corners: " .. tostring(row:GetHeight()))
+local iw = select(1, Box(row.icon))
+H.check(iw and iw < row:GetHeight(),
+    "its icon fits inside it with room to spare: " .. tostring(iw))
+H.check(row.iconEdge ~= nil and row.iconEdge._slice ~= nil,
+    "and sits in a tile with the same sliced edge as the fill")
+H.check(row.icon._masks and #row.icon._masks == 1,
+    "rounded like everything else, rather than a square pasted on")
+
+-- The close button is ours, not Blizzard's gold disc.
+local x = ui.main.closeBtn
+H.check(x ~= nil, "the window has a close button")
+H.eq(x.label:GetText(), "\195\151", "drawn as a multiplication sign we place")
+H.check(x:IsMouseEnabled(), "which takes the mouse")
+H.check(x._ui ~= nil, "and knows the window it closes")
+
+-- It brightens under the cursor, which is the only affordance a flat square
+-- has - a Blizzard button announces itself by being gold.
+H.runScript(x, "OnLeave")
+local r1 = { x.label:GetTextColor() }
+H.runScript(x, "OnEnter")
+local r2 = { x.label:GetTextColor() }
+H.check(r2[1] > r1[1], "and brightens when the cursor is on it")
+
+-- Through the ui object, not in the handler's own body. Handlers are
+-- installed once and the frames outlive an upgrade, so a closure that
+-- recolours the label itself keeps doing what THIS copy decided in a window a
+-- later copy is otherwise driving. Checking the colour alone cannot tell the
+-- two apart - a direct closure passes that just as well.
+local dispatched
+ui.CloseButtonHover = function(self, btn, over) dispatched = over end
+H.runScript(x, "OnEnter")
+H.eq(dispatched, true, "the hover handler dispatches through the ui object")
+H.runScript(x, "OnLeave")
+H.eq(dispatched, false, "and so does the one that undoes it")
+ui.CloseButtonHover = nil
+
+-- Every string the window draws is the addon's own font, not a Blizzard
+-- template. One string left on GameFontNormalSmall is one line in the wrong
+-- typeface, which on a panel this small is the whole difference between a
+-- designed window and a patched one - and it is invisible to every other
+-- assertion here.
+setup()
+host.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
+ui:Update()
+ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
+
+local strings = {
+    ["the row timer"]        = ui.rows[1].timer,
+    ["the missing count"]    = ui.rows[1].missCount,
+    ["the MISS label"]       = ui.rows[1].missAll,
+    ["the group separator"]  = ui.headers[1],
+    ["the window title"]     = ui.main.title,
+    ["the version"]          = ui.main.version,
+    ["the close button"]     = ui.main.closeBtn.label,
+    ["the reagent count"]    = ui.footerBtns[1].countTxt,
+    ["the popover title"]    = ui.pop.hdrTxt,
+    ["a popover name"]       = ui.popRows[1].nameTxt,
+    ["a popover timer"]      = ui.popRows[1].timeTxt,
+    ["a popover range"]      = ui.popRows[1].rangeTxt,
+}
+for what, fs in pairs(strings) do
+    H.check(fs ~= nil, what .. " exists")
+    local file, size = fs:GetFont()
+    H.check(file == "Fonts\\ARIALN.TTF",
+        what .. " is set in the addon's font, not left on a template: " .. tostring(file))
+    H.check((size or 0) >= 11, what .. " is legible at arm's length: " .. tostring(size))
+    local _, sy = fs:GetShadowOffset()
+    H.check(sy ~= 0,
+        what .. " carries a shadow, because the panel behind it is see-through")
+end
+
+-- The two icons outside the rows get the same tile, or they are the only
+-- square corners left on the window.
+H.check(ui.main.specIcon._masks and #ui.main.specIcon._masks == 1,
+    "the header icon is rounded too")
+H.check(ui.main.specEdge ~= nil and ui.main.specEdge._slice ~= nil,
+    "with the sliced edge")
+H.check(ui.pop.hdrIcon._masks and #ui.pop.hdrIcon._masks == 1,
+    "and so is the popover's")
+H.check(ui.footerBtns[1].icon._masks and #ui.footerBtns[1].icon._masks == 1,
+    "and the reagent's")
+
+------------------------------------------------------------
+-- No texture is both masked and cropped
+--
+-- This client applies a mask in the texture's UNTRANSFORMED space, so a
+-- texture that is masked AND carries a SetTexCoord shows a fraction of its
+-- art in one corner of the shape. Nothing throws and nothing here failed - it
+-- just drew wrong, which is exactly how it reached the game: r19 cropped the
+-- client's baked icon border with SetTexCoord and masked the same texture,
+-- and every icon on the window came out a sliver. The crop is the mask's
+-- inset now. Stated as a rule over every region the window builds rather than
+-- as a check on the icons, because the next texture to want both will not be
+-- an icon.
+------------------------------------------------------------
+
+setup()
+host.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
+ui:Update()
+ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
+
+local walked, both, early = 0, {}, {}
+local sliced, crushed = 0, {}
+
+local function walk(frame, name, depth)
+    if depth > 4 or type(frame) ~= "table" then return end
+    for _, r in ipairs(frame._regions or {}) do
+        walked = walked + 1
+        if r._masks and #r._masks > 0 and r._texCoord then
+            both[#both + 1] = name
+        end
+        -- A mask built before the texture it clips was placed has no
+        -- rectangle, and never gets one. See the stub's SetPoint.
+        if r._isMask and r._anchoredBeforePlaced then
+            early[#early + 1] = name
+        end
+        -- A 9-slice draws its corners at native size and stretches what is
+        -- between them. Margins that meet or cross leave no centre and no
+        -- edge strips, and this client draws a fragment in one corner rather
+        -- than nothing - which is how it reached the game three times.
+        local sl, w, h = r._slice, Box(r)
+        if sl and w and h then
+            sliced = sliced + 1
+            if (sl[1] + sl[3]) >= w or (sl[2] + sl[4]) >= h then
+                crushed[#crushed + 1] = name .. " (" .. w .. "x" .. h
+                    .. " with margins " .. sl[1] .. "/" .. sl[2] .. ")"
+            end
+        end
+        walk(r, name, depth + 1)
+    end
+    for _, child in ipairs(frame._children or {}) do walk(child, name, depth + 1) end
+end
+walk(ui.main, "the window", 0)
+walk(ui.pop, "the popover", 0)
+H.check(walked > 20, "the walk found the window's regions: " .. walked)
+H.eq(#both, 0,
+    "no region is masked and cropped at once, which this client draws wrong: "
+    .. (both[1] or "none"))
+H.eq(#early, 0,
+    "and no mask was anchored to a texture that had no position yet, which "
+    .. "leaves it with no rectangle at all: " .. (early[1] or "none"))
+H.check(sliced >= 8, "the walk found the sliced textures: " .. sliced)
+
+-- A small mask must not be sliced.
+--
+-- Measured in game, not reasoned about: four explanations were deployed as
+-- fixes and none of them was it, so the window's five icon tiles were set to
+-- four different arrangements at once and one screenshot answered. No mask
+-- drew a whole square icon. An unsliced mask drew a whole rounded one. Both
+-- SLICED cells drew a fragment in the top-left corner and nothing else, and
+-- differed from the working cell only in being sliced.
+--
+-- It is NOT about being short. The same asset sliced is right on a row's
+-- fill at 123x26, and in GlassUnitFrames on power bars 300x12 and 330x7.
+-- Every case that fails is small in BOTH directions - 16, 18, 20 and 22
+-- square - so what this pins is "small in both", not a bound on either axis
+-- alone. Which axis actually decides has not been measured, and the honest
+-- shape of that is a rule that only fires when neither side is large.
+local MASK_ASSET_PX = 32
+local slicedSmall = {}
+local function checkMasks(frame, name, depth)
+    if depth > 4 or type(frame) ~= "table" then return end
+    for _, r in ipairs(frame._regions or {}) do
+        if r._isMask and r._slice then
+            local w, h = Box(r)
+            if w and h and math.max(w, h) < MASK_ASSET_PX then
+                slicedSmall[#slicedSmall + 1] = name .. " (" .. w .. "x" .. h .. ")"
+            end
+        end
+        checkMasks(r, name, depth + 1)
+    end
+    for _, c in ipairs(frame._children or {}) do checkMasks(c, name, depth + 1) end
+end
+checkMasks(ui.main, "the window", 0)
+checkMasks(ui.pop, "the popover", 0)
+H.eq(#slicedSmall, 0,
+    "no mask small in BOTH directions is sliced, which this client renders as "
+    .. "a fragment in one corner: " .. (slicedSmall[1] or "none"))
+H.eq(#crushed, 0,
+    "and every one has room between its margins for a middle: " .. (crushed[1] or "none"))
+
+-- Tooltips clear the window instead of landing on it. ANCHOR_RIGHT measures
+-- from the ROW, which is inset from the panel edge and inset again from the
+-- glass shadow around it, so with no offset the tooltip covers the thing it
+-- is describing - which is what the game showed.
+WoW.clearTooltip()
+H.runScript(ui.rows[1], "OnEnter")
+H.check(GameTooltip._anchor == "ANCHOR_RIGHT" or GameTooltip._anchor == "ANCHOR_LEFT",
+    "a row's tooltip sits beside it: " .. tostring(GameTooltip._anchor))
+local off = GameTooltip._anchorOffset
+H.check(off and math.abs(off[1]) >= 10,
+    "and clear of the panel rather than on it: " .. tostring(off and off[1]))
+H.check(off and ((GameTooltip._anchor == "ANCHOR_RIGHT") == (off[1] > 0)),
+    "pushed away from the window, not further over it")
+
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+local foff = GameTooltip._anchorOffset
+H.check(foff and foff[1] >= 10,
+    "the reagent tooltip clears it too: " .. tostring(foff and foff[1]))
+
+-- And it is drawn at the window's size, not the default UI's. GameTooltip is
+-- SHARED, so what matters as much as the scale is that it is given back:
+-- leaving it at 0.8 shrinks every other addon's tooltips for the rest of the
+-- session, and nothing in this addon would ever show it.
+H.near(GameTooltip:GetScale(), 0.8, 0.001,
+    "the tooltip is drawn at the window's size while we own it")
+H.runScript(ui.footerBtns[1], "OnLeave")
+H.near(GameTooltip:GetScale(), 1.0, 0.001,
+    "and handed back at its old size, because every addon shares it")
+
+-- The header is glass too, not an opaque band with square corners sitting on
+-- a translucent panel - which is the one piece r19 left flat.
+local hdr = ui.main.hdr
+H.check(hdr ~= nil and hdr.gloss ~= nil, "the header has the material's gloss")
+H.check(hdr.mask == nil,
+    "and is NOT masked: the band is a region of the window, so a mask would "
+    .. "have to anchor to a sibling texture, which this client draws wrong")
+local band = ui.main.hdrBg._colorTexture
+H.check(band and band[4] < 0.5,
+    "and lets the panel through rather than painting over it: " .. tostring(band and band[4]))
+
+-- The host still chooses the hue. Wildly's orange header and Magely's
+-- per-spec colours go through this, and the material only decides how solid
+-- it is.
+local before = ui.main.hdrBg._colorTexture[1]
+host.look = { header = { 0.9, 0.4, 0.1, 1 } }
+ui:ApplyAppearance()
+H.check(ui.main.hdrBg._colorTexture[1] > before,
+    "a host's header colour still reaches the band")
+H.check(ui.main.hdrBg._colorTexture[4] < 1,
+    "with the material deciding how solid it is, not the host")
 
 H.done("test_ui_window")

@@ -221,6 +221,13 @@ local PROTECTED_METHODS = {
 
 local function makeFrame(name, parent, template)
     local f = { _attr = {}, _scripts = {}, _name = name, _shown = false, _parent = parent }
+    -- Children as well as regions: a test that walks a window to check what it
+    -- drew stops at the first child frame otherwise, and reports a clean sweep
+    -- of the half it could see.
+    if type(parent) == "table" then
+        parent._children = parent._children or {}
+        parent._children[#parent._children + 1] = f
+    end
     if template and tostring(template):find("Secure") then
         f._protected = true
         local p = parent
@@ -280,6 +287,13 @@ local function makeFrame(name, parent, template)
         local c = self._vertexColor or { 1, 1, 1, 1 }
         return c[1], c[2], c[3], c[4]
     end
+    -- Text alignment, recorded: the catch-all answered GetJustifyH with the
+    -- frame, so a label meant to be centred and one left against an edge
+    -- were indistinguishable.
+    f.SetJustifyH = function(self, justify) self._justifyH = justify return self end
+    f.GetJustifyH = function(self) return self._justifyH or "LEFT" end
+    f.SetJustifyV = function(self, justify) self._justifyV = justify return self end
+    f.GetJustifyV = function(self) return self._justifyV or "MIDDLE" end
     f.SetBackdrop = function(self, backdrop) self._backdrop = backdrop return self end
     f.GetBackdrop = function(self) return self._backdrop end
     -- Frame levels decide what draws over what, and the glass material does
@@ -295,6 +309,11 @@ local function makeFrame(name, parent, template)
     f.GetFrameStrata = function(self) return self._strata or "MEDIUM" end
     f.GetAlpha = function(self) return self._alpha or 1 end
     f.SetSize = function(self, w, h) self._width, self._height = w, h return self end
+    -- Separately, because the catch-all was swallowing these: a height set
+    -- with SetHeight read back as the stand-in, so any assertion comparing
+    -- two such heights compared one constant with itself.
+    f.SetWidth  = function(self, w) self._width  = w return self end
+    f.SetHeight = function(self, h) self._height = h return self end
     f.SetScale = function(self, s) self._scale = s return self end
     f.GetScale = function(self) return self._scale or 1 end
     f.SetParent = function(self, p) self._parent = p return self end
@@ -322,6 +341,19 @@ local function makeFrame(name, parent, template)
         self._gradient = { orientation = orientation, from = from, to = to } return self
     end
     f.SetDesaturated = function(self, on) self._desaturated = on and true or false return self end
+    -- Recorded because it does not compose with AddMaskTexture: this client
+    -- applies a mask in the texture's UNTRANSFORMED space, so a masked
+    -- texture that is also cropped shows a fraction of its art in one corner.
+    -- Nothing throws; it just draws wrong, which is why the suite has to know.
+    f.SetTexCoord = function(self, ...)
+        self._texCoord = { ... }
+        return self
+    end
+    f.GetTexCoord = function(self)
+        local c = self._texCoord
+        if not c then return nil end
+        return unpack(c)
+    end
     f.AddMaskTexture = function(self, mask)
         self._masks = self._masks or {}
         self._masks[#self._masks + 1] = mask
@@ -334,6 +366,10 @@ local function makeFrame(name, parent, template)
         return self
     end
     f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
+    f.GetTextColor = function(self)
+        local c = self._textColor or { 1, 1, 1, 1 }
+        return c[1], c[2], c[3], c[4]
+    end
     f.SetColorTexture = function(self, r, g, b, a) self._colorTexture = { r, g, b, a } return self end
     f.GetTexture = function(self) return self._texture end
     f.StartMoving = function(self) self._moving = true return self end
@@ -345,11 +381,29 @@ local function makeFrame(name, parent, template)
         if type(rel) == "number" then
             rel, relPoint, x, y = nil, nil, rel, relPoint
         end
+        -- A MASK anchored to a texture that has not been placed yet gets no
+        -- rectangle, and this client does not go back and give it one when
+        -- the texture is anchored afterwards: the masked texture then draws
+        -- only where that empty mask is, which looks like a sliver of the art
+        -- in one corner. Nothing throws, so the order is recorded here or no
+        -- test can see it.
+        if self._isMask and type(rel) == "table" and rel._objectType == "Texture"
+            and not (rel._points and #rel._points > 0) then
+            self._anchoredBeforePlaced = true
+        end
         self._points = self._points or {}
         self._points[#self._points + 1] = { point, rel, relPoint, x, y }
         return self
     end
     f.ClearAllPoints = function(self) self._points = nil return self end
+    -- Recorded as the two corners it really is, not swallowed by the catch-all:
+    -- a region anchored this way has a size, and a test that cannot derive it
+    -- silently skips the region instead of checking it.
+    f.SetAllPoints = function(self, rel)
+        self._points = { { "TOPLEFT", rel, "TOPLEFT", 0, 0 },
+                         { "BOTTOMRIGHT", rel, "BOTTOMRIGHT", 0, 0 } }
+        return self
+    end
     -- The client declares `RegisterEvent(eventName:cstring) -> registered:bool`
     -- and throws on a name it does not know. WoW.badEvents models the throw,
     -- WoW.refusedEvents a refusal by return value.
@@ -385,7 +439,30 @@ local function makeFrame(name, parent, template)
         return t
     end
     f.GetDrawLayer = function(self) return self._drawLayer, self._subLayer end
-    f.CreateFontString = function(self) return region(self, "FontString") end
+    -- The template is recorded, and so is any later SetFont: a string left on
+    -- a Blizzard template is a string the addon never styled, and on a glass
+    -- panel that is visible as one line in the wrong typeface.
+    f.CreateFontString = function(self, name, layer, template)
+        local fs = region(self, "FontString")
+        fs._drawLayer, fs._template = layer, template
+        return fs
+    end
+    f.SetFont = function(self, file, size, flags)
+        self._font = { file, size, flags }
+        return true
+    end
+    f.GetFont = function(self)
+        local fnt = self._font
+        if not fnt then return nil end
+        return fnt[1], fnt[2], fnt[3]
+    end
+    f.SetShadowColor  = function(self, r, g, b, a) self._shadowColor = { r, g, b, a or 1 } end
+    f.SetShadowOffset = function(self, x, y) self._shadowOffset = { x, y } end
+    f.GetShadowOffset = function(self)
+        local o = self._shadowOffset
+        if not o then return 0, 0 end
+        return o[1], o[2]
+    end
     -- Below `region`, which these need: a local declared further down is a
     -- GLOBAL inside a closure written above it, and would have thrown on the
     -- first call rather than at load.
@@ -427,7 +504,13 @@ local function makeFrame(name, parent, template)
     -- yet, which is what the live client reports inside a scroll child during
     -- OnShow.
     f.GetStringHeight = function() return WoW.zeroHeights and 0 or 12 end
-    f.GetWidth = function(self) return self == UIParent and WoW.screenWidth or 100 end
+    -- A size that was SET reads back; anything else keeps the old stand-in.
+    -- Layout is arithmetic on these, and a stub that answered 100 for every
+    -- frame made every such assertion a comparison of two constants.
+    f.GetWidth = function(self)
+        if self == UIParent then return WoW.screenWidth end
+        return self._width or 100
+    end
     -- nil until a test places the frame, which is what the live client returns
     -- before layout - a case the caller has to handle.
     f.GetCenter = function(self)
@@ -435,7 +518,7 @@ local function makeFrame(name, parent, template)
         if not x then return nil end
         return x, 300
     end
-    f.GetHeight = function() return 20 end
+    f.GetHeight = function(self) return self._height or 20 end
     f.GetChecked = function(self) return self._checked end
     f.SetChecked = function(self, v) self._checked = v return self end
     f.GetMinMaxValues = function() return 0, 1 end
@@ -542,8 +625,12 @@ DEFAULT_CHAT_FRAME = {
 
 GameTooltip = makeFrame("GameTooltip")
 -- Records what was put in it, so a test can assert what the player is told.
-GameTooltip.SetOwner = function(self, owner, anchor)
+GameTooltip.SetOwner = function(self, owner, anchor, xOff, yOff)
     self._owner, self._anchor, self._lines = owner, anchor, {}
+    -- The offsets too: ANCHOR_RIGHT measures from the OWNER, and an owner
+    -- inset inside a panel puts the tooltip on top of that panel unless the
+    -- caller pushes it clear.
+    self._anchorOffset = { xOff or 0, yOff or 0 }
     return self
 end
 GameTooltip.SetText = function(self, text)

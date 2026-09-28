@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 19
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 18
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -52,114 +52,20 @@ lib.UIMeta.__index = Methods
 
 -- ─── Layout ─────────────────────────────────────────────────────────────────
 
--- Sized for the glass material rather than for the Blizzard backdrop it
--- replaced. Two things drive these numbers:
---
---   * the rounded corners. A row's mask has an 8px radius, so a row shorter
---     than about twice that has its corners squeezed flat and the fill reads
---     as a painted rectangle again - which is exactly how the first pass at
---     15px looked in game.
---   * the icon. A buff icon at 16px next to 10px text is a toolbar; the rows
---     are what the addon is read at a glance, and they are now legible from
---     a raid frame's distance.
-local ICON_W     = 24
-local BAR_W      = 99
-local ROW_H      = 26
-local ROW_W      = ICON_W + BAR_W       -- 123
-local GRP_HDR_H  = 16
-local FRAME_W    = ROW_W + 12           -- 135
+local ICON_W     = 16
+local BAR_W      = 91
+local ROW_H      = 15
+local ROW_W      = ICON_W + BAR_W       -- 107
+local GRP_HDR_H  = 10
+local FRAME_W    = ROW_W + 12           -- 119
 local ROW_X      = 5
-local HDR_H      = 30                   -- styled header bar height
-local FTR_H      = 22                   -- reagent footer height
+local HDR_H      = 24                   -- styled header bar height
+local FTR_H      = 14                   -- reagent footer height
 -- Wide enough for a full Forever name: characters have surnames, and first
 -- names are not unique, so the whole name has to fit.
-local POP_W      = 250
-local POP_ROW_H  = 30
-local POP_HDR_H  = 30
-
--- Text. The client's own Arial Narrow reads closer to the mock-up than Friz
--- Quadrata, and the material's notes make the same choice for the same
--- reason. Sized against the row rather than fixed, so a change to ROW_H does
--- not leave the text where it was.
-local FONT_FILE  = "Fonts\\ARIALN.TTF"
-local ROW_FONT   = 13
-local NAME_FONT  = 14
-local TITLE_FONT = 16
-local GRP_FONT   = 11
-local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
-
--- The slice margin the bar textures are DRAWN for. Glass.lua's own header
--- says margins are in texture pixels and must match the generator, and the
--- generator makes bar_mask and bar_edge at 32px with a radius of 5 and
--- margins of 8. Scaling the margin down to fit a small box - which this file
--- did for one build - cuts through the corner arc itself, so the corners come
--- out part straight edge: a second wrong thing, hiding behind the first. A
--- box too small to hold 8 on each side cannot use these sliced at all, and
--- the suite fails on one rather than letting it draw wrong.
-local BAR_SLICE = 8
-
--- A small rounded icon tile.
---
--- Four explanations for the icons rendering as a sliver were deployed and
--- none of them was it. What settled it was an experiment rather than a fifth
--- guess: the window draws five of these and they are all on screen together,
--- so each call site got a different arrangement and one screenshot answered.
--- No mask drew a whole square icon; an unsliced mask drew a whole rounded
--- one; both sliced cells failed, and differed from the working one ONLY in
--- being sliced.
---
--- The tile keeps a frame of its own. That was built to test one of the wrong
--- theories, but it earns its place anyway: SetAllPoints on a frame is how the
--- mask gets its rectangle without an anchor whose sign has to be reasoned
--- about, and it is the same shape as the row fills, which have been right
--- from the first build.
-local function IconTile(parent, size, point, relTo, relPoint, x, y)
-    local box = CreateFrame("Frame", nil, parent)
-    box:SetSize(size, size)
-    box:SetPoint(point or "LEFT", relTo or parent, relPoint or "LEFT", x or 0, y or 0)
-
-    local tile = box:CreateTexture(nil, "ARTWORK")
-    tile:SetAllPoints(box)
-
-    -- The mask is NOT sliced, and that is the whole of it. A sliced
-    -- MaskTexture on a box this small draws a fragment of the masked art in
-    -- the top-left corner of the shape and nothing else. The same asset
-    -- SLICED is right on a row's fill at 123x26, and in GlassUnitFrames on
-    -- power bars 300x12 and 330x7 - so it is not about being short. Every
-    -- case that fails is small in BOTH directions (16 to 22 square); which
-    -- axis actually decides has not been measured.
-    --
-    -- Unsliced, the 32px asset is scaled to the tile, which leaves a corner
-    -- radius of about 2.5px at 20px - right for something this small, so
-    -- nothing is given up by not slicing it. The client's icons carry a
-    -- border in their outer few percent, and the rounding eats its corners;
-    -- cropping the rest with SetTexCoord is NOT the way to remove it, because
-    -- a mask is applied in the texture's untransformed space.
-    local mask = box:CreateMaskTexture()
-    mask:SetTexture(lib.Glass.MEDIA .. "bar_mask",
-                    "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    mask:SetAllPoints(box)
-    tile:AddMaskTexture(mask)
-
-    local edge = box:CreateTexture(nil, "OVERLAY")
-    edge:SetAllPoints(box)
-    edge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    edge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
-    local modes = Enum and Enum.UITextureSliceMode
-    edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
-
-    return tile, edge, mask, box
-end
-
--- Text over glass needs its own shadow: the panel behind it is translucent,
--- so a light letter can land on a light patch of the world.
-local function Style(fs, size, justify)
-    fs:SetFont(FONT_FILE, size, "")
-    fs:SetShadowColor(0, 0, 0, 0.9)
-    fs:SetShadowOffset(1, -1)
-    if justify then fs:SetJustifyH(justify) end
-    return fs
-end
+local POP_W      = 236
+local POP_ROW_H  = 22
+local POP_HDR_H  = 24
 
 -- The worst roster the engine can produce: a full raid in eight subgroups of
 -- at most five, and a pet on every member.
@@ -189,18 +95,6 @@ for class, icon in pairs({
 }) do
     UI.CLASS_ICONS[class] = icon
 end
-
--- How far a tooltip sits off the row it describes. ANCHOR_RIGHT measures from
--- the ROW, which is inset from the panel edge and inset again from the glass
--- shadow around it - so with no offset the tooltip lands ON the window it is
--- describing. This is that inset plus a gap.
-local TIP_GAP = 16
-
--- The client's tooltip is sized for the default UI, which is bigger than this
--- window: at full size it reads as a different addon's panel parked next to
--- ours. GameTooltip is SHARED, so the scale is put back whenever we let go of
--- it - leaving it at 0.8 would shrink every other addon's tooltips too.
-local TIP_SCALE = 0.8
 
 -- Colours an addon can override through appearance(); these are Priestly's.
 UI.DEFAULT_APPEARANCE = UI.DEFAULT_APPEARANCE or {}
@@ -484,101 +378,30 @@ local function SetFill(row, height, r, g, b, a)
     if fill then fill:SetColour(r, g, b, a) end
 end
 
--- How much of the host's header colour survives. The header was the last flat
--- thing on the window: an opaque band with square corners sitting on a
--- translucent, round-cornered panel, which read as a title bar from a
--- different addon. Here the host still chooses the HUE - Wildly's orange,
--- Magely's per-spec - and the material chooses how solid it is, the same
--- bargain TintPanel already makes for the panel itself.
-local HDR_TAG   = "glassHeader"
-local HDR_TINT  = 0.30
-
-local function HeaderGlass(main)
-    if type(main.hdr) == "table" and rawget(main.hdr, HDR_TAG) then return main.hdr end
-    if InCombatLockdown() then return nil end
-    local tint = main.hdrBg
-    if type(tint) ~= "table" or not tint.AddMaskTexture then return nil end
-
-    -- hdrBg itself becomes the tint, rather than a second band drawn over it:
-    -- an older copy upgrading in place already has this texture, and two of
-    -- them would simply add up.
-    --
-    -- Not masked, and not for a good reason: it was unmasked while chasing
-    -- the icon bug, on a theory about sibling-anchored masks that did not hold
-    -- up. At 127x30 this band is the size class where a sliced mask works, so
-    -- rounding it is available - it would want its own frame, the shape Fill
-    -- uses, and a screenshot to confirm. Left as it is because it reads
-    -- correctly: the band is inset 4px inside a panel that is already
-    -- rounded, so its own corners barely show, and the gloss is what makes it
-    -- glass rather than the corners.
-    local Glass = lib.Glass
-    local gloss = main:CreateTexture(nil, "ARTWORK", nil, 2)
-    gloss:SetAllPoints(tint)
-    gloss:SetTexture(Glass.MEDIA .. "gloss")
-    gloss:SetBlendMode("ADD")
-    gloss:SetAlpha(Glass.STYLE.gloss)
-
-    local hdr = { tint = tint, gloss = gloss, [HDR_TAG] = true }
-    main.hdr = hdr
-    return hdr
-end
-
--- An older copy's icon is a bare texture on the frame, and a texture cannot
--- be destroyed on this client. It is emptied and hidden, its image handed to
--- the tile that replaces it, and the reference moved on.
-local function ReplaceIcon(old, tile)
-    if type(old) ~= "table" or old == tile then return end
-    if old.GetTexture and tile.SetTexture then tile:SetTexture(old:GetTexture()) end
-    if old.SetTexture then old:SetTexture(nil) end
-    if old.Hide then old:Hide() end
-end
-
--- This version's geometry, applied to a row whether it was built a moment ago
--- or by an older copy upgrading in place. Separate from MakeRow because
--- frames are built ONCE: Init returns early when self.main exists, so a
--- window an r18 copy made would otherwise keep 15px rows, a bare 14px icon
--- and the old font under r19's code. Everything here is idempotent - anchors
--- are cleared before they are set, fonts are set again, and the icon tile is
--- built only if there is not already one.
-local function StyleRow(r)
-    r:SetSize(ROW_W, ROW_H)
-
-    -- A table, not merely present: the test stub answers any unknown field
-    -- with a no-op method, so `if not r.iconEdge` is true on a fresh row in
-    -- game and false under test - which would leave every tested row without
-    -- the tile this is here to build.
-    if type(r.iconEdge) ~= "table" then
-        local old = r.icon
-        r.icon, r.iconEdge = IconTile(r, ROW_H - 6, "LEFT", r, "LEFT", 3, 0)
-        ReplaceIcon(old, r.icon)
-    end
-
-    Style(r.timer, ROW_FONT, "RIGHT")
-    r.timer:ClearAllPoints()
-    r.timer:SetPoint("RIGHT", r, "RIGHT", -6, 0)
-
-    Style(r.missCount, ROW_FONT, "LEFT")
-    r.missCount:ClearAllPoints()
-    r.missCount:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-    r.missCount:SetTextColor(1.0, 1.0, 1.0)
-
-    Style(r.missAll, ROW_FONT, "RIGHT")
-    r.missAll:ClearAllPoints()
-    r.missAll:SetPoint("RIGHT", r, "RIGHT", -6, 0)
-    r.missAll:SetTextColor(unpack(COLOUR.MISS))
-    r.missAll:SetText("MISS")
-end
-
 local function MakeRow(ui, parent, i)
     local r = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
     r._ui = ui
+    r:SetSize(ROW_W, ROW_H)
     r:EnableMouse(true)
     r:RegisterForClicks(lib.API.ClickEdges())
 
-    r.timer     = r:CreateFontString(nil, "OVERLAY")
-    r.missCount = r:CreateFontString(nil, "OVERLAY")
-    r.missAll   = r:CreateFontString(nil, "OVERLAY")
-    StyleRow(r)
+
+    r.icon = r:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(ICON_W - 2, ICON_W - 2)
+    r.icon:SetPoint("LEFT", r, "LEFT", 1, 0)
+    r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    r.timer = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.timer:SetPoint("RIGHT", r, "RIGHT", -3, 0)
+
+    r.missCount = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.missCount:SetPoint("LEFT", r, "LEFT", ICON_W + 2, 0)
+    r.missCount:SetTextColor(1.0, 1.0, 1.0)
+
+    r.missAll = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.missAll:SetPoint("CENTER", r, "CENTER", ICON_W / 2, 0)
+    r.missAll:SetTextColor(unpack(COLOUR.MISS))
+    r.missAll:SetText("MISS")
 
     r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
     r:SetScript("PostClick", function(self, button) return self._ui:RowPostClick(self, button) end)
@@ -590,48 +413,36 @@ local function MakeRow(ui, parent, i)
     return r
 end
 
--- As StyleRow, for a popover row. `i` is its place in the pool, which decides
--- where it sits.
-local function StylePopRow(pr, i)
-    pr:SetSize(POP_W - 10, POP_ROW_H)
-    pr:ClearAllPoints()
-    pr:SetPoint("TOPLEFT", pr:GetParent(), "TOPLEFT",
-        5, -(POP_HDR_H + 5) - (i - 1) * (POP_ROW_H + 2))
-
-    Style(pr.rangeTxt, ROW_FONT, "CENTER")
-    pr.rangeTxt:ClearAllPoints()
-    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
-    pr.rangeTxt:SetWidth(14)
-
-    if type(pr.classEdge) ~= "table" then
-        local old = pr.classIcon
-        pr.classIcon, pr.classEdge =
-            IconTile(pr, POP_ROW_H - 8, "LEFT", pr.rangeTxt, "RIGHT", 4, 0)
-        ReplaceIcon(old, pr.classIcon)
-    end
-
-    Style(pr.nameTxt, NAME_FONT, "LEFT")
-    pr.nameTxt:ClearAllPoints()
-    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 5,  0)
-    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -46, 0)
-
-    Style(pr.timeTxt, ROW_FONT, "RIGHT")
-    pr.timeTxt:ClearAllPoints()
-    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -5, 0)
-    pr.timeTxt:SetWidth(42)
-end
-
 local function MakePopRow(ui, parent, i)
     local pr = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
     pr._ui = ui
+    pr:SetSize(POP_W - 10, POP_ROW_H)
+    pr:SetPoint("TOPLEFT", parent, "TOPLEFT",
+        5, -(POP_HDR_H + 5) - (i - 1) * (POP_ROW_H + 2))
     pr:EnableMouse(true)
     pr:RegisterForClicks(lib.API.ClickEdges())
     pr:SetFrameLevel(202)  -- above the popover's level 200
 
-    pr.rangeTxt = pr:CreateFontString(nil, "OVERLAY")
-    pr.nameTxt  = pr:CreateFontString(nil, "OVERLAY")
-    pr.timeTxt  = pr:CreateFontString(nil, "OVERLAY")
-    StylePopRow(pr, i)
+
+    pr.rangeTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 3, 0)
+    pr.rangeTxt:SetWidth(13)
+    pr.rangeTxt:SetJustifyH("CENTER")
+
+    pr.classIcon = pr:CreateTexture(nil, "ARTWORK")
+    pr.classIcon:SetSize(POP_ROW_H - 6, POP_ROW_H - 6)
+    pr.classIcon:SetPoint("LEFT", pr.rangeTxt, "RIGHT", 2, 0)
+    pr.classIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    pr.nameTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 3,  0)
+    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -44, 0)
+    pr.nameTxt:SetJustifyH("LEFT")
+
+    pr.timeTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -3, 0)
+    pr.timeTxt:SetWidth(40)
+    pr.timeTxt:SetJustifyH("RIGHT")
 
     pr:SetScript("PreClick",  function(self, button) return self._ui:PopRowPreClick(self, button) end)
     pr:SetScript("PostClick", function(self, button) return self._ui:PopRowPostClick(self, button) end)
@@ -643,108 +454,24 @@ local function MakePopRow(ui, parent, i)
     return pr
 end
 
-local function StyleFooterButton(btn)
-    btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
-
-    if type(btn.iconEdge) ~= "table" then
-        local old = btn.icon
-        btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4, "LEFT", btn, "LEFT", 0, 0)
-        ReplaceIcon(old, btn.icon)
-    end
-
-    Style(btn.countTxt, ROW_FONT, "LEFT")
-    btn.countTxt:ClearAllPoints()
-    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 4, 0)
-end
-
 local function MakeFooterButton(ui, parent)
     local btn = CreateFrame("Button", nil, parent)
     btn._ui = ui
+    btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
     btn:EnableMouse(true)
 
-    btn.countTxt = btn:CreateFontString(nil, "OVERLAY")
-    StyleFooterButton(btn)
+    btn.icon = btn:CreateTexture(nil, "ARTWORK")
+    btn.icon:SetSize(FTR_H - 4, FTR_H - 4)
+    btn.icon:SetPoint("LEFT", btn, "LEFT", 0, 0)
+    btn.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    btn.countTxt = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 2, 0)
 
     btn:SetScript("OnEnter", function(self) return self._ui:FooterEnter(self) end)
     btn:SetScript("OnLeave", function(self) return self._ui:FooterLeave(self) end)
     btn:Hide()
     return btn
-end
-
--- Built here rather than from UIPanelCloseButton: that one is a Blizzard
--- gold-and-red disc, which on a glass panel reads as a sticker from another
--- addon. This is the same rounded, sliced edge the rows use, with an x drawn
--- in the panel's own text colour.
---
--- The hover handlers dispatch through the ui object like every other handler
--- in this file. Handlers are installed once and the frames outlive an
--- upgrade, so a closure that recolours the label itself would keep doing
--- exactly what r19 decided, in a window a later copy is otherwise driving.
-local function MakeCloseButton(ui, main)
-    local xBtn = CreateFrame("Button", nil, main)
-    xBtn._ui = ui
-    xBtn:SetSize(HDR_H - 12, HDR_H - 12)
-    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", -6, -6)
-    xBtn:EnableMouse(true)
-
-    local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
-    xEdge:SetAllPoints(xBtn)
-    xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    xEdge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
-    local xModes = Enum and Enum.UITextureSliceMode
-    xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
-
-    local xTxt = Style(xBtn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
-    xTxt:SetPoint("CENTER", xBtn, "CENTER", 0, 0)
-    xTxt:SetText("\195\151")
-    xBtn.label = xTxt
-
-    xBtn:SetScript("OnEnter", function(b) return b._ui:CloseButtonHover(b, true) end)
-    xBtn:SetScript("OnLeave", function(b) return b._ui:CloseButtonHover(b, false) end)
-    xBtn:SetScript("OnClick", function(b) return b._ui:Close(true) end)
-    ui:CloseButtonHover(xBtn, false)
-    return xBtn
-end
-
--- The popover's own header. Same rules as StyleHeader.
-local function StylePopHeader(pop)
-    if type(pop.hdrEdge) ~= "table" then
-        local old = pop.hdrIcon
-        pop.hdrIcon, pop.hdrEdge =
-            IconTile(pop, POP_HDR_H - 10, "TOPLEFT", pop, "TOPLEFT", 7, -6)
-        ReplaceIcon(old, pop.hdrIcon)
-    end
-
-    Style(pop.hdrTxt, NAME_FONT, "LEFT")
-    pop.hdrTxt:ClearAllPoints()
-    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 6, 0)
-    pop.hdrTxt:SetPoint("RIGHT", pop,         "RIGHT", -6, 0)
-    pop.hdrTxt:SetPoint("TOP",   pop,         "TOP",   0, -8)
-end
-
--- This version's header, on a window built a moment ago or by an older copy.
--- Same rules as StyleRow: idempotent, and the tile only if there is not one.
-local function StyleHeader(main)
-    main.hdrBg:SetHeight(HDR_H)
-    -- The drag strip covers the header, so it is the header's height or a
-    -- band of it stops answering the mouse. Set once at build before r19,
-    -- which left an adopted window draggable only by its top 24px.
-    if type(main.dragHandle) == "table" then main.dragHandle:SetHeight(HDR_H) end
-
-    if type(main.specEdge) ~= "table" then
-        local old = main.specIcon
-        main.specIcon, main.specEdge =
-            IconTile(main, HDR_H - 10, "LEFT", main.hdrBg, "LEFT", 5, 0)
-        ReplaceIcon(old, main.specIcon)
-    end
-
-    Style(main.title, TITLE_FONT, "LEFT")
-    main.title:ClearAllPoints()
-    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 5, 0)
-
-    Style(main.version, GRP_FONT, "LEFT")
-    main.version:ClearAllPoints()
-    main.version:SetPoint("LEFT", main.title, "RIGHT", 3, -1)
 end
 
 -- Build the frames, once. Refused in combat: secure buttons cannot be created
@@ -777,13 +504,25 @@ function Methods:Init()
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
     main.hdrLine = hdrLine
 
-    main.title   = main:CreateFontString(nil, "OVERLAY")
-    main.version = main:CreateFontString(nil, "OVERLAY")
-    StyleHeader(main)
+    main.specIcon = main:CreateTexture(nil, "OVERLAY")
+    main.specIcon:SetSize(HDR_H - 6, HDR_H - 6)
+    main.specIcon:SetPoint("LEFT", hdrBg, "LEFT", 4, 0)
+    main.specIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    main.title = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 3, 0)
     main.title:SetText(self.host.title or self.host.owner)
+
+    main.version = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    main.version:SetPoint("LEFT", main.title, "RIGHT", 2, 0)
     main.version:SetText(self.host.version and ("|cff555577" .. self.host.version .. "|r") or "")
 
-    main.closeBtn = MakeCloseButton(self, main)
+    local xBtn = CreateFrame("Button", nil, main, "UIPanelCloseButton")
+    xBtn._ui = self
+    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", 3, 3)
+    xBtn:SetScale(0.6)
+    xBtn:SetScript("OnClick", function(b) return b._ui:Close(true) end)
+    main.closeBtn = xBtn
 
     -- Covers the header only, so the row buttons still get their clicks.
     local drag = CreateFrame("Frame", nil, main)
@@ -801,11 +540,7 @@ function Methods:Init()
     main.dragHandle = drag
 
     for i = 1, nGroups do
-        -- Centred across the whole row, not left-aligned next to it: the
-        -- separators are the only thing breaking the run of coloured bars,
-        -- and a label tucked against the left edge does not read as a break.
-        local fs = Style(main:CreateFontString(nil, "OVERLAY"), GRP_FONT, "CENTER")
-        fs:SetWidth(ROW_W)
+        local fs = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         fs:Hide()
         self.headers[i] = fs
     end
@@ -822,8 +557,16 @@ function Methods:Init()
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
-    pop.hdrTxt = pop:CreateFontString(nil, "OVERLAY")
-    StylePopHeader(pop)
+    pop.hdrIcon = pop:CreateTexture(nil, "ARTWORK")
+    pop.hdrIcon:SetSize(POP_HDR_H - 6, POP_HDR_H - 6)
+    pop.hdrIcon:SetPoint("TOPLEFT", pop, "TOPLEFT", 7, -6)
+    pop.hdrIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    pop.hdrTxt = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 5, 0)
+    pop.hdrTxt:SetPoint("RIGHT", pop,         "RIGHT", -6, 0)
+    pop.hdrTxt:SetPoint("TOP",   pop,         "TOP",   0, -8)
+    pop.hdrTxt:SetJustifyH("LEFT")
     pop.hdrTxt:SetTextColor(1.0, 0.82, 0.22)
 
     self:PopDivider()
@@ -855,13 +598,6 @@ end
 -- popover's regions.
 local DIVIDER_X, DIVIDER_Y = 5, -(POP_HDR_H + 2)
 
--- Where earlier copies put it. The search below is by POSITION - it is the
--- only handle on a texture a pre-r11 copy kept in a local - so every header
--- height this library has shipped has to be listed, or the divider a running
--- copy already built is missed and a second one is drawn over it. r17 and
--- earlier used a 24px header; r19 made it 30 for the glass layout.
-local DIVIDER_YS = { DIVIDER_Y, -(24 + 2) }
-
 -- A divider an older copy of the library (before r11) built. It drew the same
 -- line but kept it in a local, so the only way to reach it is by where it is:
 -- a texture whose first anchor is the popover's TOPLEFT at the divider's
@@ -870,10 +606,8 @@ local function FindOlderDivider(pop)
     for _, r in ipairs({ pop:GetRegions() }) do
         if r ~= pop.hdrIcon and r:GetObjectType() == "Texture" then
             local point, relativeTo, _, x, y = r:GetPoint()
-            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X then
-                for _, known in ipairs(DIVIDER_YS) do
-                    if y == known then return r end
-                end
+            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X and y == DIVIDER_Y then
+                return r
             end
         end
     end
@@ -1061,23 +795,6 @@ local function RimColour(f, colour)
     g.rim:SetVertexColor(colour[1], colour[2], colour[3])
 end
 
--- Ours while we own it, the way we found it afterwards.
-local function OwnTooltip(owner, anchor, xOff)
-    if GameTooltip._lgbScale == nil then
-        GameTooltip._lgbScale = GameTooltip:GetScale() or 1
-    end
-    GameTooltip:SetOwner(owner, anchor, xOff or 0, 0)
-    GameTooltip:SetScale(TIP_SCALE)
-end
-
-local function ReleaseTooltip()
-    GameTooltip:Hide()
-    if GameTooltip._lgbScale then
-        GameTooltip:SetScale(GameTooltip._lgbScale)
-        GameTooltip._lgbScale = nil
-    end
-end
-
 function Methods:ApplyAppearance()
     if not self.main then return end
     local look = self:Appearance()
@@ -1085,10 +802,7 @@ function Methods:ApplyAppearance()
     local main, pop = self.main, self.pop
     TintPanel(main, look.mainBg, alpha)
     RimColour(main, look.border)
-    local hdr = HeaderGlass(main)
-    local hc = look.header
-    main.hdrBg:SetColorTexture(hc[1], hc[2], hc[3],
-        (hc[4] or 1) * (hdr and HDR_TINT or 1))
+    main.hdrBg:SetColorTexture(unpack(look.header))
     main.hdrLine:SetColorTexture(unpack(look.headerLine))
     main.ftrLine:SetColorTexture(unpack(look.footerLine))
     for _, h in ipairs(self.headers) do h:SetTextColor(unpack(look.groupText)) end
@@ -1158,7 +872,7 @@ end
 -- API.ItemInfo).
 function Methods:FooterEnter(btn)
     if not btn._itemID then return end
-    OwnTooltip(btn, "ANCHOR_RIGHT", TIP_GAP)
+    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
     local name, r, g, b = lib.API.ItemInfo(btn._itemID)
     -- A cache miss is not an error: ItemInfo has asked the client for the
     -- item, so the next hover will have it.
@@ -1173,7 +887,7 @@ function Methods:FooterEnter(btn)
 end
 
 function Methods:FooterLeave()
-    ReleaseTooltip()
+    GameTooltip:Hide()
 end
 
 -- ─── Ticker ─────────────────────────────────────────────────────────────────
@@ -1380,7 +1094,7 @@ end
 
 function Methods:PopRowEnter(pr)
     if pr._unit and not UnitIsConnected(pr._unit) then
-        OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
+        GameTooltip:SetOwner(pr, "ANCHOR_RIGHT")
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 0.6, 0.6, 0.6)
         GameTooltip:AddLine("This player is offline", 1, 0.5, 0.5)
         GameTooltip:Show()
@@ -1388,7 +1102,7 @@ function Methods:PopRowEnter(pr)
 end
 
 function Methods:PopRowLeave()
-    ReleaseTooltip()
+    GameTooltip:Hide()
 end
 
 -- ─── Click hints ────────────────────────────────────────────────────────────
@@ -1408,7 +1122,7 @@ function Methods:GroupLabel(gNum)
 end
 
 function Methods:HideClickHint()
-    ReleaseTooltip()
+    GameTooltip:Hide()
 end
 
 function Methods:ShowClickHint(row)
@@ -1425,7 +1139,7 @@ function Methods:ShowClickHint(row)
 
     -- The popover opens on this same hover, so sit on the other side.
     local side = (self:PopoverSide(row) == "right") and "ANCHOR_LEFT" or "ANCHOR_RIGHT"
-    OwnTooltip(row, side, (side == "ANCHOR_RIGHT") and TIP_GAP or -TIP_GAP)
+    GameTooltip:SetOwner(row, side)
     GameTooltip:SetText(def.hasGroup and def.grp or def.sngl, 0.62, 0.85, 1.0)
 
     -- Resolve each click the way the click itself resolves it. Out of combat
@@ -1626,18 +1340,6 @@ end
 -- same fight (the group emptied) leaves it shown while `visible` is already
 -- false. Said once per pending close, not once per click. The return value is
 -- there for a caller that wants to handle it itself.
--- A flat square has no affordance of its own - a Blizzard button announces
--- itself by being gold - so it brightens under the cursor. A method rather
--- than a closure, because the frame outlives the copy that installed it.
-function Methods:CloseButtonHover(btn, over)
-    if not (btn and btn.label) then return end
-    if over then
-        btn.label:SetTextColor(1, 1, 1)
-    else
-        btn.label:SetTextColor(0.75, 0.75, 0.8)
-    end
-end
-
 function Methods:Close(manual)
     if InCombatLockdown() then
         self.closePending = true
@@ -1767,60 +1469,6 @@ end
 -- Rebuild and SHOW the window. In combat it only refreshes what is on screen
 -- (secure attributes cannot be written) and remembers a show request for
 -- when combat ends.
--- The layout this copy draws. Bumped whenever the geometry changes, which is
--- what tells an older copy's window apart from one this copy built.
-local LAYOUT = 2
-
--- Bring a window an older copy built up to this one's layout.
---
--- Frames are built ONCE: Init returns early when self.main exists, so without
--- this an r18 window keeps 15px rows, bare icons, the old font and Blizzard's
--- close button while r19's code drives it - the same class of bug Panel and
--- Fill already adopt around, and the one Codex found in r19 (#37). Refused in
--- combat, because rows are secure buttons and resizing one is a protected
--- call; the next rebuild out of combat comes back here.
-function Methods:AdoptLayout()
-    local main = self.main
-    if not main then return false end
-    if main._layout == LAYOUT then return true end
-    if InCombatLockdown() then return false end
-
-    StyleHeader(main)
-    if self.pop then StylePopHeader(self.pop) end
-    for _, r   in ipairs(self.rows)       do StyleRow(r) end
-    for i, pr  in ipairs(self.popRows)    do StylePopRow(pr, i) end
-    -- The footer's buttons are built lazily, one per item the host offers, so
-    -- there may be none yet - and LayoutFooter adds more later. New ones come
-    -- out of MakeFooterButton already styled; these are the ones r18 made.
-    for _, btn in ipairs(self.footerBtns) do StyleFooterButton(btn) end
-    for _, fs in ipairs(self.headers) do
-        Style(fs, GRP_FONT, "CENTER")
-        fs:SetWidth(ROW_W)
-    end
-
-    -- Blizzard's close button has no label of ours. It cannot be destroyed,
-    -- so it is hidden, unhooked from the mouse, and replaced.
-    local x = main.closeBtn
-    if type(x) == "table" and type(x.label) ~= "table" then
-        if x.Hide then x:Hide() end
-        if x.EnableMouse then x:EnableMouse(false) end
-        main.closeBtn = MakeCloseButton(self, main)
-    end
-
-    -- The divider was adopted where the OLD header put it, which is no longer
-    -- under the header. FindOlderDivider knows every height this library has
-    -- shipped, so it is found; moving it is this step's job.
-    local hdiv = self:PopDivider()
-    if hdiv and hdiv.ClearAllPoints then
-        hdiv:ClearAllPoints()
-        hdiv:SetPoint("TOPLEFT",  self.pop, "TOPLEFT",  DIVIDER_X, DIVIDER_Y)
-        hdiv:SetPoint("TOPRIGHT", self.pop, "TOPRIGHT", -DIVIDER_X, DIVIDER_Y)
-    end
-
-    main._layout = LAYOUT
-    return true
-end
-
 function Methods:Update()
     if InCombatLockdown() then
         if self.visible then
@@ -1831,10 +1479,6 @@ function Methods:Update()
         return
     end
     if not self:Init() then return end
-    -- Before anything is measured or placed: a window an older copy built
-    -- arrives here with the previous layout, and every position below is
-    -- computed from this one's metrics.
-    self:AdoptLayout()
     local engine = self.engine
     local main = self.main
 
@@ -1874,13 +1518,12 @@ function Methods:Update()
                 local hdr = self.headers[hdrIdx]
                 y = y - 1
                 hdr:ClearAllPoints()
-                hdr:SetPoint("TOPLEFT", main, "TOPLEFT", ROW_X, y)
+                hdr:SetPoint("TOPLEFT", main, "TOPLEFT", ROW_X + 2, y)
                 if gNum >= PET_GROUP then
                     local n = gNum - PET_GROUP + 1
-                    hdr:SetText(n > 1 and (EM .. " Pets " .. n .. " " .. EM)
-                                      or (EM .. " Pets " .. EM))
+                    hdr:SetText(n > 1 and ("-- Pets " .. n .. " --") or "-- Pets --")
                 else
-                    hdr:SetText(EM .. " Group " .. gNum .. " " .. EM)
+                    hdr:SetText("-- Group " .. gNum .. " --")
                 end
                 hdr:Show()
                 y = y - GRP_HDR_H

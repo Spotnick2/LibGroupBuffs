@@ -103,6 +103,45 @@ Vanilla content, Retail codebase.
     wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
     this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
+- `Glass.lua` — the material, and a **verbatim copy** of GlassUnitFrames' file apart from its
+  header: layered textures (shadow, tint, grain, masked wash, rim) and rounded 9-slice masks, with
+  `Glass.MEDIA` pointing at the `Media/` folder the packager copies into the host. Keep it
+  verbatim. A local improvement here is a local divergence from the addon the material is defined
+  by, and the next sync silently reverts it; fix it there and copy the file down.
+  - **Geometry is adopted too, not only looks.** Frames are built ONCE - `Init` returns early when
+    `self.main` exists - so a window an older copy built reaches newer code with the previous
+    sizes, fonts and icons while every position the newer code computes is measured against metrics
+    those frames do not have. `Methods:AdoptLayout` brings them up: it runs before anything is
+    placed, once per window (`main._layout`), and refuses in combat. Its parts are the `Style*`
+    helpers, which are separate from the `Make*` builders precisely so both paths share them and
+    stay idempotent. **A change to the metrics means bumping `LAYOUT` and covering it in
+    `tests/test_versions.lua`, which builds a window from the previous tag's fixture and upgrades
+    it in place.** Fresh construction passing proves nothing about this.
+  - **Adoption is on demand, never at load.** A host upgrading in place hands the new code the OLD
+    frames, already wearing an r16 backdrop or an r17 StatusBar fill. `Panel` and `Fill` clear
+    what they find before they draw, and both refuse in combat, because the window's frames are
+    protected. A texture created in the wrong place is not a cosmetic bug: **a child frame draws
+    above its parent's regions whatever the draw layer says**, which is how the r17 fill washed
+    every class icon green in game with a green suite behind it. Fills are drawn on the row.
+  - **A mask small in BOTH directions must not be sliced.** A sliced `MaskTexture` on a ~20px
+    square box makes the masked texture draw a fragment of its art in the top-left corner and
+    nothing else; unsliced, the asset scales and is correct. It is not about being short — the same
+    mask *sliced* is fine at 123x26 here and at 300x12 and 330x7 in GlassUnitFrames. Every failing
+    case is small both ways; which axis decides has not been measured. Slice margins themselves are
+    in texture pixels and **must match the generator** (`bar_mask` is 32px, radius 5, margins 8):
+    scaling a margin down to fit a small box cuts through the corner arc, which is a second wrong
+    thing that hid behind the first. `tests/test_ui_window.lua` walks
+    every region the window builds and fails on a sliced mask narrower than the asset. Four other
+    explanations for this were deployed as fixes first and none was it — the note in
+    `PORTING-TBC-TO-FOREVER.md` records the method that ended it, which is worth more than the
+    fact: when a rendering symptom has several plausible causes, **deploy a comparison, not a
+    fix**. A window that draws the same widget five times is already a test rig.
+  - **Geometry follows the material, not the other way round.** A row shorter than about twice the
+    mask's 8px corner radius has its corners squeezed flat and reads as a painted rectangle again,
+    which is what the first pass at `ROW_H = 15` looked like. Every string goes through `Style()`:
+    a string left on a Blizzard template is one line in the wrong typeface with no shadow, and on
+    a translucent panel a light letter lands on a light patch of the world. The tests check both,
+    because neither is visible to any other assertion.
 - `Engine:RefreshSpells` resolves names from IDs, and records **per form** how each was arrived at
   — `resolved` (the client answered), `remembered` (it did not, but an earlier refresh did) or
   `fallback` (never has: this is the host's English literal) or `unknown`. The fallback stays,
