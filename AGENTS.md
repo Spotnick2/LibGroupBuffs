@@ -258,6 +258,15 @@ Vanilla content, Retail codebase.
 
 ## Client Rules (measured, not inferred)
 
+- **Three sources, three questions.** The dump (`C:/Projects/References/forever-api-<build>.md`)
+  says what **exists**. A probe in game says what **works**. And `C:/Projects/wow-ui-source` —
+  Blizzard's shipped Interface code for this exact build, with `version.txt` naming it — says what
+  the client's **own UI does and depends on**. That third one closes the gap behind "a function in
+  the dump is not a working function": if the shipped UI registers an event and acts on it, it
+  fires (`GROUP_JOINED` was settled that way). It also explains a dump *miss* that is not an
+  absence — `SetBackdropColor` is FrameXML Lua, not the C API. It settles nothing below Lua: a mask
+  that renders as a fragment is a renderer question, and only a screenshot answers those.
+
 Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
 
 - **Aura reads throw in combat, for every unit** — not just the player. `GetAuraDataBySpellName`
