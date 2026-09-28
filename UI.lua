@@ -286,34 +286,78 @@ local function Panel(f)
 end
 
 -- A row's colour is its whole meaning - green has it, red does not - so the
--- fill is a bar held at full value and recoloured, rather than a bar that
--- moves. Rounded, masked, with the gloss and inner shadow that make it read
--- as glass rather than a painted rectangle.
+-- fill is a flat colour under the same gloss, mask and edge the material
+-- gives a bar, rather than a bar that moves.
 --
--- Made ON DEMAND, not in MakeRow, because of how this library upgrades. A row
--- built by r16 is a plain frame with a flat background texture, and LibStub
--- hands these newer methods that same row: asking it for a fill it was never
--- built with is a nil index in the middle of a refresh. Rows are built once
--- per session, so the cost is one check per row per refresh - and this is
--- the only place a fill is made, because a second one built eagerly would
+-- Drawn ON THE ROW, not in a child frame. A child draws above its parent's
+-- regions whatever their draw layers say, so a StatusBar fill put its gloss
+-- over the class icon and washed it green - measured in game, not reasoned
+-- about. Textures on the row itself sit under everything the row draws.
+--
+-- Made on demand rather than in MakeRow, because of how this library
+-- upgrades: LibStub hands these methods the frames an older copy built, and a
+-- row from r16 has a flat background texture and none of this. Rows are built
+-- once per session, so the cost is one check per row per refresh - and this
+-- is the only place a fill is made, because a second one built eagerly would
 -- be a path no test could fail.
+local FILL_MASK_MARGIN = 8
+
 local function Fill(row, height)
-    if type(row.fill) == "table" and row.fill.SetStatusBarColor then return row.fill end
-    local bar = lib.Glass.Bar(row, height)
-    bar:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-    bar:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
-    bar:SetValue(1)
-    bar:SetFrameLevel(row:GetFrameLevel())
+    if type(row.fill) == "table" and row.fill.SetColour then return row.fill end
+    if InCombatLockdown() then return nil end
+
+    local Glass = lib.Glass
+    local st = Glass.STYLE
+    local mask = Glass.Mask(row, "bar_mask", FILL_MASK_MARGIN)
+
+    local bg = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+    bg:SetAllPoints(row)
+    bg:SetColorTexture(1, 1, 1, 1)
+    bg:AddMaskTexture(mask)
+
+    local gloss = row:CreateTexture(nil, "BACKGROUND", nil, 2)
+    gloss:SetAllPoints(row)
+    gloss:SetTexture(Glass.MEDIA .. "gloss")
+    gloss:SetBlendMode("ADD")
+    gloss:SetAlpha(st.gloss)
+    gloss:AddMaskTexture(mask)
+
+    -- Light passing through the slab catches on the inner lip at the bottom.
+    local inner = row:CreateTexture(nil, "BACKGROUND", nil, 3)
+    inner:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT")
+    inner:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT")
+    inner:SetHeight(math.max(3, math.floor((height or 15) * 0.45)))
+    inner:SetColorTexture(1, 1, 1, 1)
+    inner:SetGradient("VERTICAL", CreateColor(0, 0, 0, st.innerShadow), CreateColor(0, 0, 0, 0))
+    inner:AddMaskTexture(mask)
+
+    local edge = row:CreateTexture(nil, "BORDER")
+    edge:SetAllPoints(row)
+    edge:SetTexture(Glass.MEDIA .. "bar_edge")
+    edge:SetTextureSliceMargins(FILL_MASK_MARGIN, FILL_MASK_MARGIN,
+                                FILL_MASK_MARGIN, FILL_MASK_MARGIN)
+    local modes = Enum and Enum.UITextureSliceMode
+    edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
+
+    local fill = { mask = mask, bg = bg, gloss = gloss, inner = inner, edge = edge }
+    function fill:SetColour(r, g, b, a) self.bg:SetColorTexture(r, g, b, a) end
+    function fill:Colour() return self.bg._colorTexture end
+
     -- The older copy's flat background would otherwise show through the
-    -- rounded corners of the new one.
-    -- type(), not truthiness: on a row this copy built there is no `bg` at
-    -- all, and the test stub answers an unknown field with a callable rather
-    -- than nil - so `row.bg and ...` is true there and false in game.
+    -- rounded corners of this one.
     if type(row.bg) == "table" and row.bg.SetColorTexture then
         row.bg:SetColorTexture(0, 0, 0, 0)
     end
-    row.fill = bar
-    return bar
+    row.fill = fill
+    return fill
+end
+
+-- Below Fill, which it calls: a local declared later is a GLOBAL inside a
+-- function written above it. In combat there is no fill yet and nothing to
+-- colour; the next refresh out of combat builds it.
+local function SetFill(row, height, r, g, b, a)
+    local fill = Fill(row, height)
+    if fill then fill:SetColour(r, g, b, a) end
 end
 
 local function MakeRow(ui, parent, i)
@@ -593,13 +637,13 @@ function Methods:ApplyRowVisuals(r, st)
     -- an opaque dialog background, and a faint fill over a translucent panel
     -- reads as neither colour.
     if st.nUnknown == st.nTotal then
-        Fill(r, ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.75)
+        SetFill(r, ROW_H, 0.30, 0.30, 0.30, 0.75)
     elseif st.allHave then
-        Fill(r, ROW_H):SetStatusBarColor(0.10, 0.65, 0.20, 0.80)
+        SetFill(r, ROW_H, 0.10, 0.65, 0.20, 0.80)
     elseif st.nMiss == st.nTotal then
-        Fill(r, ROW_H):SetStatusBarColor(0.70, 0.13, 0.13, 0.80)
+        SetFill(r, ROW_H, 0.70, 0.13, 0.13, 0.80)
     else
-        Fill(r, ROW_H):SetStatusBarColor(0.75, 0.55, 0.10, 0.80)
+        SetFill(r, ROW_H, 0.75, 0.55, 0.10, 0.80)
     end
 
     r.timer:Hide()
@@ -643,13 +687,13 @@ function Methods:ApplyPopRowVisuals(pr)
     local pct = has and UI.Pct(rem, dur) or 0
 
     if not UnitIsConnected(unit) then
-        Fill(pr, POP_ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.75)   -- offline
+        SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.75)   -- offline
     elseif state == S.UNKNOWN then
-        Fill(pr, POP_ROW_H):SetStatusBarColor(0.30, 0.30, 0.30, 0.65)   -- unreadable
+        SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.65)   -- unreadable
     elseif has then
-        Fill(pr, POP_ROW_H):SetStatusBarColor(0.10, 0.65, 0.20, 0.80)   -- buffed
+        SetFill(pr, POP_ROW_H, 0.10, 0.65, 0.20, 0.80)   -- buffed
     else
-        Fill(pr, POP_ROW_H):SetStatusBarColor(0.70, 0.13, 0.13, 0.80)   -- missing
+        SetFill(pr, POP_ROW_H, 0.70, 0.13, 0.13, 0.80)   -- missing
     end
 
     if range == "IN_RANGE" then

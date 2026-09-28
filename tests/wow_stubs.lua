@@ -377,7 +377,15 @@ local function makeFrame(name, parent, template)
         parent._regions[#parent._regions + 1] = r
         return r
     end
-    f.CreateTexture    = function(self) return region(self, "Texture") end
+    -- The draw layer is recorded because it decides what covers what, which
+    -- is not a detail: a fill created in the wrong place drew its gloss over
+    -- the class icons and washed them green, in game, with a green suite.
+    f.CreateTexture = function(self, name, layer, _, subLayer)
+        local t = region(self, "Texture")
+        t._drawLayer, t._subLayer = layer, subLayer
+        return t
+    end
+    f.GetDrawLayer = function(self) return self._drawLayer, self._subLayer end
     f.CreateFontString = function(self) return region(self, "FontString") end
     -- Below `region`, which these need: a local declared further down is a
     -- GLOBAL inside a closure written above it, and would have thrown on the
