@@ -280,6 +280,13 @@ local function makeFrame(name, parent, template)
         local c = self._vertexColor or { 1, 1, 1, 1 }
         return c[1], c[2], c[3], c[4]
     end
+    -- Text alignment, recorded: the catch-all answered GetJustifyH with the
+    -- frame, so a label meant to be centred and one left against an edge
+    -- were indistinguishable.
+    f.SetJustifyH = function(self, justify) self._justifyH = justify return self end
+    f.GetJustifyH = function(self) return self._justifyH or "LEFT" end
+    f.SetJustifyV = function(self, justify) self._justifyV = justify return self end
+    f.GetJustifyV = function(self) return self._justifyV or "MIDDLE" end
     f.SetBackdrop = function(self, backdrop) self._backdrop = backdrop return self end
     f.GetBackdrop = function(self) return self._backdrop end
     -- Frame levels decide what draws over what, and the glass material does
@@ -334,6 +341,10 @@ local function makeFrame(name, parent, template)
         return self
     end
     f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
+    f.GetTextColor = function(self)
+        local c = self._textColor or { 1, 1, 1, 1 }
+        return c[1], c[2], c[3], c[4]
+    end
     f.SetColorTexture = function(self, r, g, b, a) self._colorTexture = { r, g, b, a } return self end
     f.GetTexture = function(self) return self._texture end
     f.StartMoving = function(self) self._moving = true return self end
@@ -385,7 +396,30 @@ local function makeFrame(name, parent, template)
         return t
     end
     f.GetDrawLayer = function(self) return self._drawLayer, self._subLayer end
-    f.CreateFontString = function(self) return region(self, "FontString") end
+    -- The template is recorded, and so is any later SetFont: a string left on
+    -- a Blizzard template is a string the addon never styled, and on a glass
+    -- panel that is visible as one line in the wrong typeface.
+    f.CreateFontString = function(self, name, layer, template)
+        local fs = region(self, "FontString")
+        fs._drawLayer, fs._template = layer, template
+        return fs
+    end
+    f.SetFont = function(self, file, size, flags)
+        self._font = { file, size, flags }
+        return true
+    end
+    f.GetFont = function(self)
+        local fnt = self._font
+        if not fnt then return nil end
+        return fnt[1], fnt[2], fnt[3]
+    end
+    f.SetShadowColor  = function(self, r, g, b, a) self._shadowColor = { r, g, b, a or 1 } end
+    f.SetShadowOffset = function(self, x, y) self._shadowOffset = { x, y } end
+    f.GetShadowOffset = function(self)
+        local o = self._shadowOffset
+        if not o then return 0, 0 end
+        return o[1], o[2]
+    end
     -- Below `region`, which these need: a local declared further down is a
     -- GLOBAL inside a closure written above it, and would have thrown on the
     -- first call rather than at load.
@@ -427,7 +461,13 @@ local function makeFrame(name, parent, template)
     -- yet, which is what the live client reports inside a scroll child during
     -- OnShow.
     f.GetStringHeight = function() return WoW.zeroHeights and 0 or 12 end
-    f.GetWidth = function(self) return self == UIParent and WoW.screenWidth or 100 end
+    -- A size that was SET reads back; anything else keeps the old stand-in.
+    -- Layout is arithmetic on these, and a stub that answered 100 for every
+    -- frame made every such assertion a comparison of two constants.
+    f.GetWidth = function(self)
+        if self == UIParent then return WoW.screenWidth end
+        return self._width or 100
+    end
     -- nil until a test places the frame, which is what the live client returns
     -- before layout - a case the caller has to handle.
     f.GetCenter = function(self)
@@ -435,7 +475,7 @@ local function makeFrame(name, parent, template)
         if not x then return nil end
         return x, 300
     end
-    f.GetHeight = function() return 20 end
+    f.GetHeight = function(self) return self._height or 20 end
     f.GetChecked = function(self) return self._checked end
     f.SetChecked = function(self, v) self._checked = v return self end
     f.GetMinMaxValues = function() return 0, 1 end

@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 19
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 18
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -52,74 +52,20 @@ lib.UIMeta.__index = Methods
 
 -- ─── Layout ─────────────────────────────────────────────────────────────────
 
--- Sized for the glass material rather than for the Blizzard backdrop it
--- replaced. Two things drive these numbers:
---
---   * the rounded corners. A row's mask has an 8px radius, so a row shorter
---     than about twice that has its corners squeezed flat and the fill reads
---     as a painted rectangle again - which is exactly how the first pass at
---     15px looked in game.
---   * the icon. A buff icon at 16px next to 10px text is a toolbar; the rows
---     are what the addon is read at a glance, and they are now legible from
---     a raid frame's distance.
-local ICON_W     = 24
-local BAR_W      = 99
-local ROW_H      = 26
-local ROW_W      = ICON_W + BAR_W       -- 123
-local GRP_HDR_H  = 16
-local FRAME_W    = ROW_W + 12           -- 135
+local ICON_W     = 16
+local BAR_W      = 91
+local ROW_H      = 15
+local ROW_W      = ICON_W + BAR_W       -- 107
+local GRP_HDR_H  = 10
+local FRAME_W    = ROW_W + 12           -- 119
 local ROW_X      = 5
-local HDR_H      = 30                   -- styled header bar height
-local FTR_H      = 22                   -- reagent footer height
+local HDR_H      = 24                   -- styled header bar height
+local FTR_H      = 14                   -- reagent footer height
 -- Wide enough for a full Forever name: characters have surnames, and first
 -- names are not unique, so the whole name has to fit.
-local POP_W      = 250
-local POP_ROW_H  = 30
-local POP_HDR_H  = 30
-
--- Text. The client's own Arial Narrow reads closer to the mock-up than Friz
--- Quadrata, and the material's notes make the same choice for the same
--- reason. Sized against the row rather than fixed, so a change to ROW_H does
--- not leave the text where it was.
-local FONT_FILE  = "Fonts\\ARIALN.TTF"
-local ROW_FONT   = 13
-local NAME_FONT  = 14
-local TITLE_FONT = 16
-local GRP_FONT   = 11
-local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
-
--- An icon on glass, in a tile of its own: the material rounds everything
--- else, and a hard-edged square in the middle of it reads as pasted on. The
--- edge is the same sliced texture a row's fill uses, so the two agree.
-local function IconTile(parent, size, inset)
-    local tile = parent:CreateTexture(nil, "ARTWORK")
-    tile:SetSize(size, size)
-    -- The client's icons carry a border in the outer few percent of the
-    -- image, which is what makes them look square. Cropped off.
-    tile:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    local mask = lib.Glass.Mask(parent, "bar_mask", 8, 0, tile)
-    tile:AddMaskTexture(mask)
-
-    local edge = parent:CreateTexture(nil, "OVERLAY")
-    edge:SetAllPoints(tile)
-    edge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    edge:SetTextureSliceMargins(8, 8, 8, 8)
-    local modes = Enum and Enum.UITextureSliceMode
-    edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
-
-    return tile, edge, mask
-end
-
--- Text over glass needs its own shadow: the panel behind it is translucent,
--- so a light letter can land on a light patch of the world.
-local function Style(fs, size, justify)
-    fs:SetFont(FONT_FILE, size, "")
-    fs:SetShadowColor(0, 0, 0, 0.9)
-    fs:SetShadowOffset(1, -1)
-    if justify then fs:SetJustifyH(justify) end
-    return fs
-end
+local POP_W      = 236
+local POP_ROW_H  = 22
+local POP_HDR_H  = 24
 
 -- The worst roster the engine can produce: a full raid in eight subgroups of
 -- at most five, and a pet on every member.
@@ -440,18 +386,20 @@ local function MakeRow(ui, parent, i)
     r:RegisterForClicks(lib.API.ClickEdges())
 
 
-    r.icon, r.iconEdge = IconTile(r, ROW_H - 6)
-    r.icon:SetPoint("LEFT", r, "LEFT", 3, 0)
+    r.icon = r:CreateTexture(nil, "ARTWORK")
+    r.icon:SetSize(ICON_W - 2, ICON_W - 2)
+    r.icon:SetPoint("LEFT", r, "LEFT", 1, 0)
+    r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    r.timer = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
-    r.timer:SetPoint("RIGHT", r, "RIGHT", -6, 0)
+    r.timer = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.timer:SetPoint("RIGHT", r, "RIGHT", -3, 0)
 
-    r.missCount = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "LEFT")
-    r.missCount:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+    r.missCount = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.missCount:SetPoint("LEFT", r, "LEFT", ICON_W + 2, 0)
     r.missCount:SetTextColor(1.0, 1.0, 1.0)
 
-    r.missAll = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
-    r.missAll:SetPoint("RIGHT", r, "RIGHT", -6, 0)
+    r.missAll = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    r.missAll:SetPoint("CENTER", r, "CENTER", ICON_W / 2, 0)
     r.missAll:SetTextColor(unpack(COLOUR.MISS))
     r.missAll:SetText("MISS")
 
@@ -476,20 +424,25 @@ local function MakePopRow(ui, parent, i)
     pr:SetFrameLevel(202)  -- above the popover's level 200
 
 
-    pr.rangeTxt = Style(pr:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
-    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
-    pr.rangeTxt:SetWidth(14)
+    pr.rangeTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 3, 0)
+    pr.rangeTxt:SetWidth(13)
+    pr.rangeTxt:SetJustifyH("CENTER")
 
-    pr.classIcon, pr.classEdge = IconTile(pr, POP_ROW_H - 8)
-    pr.classIcon:SetPoint("LEFT", pr.rangeTxt, "RIGHT", 4, 0)
+    pr.classIcon = pr:CreateTexture(nil, "ARTWORK")
+    pr.classIcon:SetSize(POP_ROW_H - 6, POP_ROW_H - 6)
+    pr.classIcon:SetPoint("LEFT", pr.rangeTxt, "RIGHT", 2, 0)
+    pr.classIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    pr.nameTxt = Style(pr:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
-    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 5,  0)
-    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -46, 0)
+    pr.nameTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 3,  0)
+    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -44, 0)
+    pr.nameTxt:SetJustifyH("LEFT")
 
-    pr.timeTxt = Style(pr:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
-    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -5, 0)
-    pr.timeTxt:SetWidth(42)
+    pr.timeTxt = pr:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -3, 0)
+    pr.timeTxt:SetWidth(40)
+    pr.timeTxt:SetJustifyH("RIGHT")
 
     pr:SetScript("PreClick",  function(self, button) return self._ui:PopRowPreClick(self, button) end)
     pr:SetScript("PostClick", function(self, button) return self._ui:PopRowPostClick(self, button) end)
@@ -507,11 +460,13 @@ local function MakeFooterButton(ui, parent)
     btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
     btn:EnableMouse(true)
 
-    btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4)
+    btn.icon = btn:CreateTexture(nil, "ARTWORK")
+    btn.icon:SetSize(FTR_H - 4, FTR_H - 4)
     btn.icon:SetPoint("LEFT", btn, "LEFT", 0, 0)
+    btn.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    btn.countTxt = Style(btn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "LEFT")
-    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 4, 0)
+    btn.countTxt = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 2, 0)
 
     btn:SetScript("OnEnter", function(self) return self._ui:FooterEnter(self) end)
     btn:SetScript("OnLeave", function(self) return self._ui:FooterLeave(self) end)
@@ -549,45 +504,23 @@ function Methods:Init()
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
     main.hdrLine = hdrLine
 
-    main.specIcon, main.specEdge = IconTile(main, HDR_H - 10)
-    main.specIcon:SetPoint("LEFT", hdrBg, "LEFT", 5, 0)
+    main.specIcon = main:CreateTexture(nil, "OVERLAY")
+    main.specIcon:SetSize(HDR_H - 6, HDR_H - 6)
+    main.specIcon:SetPoint("LEFT", hdrBg, "LEFT", 4, 0)
+    main.specIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    main.title = Style(main:CreateFontString(nil, "OVERLAY"), TITLE_FONT, "LEFT")
-    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 5, 0)
+    main.title = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 3, 0)
     main.title:SetText(self.host.title or self.host.owner)
 
-    main.version = Style(main:CreateFontString(nil, "OVERLAY"), GRP_FONT, "LEFT")
-    main.version:SetPoint("LEFT", main.title, "RIGHT", 3, -1)
+    main.version = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    main.version:SetPoint("LEFT", main.title, "RIGHT", 2, 0)
     main.version:SetText(self.host.version and ("|cff555577" .. self.host.version .. "|r") or "")
 
-    -- Built here rather than from UIPanelCloseButton: that one is a Blizzard
-    -- gold-and-red disc, which on a glass panel reads as a sticker from
-    -- another addon. This is the same rounded, sliced edge the rows use, with
-    -- an X drawn in the panel's own text colour.
-    local xBtn = CreateFrame("Button", nil, main)
+    local xBtn = CreateFrame("Button", nil, main, "UIPanelCloseButton")
     xBtn._ui = self
-    xBtn:SetSize(HDR_H - 12, HDR_H - 12)
-    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", -6, -6)
-    xBtn:EnableMouse(true)
-
-    local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
-    xEdge:SetAllPoints(xBtn)
-    xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    xEdge:SetTextureSliceMargins(8, 8, 8, 8)
-    local xModes = Enum and Enum.UITextureSliceMode
-    xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
-
-    local xTxt = Style(xBtn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
-    xTxt:SetPoint("CENTER", xBtn, "CENTER", 0, 0)
-    xTxt:SetText("x")
-    xBtn.label = xTxt
-
-    -- Brightens under the cursor, which is the only affordance a flat square
-    -- has: a Blizzard button announces itself by being gold.
-    xBtn:SetScript("OnEnter", function(b) b.label:SetTextColor(1, 1, 1) end)
-    xBtn:SetScript("OnLeave", function(b) b.label:SetTextColor(0.75, 0.75, 0.8) end)
-    xTxt:SetTextColor(0.75, 0.75, 0.8)
-
+    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", 3, 3)
+    xBtn:SetScale(0.6)
     xBtn:SetScript("OnClick", function(b) return b._ui:Close(true) end)
     main.closeBtn = xBtn
 
@@ -607,11 +540,7 @@ function Methods:Init()
     main.dragHandle = drag
 
     for i = 1, nGroups do
-        -- Centred across the whole row, not left-aligned next to it: the
-        -- separators are the only thing breaking the run of coloured bars,
-        -- and a label tucked against the left edge does not read as a break.
-        local fs = Style(main:CreateFontString(nil, "OVERLAY"), GRP_FONT, "CENTER")
-        fs:SetWidth(ROW_W)
+        local fs = main:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         fs:Hide()
         self.headers[i] = fs
     end
@@ -628,11 +557,13 @@ function Methods:Init()
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
-    pop.hdrIcon, pop.hdrEdge = IconTile(pop, POP_HDR_H - 10)
+    pop.hdrIcon = pop:CreateTexture(nil, "ARTWORK")
+    pop.hdrIcon:SetSize(POP_HDR_H - 6, POP_HDR_H - 6)
     pop.hdrIcon:SetPoint("TOPLEFT", pop, "TOPLEFT", 7, -6)
+    pop.hdrIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 
-    pop.hdrTxt = Style(pop:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
-    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 6, 0)
+    pop.hdrTxt = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 5, 0)
     pop.hdrTxt:SetPoint("RIGHT", pop,         "RIGHT", -6, 0)
     pop.hdrTxt:SetPoint("TOP",   pop,         "TOP",   0, -8)
     pop.hdrTxt:SetJustifyH("LEFT")
@@ -667,13 +598,6 @@ end
 -- popover's regions.
 local DIVIDER_X, DIVIDER_Y = 5, -(POP_HDR_H + 2)
 
--- Where earlier copies put it. The search below is by POSITION - it is the
--- only handle on a texture a pre-r11 copy kept in a local - so every header
--- height this library has shipped has to be listed, or the divider a running
--- copy already built is missed and a second one is drawn over it. r17 and
--- earlier used a 24px header; r19 made it 30 for the glass layout.
-local DIVIDER_YS = { DIVIDER_Y, -(24 + 2) }
-
 -- A divider an older copy of the library (before r11) built. It drew the same
 -- line but kept it in a local, so the only way to reach it is by where it is:
 -- a texture whose first anchor is the popover's TOPLEFT at the divider's
@@ -682,10 +606,8 @@ local function FindOlderDivider(pop)
     for _, r in ipairs({ pop:GetRegions() }) do
         if r ~= pop.hdrIcon and r:GetObjectType() == "Texture" then
             local point, relativeTo, _, x, y = r:GetPoint()
-            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X then
-                for _, known in ipairs(DIVIDER_YS) do
-                    if y == known then return r end
-                end
+            if point == "TOPLEFT" and relativeTo == pop and x == DIVIDER_X and y == DIVIDER_Y then
+                return r
             end
         end
     end
@@ -1596,13 +1518,12 @@ function Methods:Update()
                 local hdr = self.headers[hdrIdx]
                 y = y - 1
                 hdr:ClearAllPoints()
-                hdr:SetPoint("TOPLEFT", main, "TOPLEFT", ROW_X, y)
+                hdr:SetPoint("TOPLEFT", main, "TOPLEFT", ROW_X + 2, y)
                 if gNum >= PET_GROUP then
                     local n = gNum - PET_GROUP + 1
-                    hdr:SetText(n > 1 and (EM .. " Pets " .. n .. " " .. EM)
-                                      or (EM .. " Pets " .. EM))
+                    hdr:SetText(n > 1 and ("-- Pets " .. n .. " --") or "-- Pets --")
                 else
-                    hdr:SetText(EM .. " Group " .. gNum .. " " .. EM)
+                    hdr:SetText("-- Group " .. gNum .. " --")
                 end
                 hdr:Show()
                 y = y - GRP_HDR_H

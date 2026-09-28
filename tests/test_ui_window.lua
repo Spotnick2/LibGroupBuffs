@@ -651,7 +651,12 @@ local headers = 0
 for _, h in ipairs(w.headers) do if h:IsShown() then headers = headers + 1 end end
 H.eq(#H.ActiveRows(w), 1, "a raid with a tank only in group 1 gets one row")
 H.eq(headers, 1, "and one header - group 2 has nobody to buff, so no header")
-H.eq(w.headers[1]:GetText(), "-- Group 1 --", "the header is group 1's")
+-- Em dashes, written as UTF-8 bytes so this file stays ASCII: the client
+-- takes the bytes either way, and a literal dash here would depend on how
+-- the editor saved it.
+local EM = "\226\128\148"
+H.eq(w.headers[1]:GetText(), EM .. " Group 1 " .. EM, "the header is group 1's")
+H.eq(w.headers[1]:GetJustifyH(), "CENTER", "centred across the row, not tucked against it")
 H.eq(#H.ActiveRows(w)[1]._members, 1, "the row covers just the tank")
 
 ------------------------------------------------------------
@@ -975,5 +980,88 @@ ui:ApplyRowVisuals(legacyRow,
 H.check(type(legacyRow.fill) == "table", "an older copy's row gets a fill when first drawn")
 H.eq(legacyRow.bg._colorTexture[4], 0,
     "and its flat background is cleared, so it cannot show through the corners")
+
+------------------------------------------------------------
+-- The glass layout
+--
+-- Sizes and positions, not looks. What these pin is the reasoning: a row
+-- shorter than about twice the mask's 8px corner radius has its corners
+-- squeezed flat and the fill reads as a painted rectangle again, which is
+-- how the first pass at 15px looked in game.
+------------------------------------------------------------
+
+setup()
+ui:Update()
+
+local row = ui.rows[1]
+H.check(row:GetHeight() >= 16,
+    "a row is tall enough for the mask's corners: " .. tostring(row:GetHeight()))
+H.check(row.icon:GetWidth() < row:GetHeight(),
+    "its icon fits inside it with room to spare")
+H.check(row.iconEdge ~= nil and row.iconEdge._slice ~= nil,
+    "and sits in a tile with the same sliced edge as the fill")
+H.check(row.icon._masks and #row.icon._masks == 1,
+    "rounded like everything else, rather than a square pasted on")
+
+-- The close button is ours, not Blizzard's gold disc.
+local x = ui.main.closeBtn
+H.check(x ~= nil, "the window has a close button")
+H.eq(x.label:GetText(), "x", "drawn as an x we place")
+H.check(x:IsMouseEnabled(), "which takes the mouse")
+H.check(x._ui ~= nil, "and knows the window it closes")
+
+-- It brightens under the cursor, which is the only affordance a flat square
+-- has - a Blizzard button announces itself by being gold.
+H.runScript(x, "OnLeave")
+local r1 = { x.label:GetTextColor() }
+H.runScript(x, "OnEnter")
+local r2 = { x.label:GetTextColor() }
+H.check(r2[1] > r1[1], "and brightens when the cursor is on it")
+
+-- Every string the window draws is the addon's own font, not a Blizzard
+-- template. One string left on GameFontNormalSmall is one line in the wrong
+-- typeface, which on a panel this small is the whole difference between a
+-- designed window and a patched one - and it is invisible to every other
+-- assertion here.
+setup()
+host.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
+ui:Update()
+ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
+
+local strings = {
+    ["the row timer"]        = ui.rows[1].timer,
+    ["the missing count"]    = ui.rows[1].missCount,
+    ["the MISS label"]       = ui.rows[1].missAll,
+    ["the group separator"]  = ui.headers[1],
+    ["the window title"]     = ui.main.title,
+    ["the version"]          = ui.main.version,
+    ["the close button"]     = ui.main.closeBtn.label,
+    ["the reagent count"]    = ui.footerBtns[1].countTxt,
+    ["the popover title"]    = ui.pop.hdrTxt,
+    ["a popover name"]       = ui.popRows[1].nameTxt,
+    ["a popover timer"]      = ui.popRows[1].timeTxt,
+    ["a popover range"]      = ui.popRows[1].rangeTxt,
+}
+for what, fs in pairs(strings) do
+    H.check(fs ~= nil, what .. " exists")
+    local file, size = fs:GetFont()
+    H.check(file == "Fonts\\ARIALN.TTF",
+        what .. " is set in the addon's font, not left on a template: " .. tostring(file))
+    H.check((size or 0) >= 11, what .. " is legible at arm's length: " .. tostring(size))
+    local _, sy = fs:GetShadowOffset()
+    H.check(sy ~= 0,
+        what .. " carries a shadow, because the panel behind it is see-through")
+end
+
+-- The two icons outside the rows get the same tile, or they are the only
+-- square corners left on the window.
+H.check(ui.main.specIcon._masks and #ui.main.specIcon._masks == 1,
+    "the header icon is rounded too")
+H.check(ui.main.specEdge ~= nil and ui.main.specEdge._slice ~= nil,
+    "with the sliced edge")
+H.check(ui.pop.hdrIcon._masks and #ui.pop.hdrIcon._masks == 1,
+    "and so is the popover's")
+H.check(ui.footerBtns[1].icon._masks and #ui.footerBtns[1].icon._masks == 1,
+    "and the reagent's")
 
 H.done("test_ui_window")
