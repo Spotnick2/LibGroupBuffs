@@ -1909,37 +1909,39 @@ function Methods:Update()
     local inRaid = IsInRaid()
     local PET_GROUP = lib.Engine.PET_GROUP
 
-    -- Everyone the window covers, per def, for the buffs whose group form is
-    -- RAID-WIDE. One cast of those covers the whole raid, so the target for a
-    -- row's left click is chosen across the roster rather than inside that
-    -- row's subgroup - which is what lets a click on any row fix everybody,
-    -- and what makes the other rows' clicks find nothing left to do.
-    local raidWide = {}
-    for _, def in ipairs(defs) do
-        if engine:IsRaidWide(def) then
-            local all = {}
-            for _, gNum in ipairs(ord) do
-                for _, m in ipairs(engine:MembersFor(def, groups[gNum] or {})) do
-                    all[#all + 1] = m
-                end
-            end
-            raidWide[def.id] = all
-        end
-    end
-
+    -- Each buff's members for each group, asked ONCE: the same list then drives
+    -- the stats, the targets, the popover and the clicks, so they cannot
+    -- disagree. A group where no buff covers anybody (Thorns on tanks, and this
+    -- group has none) gets no header and no rows.
+    --
+    -- The raid-wide lists are stitched together from THESE lists rather than
+    -- asked for again. A host's membersFor is a callback and may answer
+    -- differently between calls; asking twice made the row show somebody
+    -- needing the buff while the click aimed at a list they were not in.
+    local plan, raidWide = {}, {}
     for _, gNum in ipairs(ord) do
-        if rowIdx >= maxRows then break end
-
-        -- Each buff's members for this group, asked ONCE: the same list then
-        -- drives the stats, the targets, the popover and the clicks, so they
-        -- cannot disagree. A group where no buff covers anybody (Thorns on
-        -- tanks, and this group has none) gets no header and no rows.
-        local groupMembers = groups[gNum]
         local rowsHere = {}
         for _, def in ipairs(defs) do
-            local members = engine:MembersFor(def, groupMembers)
-            if #members > 0 then rowsHere[#rowsHere + 1] = { def = def, members = members } end
+            local members = engine:MembersFor(def, groups[gNum])
+            if #members > 0 then
+                rowsHere[#rowsHere + 1] = { def = def, members = members }
+                -- One cast of a raid-wide buff covers everyone, so its target
+                -- is chosen across the roster rather than inside one subgroup.
+                -- That is what lets a click on any row fix everybody, and what
+                -- leaves the other rows' clicks nothing to do.
+                if engine:IsRaidWide(def) then
+                    local all = raidWide[def.id]
+                    if not all then all = {}; raidWide[def.id] = all end
+                    for _, m in ipairs(members) do all[#all + 1] = m end
+                end
+            end
         end
+        plan[#plan + 1] = { gNum = gNum, rows = rowsHere }
+    end
+
+    for _, step in ipairs(plan) do
+        if rowIdx >= maxRows then break end
+        local gNum, rowsHere = step.gNum, step.rows
 
         if #rowsHere > 0 and (inRaid or gNum >= PET_GROUP) then
             hdrIdx = hdrIdx + 1

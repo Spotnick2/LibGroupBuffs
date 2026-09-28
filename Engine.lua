@@ -453,14 +453,18 @@ end
 function Methods:PickRaidTarget(members, def, st)
     local anyMissing = false
     for _, m in ipairs(members) do
-        if not UnitIsConnected(m.unit) then
-            anyMissing = true
-            break
+        -- Only somebody we could actually CAST on counts as missing. An
+        -- offline or dead member has no buff and cannot be given one, and
+        -- PickTarget skips them - so counting them here left every row armed
+        -- forever and handed the click an already-buffed member instead. One
+        -- disconnected raider would have restored the exact reagent waste this
+        -- exists to stop.
+        if self:IsValidTarget(m.unit) then
+            local known = st and st.byUnit and st.byUnit[m.unit]
+            local state = known and known.state
+            if not state then local _; _, _, state = self:BuffRem(m.unit, def) end
+            if state == ST_MISSING then anyMissing = true break end
         end
-        local known = st and st.byUnit and st.byUnit[m.unit]
-        local state = known and known.state
-        if not state then local _; _, _, state = self:BuffRem(m.unit, def) end
-        if state == ST_MISSING then anyMissing = true break end
     end
     if not anyMissing then return nil end
     return self:PickTarget(members, def, true, st)
