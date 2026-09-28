@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 21
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 20
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -324,67 +324,26 @@ function API.KnowsSpell(spell)
     return false
 end
 
--- Highest known rank of a spell, read out of the spellbook subtext ("Rank 3").
---
--- Returns `rank, how`:
---
---   0,   "absent"     the spell is not in the book
---   n,   "read"       a number was read out of the subtext
---   1,   "unranked"   the spell is there and carries NO subtext, so this
---                     client does not rank it - rank 1 is the right answer
---   nil, "unreadable" there IS a subtext and no number could be read from it
---
--- That last case is the point. The subtext is a LOCALIZED string, and matching
--- digits out of it is a guess about every language at once: deDE "Rang 2" and
--- ruRU "Ранг 2" happen to use ASCII digits, but nothing promises that, and a
--- locale that spells the number or uses its own digits parses to nothing.
--- This used to fall back to rank 1, which is indistinguishable from a genuine
--- rank 1 and picks the wrong reagent for a priest who has rank 2 - the failure
--- looks like "the addon is confused" with nothing saying why (#64, and the
--- same shape as the localization work in Priestly#21).
---
--- No locale is KNOWN to break it. This is about the answer being honest when
--- one does, not about a reported bug.
--- Subtexts this client gave us that no number could be read out of, by spell
--- name. Read by Engine:SpellReport, so a player whose reagent count looks
--- wrong can paste the line that says why instead of guessing.
-API.rankUnreadable = API.rankUnreadable or {}
-
+-- Highest known rank of a spell, parsed out of the spellbook subtext
+-- ("Rank 3"). Returns 0 when the spell is unknown, and 1 when it is known but
+-- this client does not expose ranks at all.
 function API.GetSpellRank(spellName)
-    if not spellName then return 0, "absent" end
+    if not spellName then return 0 end
     if not (C_SpellBook and C_SpellBook.GetSpellBookItemName) then
-        if API.KnowsSpell(spellName) then return 1, "unranked" end
-        return 0, "absent"
+        return API.KnowsSpell(spellName) and 1 or 0
     end
-
-    local rank, how = 0, "absent"
+    local rank = 0
     pcall(function()
         for i = 1, 300 do
             local nm, sub = C_SpellBook.GetSpellBookItemName(i, BANK)
             if not nm then break end
             if nm == spellName then
-                sub = sub and tostring(sub) or ""
-                if sub == "" then
-                    -- No subtext: this client does not rank the spell.
-                    if how == "absent" then rank, how = 1, "unranked" end
-                else
-                    local r = tonumber(sub:match("(%d+)"))
-                    if r then
-                        if how ~= "read" or r > rank then rank, how = r, "read" end
-                    elseif how == "absent" or how == "unranked" then
-                        -- A subtext we cannot read. Not rank 1: unknown.
-                        rank, how = nil, "unreadable"
-                        API.rankUnreadable[spellName] = sub
-                    end
-                end
+                local r = sub and tonumber(tostring(sub):match("(%d+)")) or 1
+                if r > rank then rank = r end
             end
         end
     end)
-    -- A spell whose rank WAS read is not a spell we failed on, even if an
-    -- earlier entry in the book looked unreadable. Cleared rather than left,
-    -- or the report keeps naming a problem that is no longer there.
-    if how == "read" then API.rankUnreadable[spellName] = nil end
-    return rank, how
+    return rank
 end
 
 -- ─── items ───────────────────────────────────────────────────────────────────
