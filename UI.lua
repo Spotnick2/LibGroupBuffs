@@ -91,17 +91,24 @@ local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
 -- An icon on glass, in a tile of its own: the material rounds everything
 -- else, and a hard-edged square in the middle of it reads as pasted on. The
 -- edge is the same sliced texture a row's fill uses, so the two agree.
-local function IconTile(parent, size, inset)
+-- Takes the tile's anchor rather than leaving the caller to set it, because
+-- the ORDER matters and is not obvious: a mask anchored to a texture that has
+-- no position yet gets no rectangle, and the client does not go back and give
+-- it one when the texture is anchored later. The texture then draws only
+-- where that empty mask happens to be - a sliver of the icon in one corner,
+-- which is what r19 and the first fix both shipped. So: size it, place it,
+-- and only then build the mask.
+local function IconTile(parent, size, point, relTo, relPoint, x, y, inset)
     local tile = parent:CreateTexture(nil, "ARTWORK")
     tile:SetSize(size, size)
+    tile:SetPoint(point or "LEFT", relTo or parent, relPoint or "LEFT", x or 0, y or 0)
 
     -- The client's icons carry a border in the outer few percent of the image,
     -- which is what makes them look square. It is cropped by INSETTING THE
     -- MASK, not with SetTexCoord: on this client a mask is applied in the
     -- texture's untransformed space, so cropping a masked texture moves the
-    -- mask off the art and leaves a fraction of the icon in one corner - which
-    -- is what r19 shipped and what the game showed. The mask does both jobs,
-    -- eating the border and rounding what is left.
+    -- mask off the art and leaves a fraction of the icon in one corner. The
+    -- mask does both jobs, eating the border and rounding what is left.
     inset = inset or math.max(1, math.floor(size * 0.08 + 0.5))
     local mask = lib.Glass.Mask(parent, "bar_mask", 8, inset, tile)
     tile:AddMaskTexture(mask)
@@ -154,6 +161,12 @@ for class, icon in pairs({
 }) do
     UI.CLASS_ICONS[class] = icon
 end
+
+-- How far a tooltip sits off the row it describes. ANCHOR_RIGHT measures from
+-- the ROW, which is inset from the panel edge and inset again from the glass
+-- shadow around it - so with no offset the tooltip lands ON the window it is
+-- describing. This is that inset plus a gap.
+local TIP_GAP = 16
 
 -- Colours an addon can override through appearance(); these are Priestly's.
 UI.DEFAULT_APPEARANCE = UI.DEFAULT_APPEARANCE or {}
@@ -479,8 +492,7 @@ local function MakeRow(ui, parent, i)
     r:RegisterForClicks(lib.API.ClickEdges())
 
 
-    r.icon, r.iconEdge = IconTile(r, ROW_H - 6)
-    r.icon:SetPoint("LEFT", r, "LEFT", 3, 0)
+    r.icon, r.iconEdge = IconTile(r, ROW_H - 6, "LEFT", r, "LEFT", 3, 0)
 
     r.timer = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
     r.timer:SetPoint("RIGHT", r, "RIGHT", -6, 0)
@@ -519,8 +531,7 @@ local function MakePopRow(ui, parent, i)
     pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
     pr.rangeTxt:SetWidth(14)
 
-    pr.classIcon, pr.classEdge = IconTile(pr, POP_ROW_H - 8)
-    pr.classIcon:SetPoint("LEFT", pr.rangeTxt, "RIGHT", 4, 0)
+    pr.classIcon, pr.classEdge = IconTile(pr, POP_ROW_H - 8, "LEFT", pr.rangeTxt, "RIGHT", 4, 0)
 
     pr.nameTxt = Style(pr:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
     pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 5,  0)
@@ -546,8 +557,7 @@ local function MakeFooterButton(ui, parent)
     btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
     btn:EnableMouse(true)
 
-    btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4)
-    btn.icon:SetPoint("LEFT", btn, "LEFT", 0, 0)
+    btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4, "LEFT", btn, "LEFT", 0, 0)
 
     btn.countTxt = Style(btn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "LEFT")
     btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 4, 0)
@@ -588,8 +598,7 @@ function Methods:Init()
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
     main.hdrLine = hdrLine
 
-    main.specIcon, main.specEdge = IconTile(main, HDR_H - 10)
-    main.specIcon:SetPoint("LEFT", hdrBg, "LEFT", 5, 0)
+    main.specIcon, main.specEdge = IconTile(main, HDR_H - 10, "LEFT", hdrBg, "LEFT", 5, 0)
 
     main.title = Style(main:CreateFontString(nil, "OVERLAY"), TITLE_FONT, "LEFT")
     main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 5, 0)
@@ -667,8 +676,7 @@ function Methods:Init()
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
-    pop.hdrIcon, pop.hdrEdge = IconTile(pop, POP_HDR_H - 10)
-    pop.hdrIcon:SetPoint("TOPLEFT", pop, "TOPLEFT", 7, -6)
+    pop.hdrIcon, pop.hdrEdge = IconTile(pop, POP_HDR_H - 10, "TOPLEFT", pop, "TOPLEFT", 7, -6)
 
     pop.hdrTxt = Style(pop:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
     pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 6, 0)
@@ -992,7 +1000,7 @@ end
 -- API.ItemInfo).
 function Methods:FooterEnter(btn)
     if not btn._itemID then return end
-    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
+    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT", TIP_GAP, 0)
     local name, r, g, b = lib.API.ItemInfo(btn._itemID)
     -- A cache miss is not an error: ItemInfo has asked the client for the
     -- item, so the next hover will have it.
@@ -1214,7 +1222,7 @@ end
 
 function Methods:PopRowEnter(pr)
     if pr._unit and not UnitIsConnected(pr._unit) then
-        GameTooltip:SetOwner(pr, "ANCHOR_RIGHT")
+        GameTooltip:SetOwner(pr, "ANCHOR_RIGHT", TIP_GAP, 0)
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 0.6, 0.6, 0.6)
         GameTooltip:AddLine("This player is offline", 1, 0.5, 0.5)
         GameTooltip:Show()
@@ -1259,7 +1267,7 @@ function Methods:ShowClickHint(row)
 
     -- The popover opens on this same hover, so sit on the other side.
     local side = (self:PopoverSide(row) == "right") and "ANCHOR_LEFT" or "ANCHOR_RIGHT"
-    GameTooltip:SetOwner(row, side)
+    GameTooltip:SetOwner(row, side, (side == "ANCHOR_RIGHT") and TIP_GAP or -TIP_GAP, 0)
     GameTooltip:SetText(def.hasGroup and def.grp or def.sngl, 0.62, 0.85, 1.0)
 
     -- Resolve each click the way the click itself resolves it. Out of combat

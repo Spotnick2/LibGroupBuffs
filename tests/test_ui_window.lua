@@ -1083,13 +1083,18 @@ host.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
 ui:Update()
 ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
 
-local walked, both = 0, {}
+local walked, both, early = 0, {}, {}
 local function walk(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
     for _, r in ipairs(frame._regions or {}) do
         walked = walked + 1
         if r._masks and #r._masks > 0 and r._texCoord then
             both[#both + 1] = name
+        end
+        -- A mask built before the texture it clips was placed has no
+        -- rectangle, and never gets one. See the stub's SetPoint.
+        if r._isMask and r._anchoredBeforePlaced then
+            early[#early + 1] = name
         end
         walk(r, name, depth + 1)
     end
@@ -1101,6 +1106,29 @@ H.check(walked > 20, "the walk found the window's regions: " .. walked)
 H.eq(#both, 0,
     "no region is masked and cropped at once, which this client draws wrong: "
     .. (both[1] or "none"))
+H.eq(#early, 0,
+    "and no mask was anchored to a texture that had no position yet, which "
+    .. "leaves it with no rectangle at all: " .. (early[1] or "none"))
+
+-- Tooltips clear the window instead of landing on it. ANCHOR_RIGHT measures
+-- from the ROW, which is inset from the panel edge and inset again from the
+-- glass shadow around it, so with no offset the tooltip covers the thing it
+-- is describing - which is what the game showed.
+WoW.clearTooltip()
+H.runScript(ui.rows[1], "OnEnter")
+H.check(GameTooltip._anchor == "ANCHOR_RIGHT" or GameTooltip._anchor == "ANCHOR_LEFT",
+    "a row's tooltip sits beside it: " .. tostring(GameTooltip._anchor))
+local off = GameTooltip._anchorOffset
+H.check(off and math.abs(off[1]) >= 10,
+    "and clear of the panel rather than on it: " .. tostring(off and off[1]))
+H.check(off and ((GameTooltip._anchor == "ANCHOR_RIGHT") == (off[1] > 0)),
+    "pushed away from the window, not further over it")
+
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+local foff = GameTooltip._anchorOffset
+H.check(foff and foff[1] >= 10,
+    "the reagent tooltip clears it too: " .. tostring(foff and foff[1]))
 
 -- The header is glass too, not an opaque band with square corners sitting on
 -- a translucent panel - which is the one piece r19 left flat.

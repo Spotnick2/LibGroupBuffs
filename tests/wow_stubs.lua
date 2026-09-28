@@ -369,6 +369,16 @@ local function makeFrame(name, parent, template)
         if type(rel) == "number" then
             rel, relPoint, x, y = nil, nil, rel, relPoint
         end
+        -- A MASK anchored to a texture that has not been placed yet gets no
+        -- rectangle, and this client does not go back and give it one when
+        -- the texture is anchored afterwards: the masked texture then draws
+        -- only where that empty mask is, which looks like a sliver of the art
+        -- in one corner. Nothing throws, so the order is recorded here or no
+        -- test can see it.
+        if self._isMask and type(rel) == "table" and rel._objectType == "Texture"
+            and not (rel._points and #rel._points > 0) then
+            self._anchoredBeforePlaced = true
+        end
         self._points = self._points or {}
         self._points[#self._points + 1] = { point, rel, relPoint, x, y }
         return self
@@ -595,8 +605,12 @@ DEFAULT_CHAT_FRAME = {
 
 GameTooltip = makeFrame("GameTooltip")
 -- Records what was put in it, so a test can assert what the player is told.
-GameTooltip.SetOwner = function(self, owner, anchor)
+GameTooltip.SetOwner = function(self, owner, anchor, xOff, yOff)
     self._owner, self._anchor, self._lines = owner, anchor, {}
+    -- The offsets too: ANCHOR_RIGHT measures from the OWNER, and an owner
+    -- inset inside a panel puts the tooltip on top of that panel unless the
+    -- caller pushes it clear.
+    self._anchorOffset = { xOff or 0, yOff or 0 }
     return self
 end
 GameTooltip.SetText = function(self, text)
