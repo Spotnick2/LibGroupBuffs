@@ -114,10 +114,14 @@ Vanilla content, Retail codebase.
     protected. A texture created in the wrong place is not a cosmetic bug: **a child frame draws
     above its parent's regions whatever the draw layer says**, which is how the r17 fill washed
     every class icon green in game with a green suite behind it. Fills are drawn on the row.
-  - **A mask smaller than its asset must not be sliced.** A sliced `MaskTexture` on a ~20px box
-    makes the masked texture draw a fragment of its art in the top-left corner and nothing else;
-    unsliced, the asset scales and is correct. The same mask *sliced* is fine at 123x26 on a row's
-    fill, so there is a threshold, and it has not been measured. `tests/test_ui_window.lua` walks
+  - **A mask small in BOTH directions must not be sliced.** A sliced `MaskTexture` on a ~20px
+    square box makes the masked texture draw a fragment of its art in the top-left corner and
+    nothing else; unsliced, the asset scales and is correct. It is not about being short — the same
+    mask *sliced* is fine at 123x26 here and at 300x12 and 330x7 in GlassUnitFrames. Every failing
+    case is small both ways; which axis decides has not been measured. Slice margins themselves are
+    in texture pixels and **must match the generator** (`bar_mask` is 32px, radius 5, margins 8):
+    scaling a margin down to fit a small box cuts through the corner arc, which is a second wrong
+    thing that hid behind the first. `tests/test_ui_window.lua` walks
     every region the window builds and fails on a sliced mask narrower than the asset. Four other
     explanations for this were deployed as fixes first and none was it — the note in
     `PORTING-TBC-TO-FOREVER.md` records the method that ended it, which is worth more than the

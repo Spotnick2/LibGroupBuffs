@@ -1162,19 +1162,21 @@ H.check(sliced >= 8, "the walk found the sliced textures: " .. sliced)
 -- SLICED cells drew a fragment in the top-left corner and nothing else, and
 -- differed from the working cell only in being sliced.
 --
--- The same asset sliced works at 123x26 on a row's fill, so there is a size
--- below which it stops. Where that line falls was not measured; the bound
--- used here is the asset's own 32px, which every observation so far fits and
--- which nothing in the window needs to be exact.
+-- It is NOT about being short. The same asset sliced is right on a row's
+-- fill at 123x26, and in GlassUnitFrames on power bars 300x12 and 330x7.
+-- Every case that fails is small in BOTH directions - 16, 18, 20 and 22
+-- square - so what this pins is "small in both", not a bound on either axis
+-- alone. Which axis actually decides has not been measured, and the honest
+-- shape of that is a rule that only fires when neither side is large.
 local MASK_ASSET_PX = 32
 local slicedSmall = {}
 local function checkMasks(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
     for _, r in ipairs(frame._regions or {}) do
         if r._isMask and r._slice then
-            local w = select(1, Box(r))
-            if w and w < MASK_ASSET_PX then
-                slicedSmall[#slicedSmall + 1] = name .. " (" .. w .. "px)"
+            local w, h = Box(r)
+            if w and h and math.max(w, h) < MASK_ASSET_PX then
+                slicedSmall[#slicedSmall + 1] = name .. " (" .. w .. "x" .. h .. ")"
             end
         end
         checkMasks(r, name, depth + 1)
@@ -1184,8 +1186,8 @@ end
 checkMasks(ui.main, "the window", 0)
 checkMasks(ui.pop, "the popover", 0)
 H.eq(#slicedSmall, 0,
-    "no mask narrower than the asset it is drawn from is sliced, which this "
-    .. "client renders as a fragment in one corner: " .. (slicedSmall[1] or "none"))
+    "no mask small in BOTH directions is sliced, which this client renders as "
+    .. "a fragment in one corner: " .. (slicedSmall[1] or "none"))
 H.eq(#crushed, 0,
     "and every one has room between its margins for a middle: " .. (crushed[1] or "none"))
 

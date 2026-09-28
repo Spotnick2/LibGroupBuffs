@@ -88,12 +88,15 @@ local TITLE_FONT = 16
 local GRP_FONT   = 11
 local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
 
--- An icon on glass, in a tile of its own: the material rounds everything
--- else, and a hard-edged square in the middle of it reads as pasted on. The
--- edge is the same sliced texture a row's fill uses, so the two agree.
-local function SliceMargin(box)
-    return math.max(2, math.min(8, math.floor(box / 4)))
-end
+-- The slice margin the bar textures are DRAWN for. Glass.lua's own header
+-- says margins are in texture pixels and must match the generator, and the
+-- generator makes bar_mask and bar_edge at 32px with a radius of 5 and
+-- margins of 8. Scaling the margin down to fit a small box - which this file
+-- did for one build - cuts through the corner arc itself, so the corners come
+-- out part straight edge: a second wrong thing, hiding behind the first. A
+-- box too small to hold 8 on each side cannot use these sliced at all, and
+-- the suite fails on one rather than letting it draw wrong.
+local BAR_SLICE = 8
 
 -- A small rounded icon tile.
 --
@@ -103,7 +106,7 @@ end
 -- so each call site got a different arrangement and one screenshot answered.
 -- No mask drew a whole square icon; an unsliced mask drew a whole rounded
 -- one; both sliced cells failed, and differed from the working one ONLY in
--- being sliced. See SetIconTexture below for the rule that came out of it.
+-- being sliced.
 --
 -- The tile keeps a frame of its own. That was built to test one of the wrong
 -- theories, but it earns its place anyway: SetAllPoints on a frame is how the
@@ -119,11 +122,12 @@ local function IconTile(parent, size, point, relTo, relPoint, x, y)
     tile:SetAllPoints(box)
 
     -- The mask is NOT sliced, and that is the whole of it. A sliced
-    -- MaskTexture at this size draws a fragment of the masked art in the
-    -- top-left corner of the shape and nothing else. The same asset SLICED
-    -- works at 123x26 on a row's fill, so there is a size below which it
-    -- stops; where that line falls has not been measured, and nothing here
-    -- needs it to be.
+    -- MaskTexture on a box this small draws a fragment of the masked art in
+    -- the top-left corner of the shape and nothing else. The same asset
+    -- SLICED is right on a row's fill at 123x26, and in GlassUnitFrames on
+    -- power bars 300x12 and 330x7 - so it is not about being short. Every
+    -- case that fails is small in BOTH directions (16 to 22 square); which
+    -- axis actually decides has not been measured.
     --
     -- Unsliced, the 32px asset is scaled to the tile, which leaves a corner
     -- radius of about 2.5px at 20px - right for something this small, so
@@ -140,8 +144,7 @@ local function IconTile(parent, size, point, relTo, relPoint, x, y)
     local edge = box:CreateTexture(nil, "OVERLAY")
     edge:SetAllPoints(box)
     edge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    local em = SliceMargin(size)
-    edge:SetTextureSliceMargins(em, em, em, em)
+    edge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
     local modes = Enum and Enum.UITextureSliceMode
     edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
 
@@ -500,13 +503,14 @@ local function HeaderGlass(main)
     -- an older copy upgrading in place already has this texture, and two of
     -- them would simply add up.
     --
-    -- Deliberately NOT masked. The band is a region of `main`, so rounding it
-    -- would mean a mask anchored to a sibling texture - the arrangement that
-    -- draws a sliver of the art in one corner, and the reason the icons were
-    -- broken for three builds. A flat colour hides that damage where an icon
-    -- cannot, which is exactly why it would sit here unnoticed. The band is
-    -- inset 4px inside a panel that is already rounded, so its own corners are
-    -- barely on screen; the gloss is what makes it read as glass.
+    -- Not masked, and not for a good reason: it was unmasked while chasing
+    -- the icon bug, on a theory about sibling-anchored masks that did not hold
+    -- up. At 127x30 this band is the size class where a sliced mask works, so
+    -- rounding it is available - it would want its own frame, the shape Fill
+    -- uses, and a screenshot to confirm. Left as it is because it reads
+    -- correctly: the band is inset 4px inside a panel that is already
+    -- rounded, so its own corners barely show, and the gloss is what makes it
+    -- glass rather than the corners.
     local Glass = lib.Glass
     local gloss = main:CreateTexture(nil, "ARTWORK", nil, 2)
     gloss:SetAllPoints(tint)
@@ -656,8 +660,7 @@ function Methods:Init()
     local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
     xEdge:SetAllPoints(xBtn)
     xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    local xm = SliceMargin(HDR_H - 12)
-    xEdge:SetTextureSliceMargins(xm, xm, xm, xm)
+    xEdge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
     local xModes = Enum and Enum.UITextureSliceMode
     xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
 
