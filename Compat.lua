@@ -485,25 +485,19 @@ local function RequestItem(itemID)
     return true
 end
 
--- Ask for an item before anyone needs it. The window calls this for the
--- reagents it draws, at build time and on its own refresh, so the data is
--- there before a tooltip can be opened - the placeholder a cache miss shows
--- has nothing to re-run it, so a miss at hover time reads "Loading..." for as
--- long as the cursor stays put.
-function API.WarmItem(itemID)
-    if not (itemID and C_Item and C_Item.GetItemInfo) then return end
-    if C_Item.IsItemDataCachedByID then
-        local known, cached = pcall(C_Item.IsItemDataCachedByID, itemID)
-        if known and cached then return end
-    end
-    RequestItem(itemID)
-end
-
-function API.ItemInfo(itemID)
-    -- Guarded like API.CountItem twenty lines above. Without it a nil id
-    -- reaches three C_Item calls and asks the server to load nothing, and the
-    -- pcalls keep it quiet - so the caller cannot tell "you passed nil" from
-    -- "cache miss, try again", which are not the same problem.
+-- Resolve an item, asking the client for it if it is not there yet. Returns
+-- the name and quality, or nothing - having made the request either way.
+--
+-- Both callers go through this, because the interesting case is the one where
+-- the cache FLAG and the DATA disagree: IsItemDataCachedByID answers true
+-- while GetItemInfo still returns nothing. Believe the data. A warm-up that
+-- trusted the flag would decide there was nothing to ask for, and then the
+-- placeholder it exists to prevent is exactly what the first hover shows.
+local function ResolveItem(itemID)
+    -- Guarded like API.CountItem above. Without it a nil id reaches three
+    -- C_Item calls and asks the server to load nothing, and the pcalls keep
+    -- it quiet - so the caller cannot tell "you passed nil" from "cache miss,
+    -- try again", which are not the same problem.
     if not itemID then return nil end
 
     -- C_Item is the file-local alias taken at load time, as every other
@@ -524,15 +518,35 @@ function API.ItemInfo(itemID)
     -- offset as well.
     local ok, name, _, quality = pcall(C_Item.GetItemInfo, itemID)
     if not ok or name == nil then
-        -- The cache check said yes and the data still is not there. Believe the
-        -- data over the flag and ask again, or every later call misses the
-        -- same way.
+        -- The flag said yes and the data still is not there. Ask again, or
+        -- every later call misses the same way.
         RequestItem(itemID)
         return nil
     end
+    return name, quality
+end
+
+-- Ask for an item before anyone needs it. The window calls this for the
+-- reagents it draws, at build time and on its own refresh, so the data is
+-- there before a tooltip can be opened - the placeholder a cache miss shows
+-- has nothing to re-run it, so a miss at hover time reads "Loading..." for as
+-- long as the cursor stays put.
+function API.WarmItem(itemID)
+    ResolveItem(itemID)
+end
+
+-- Whether an item resolves right now, for a caller deciding if what it has
+-- already drawn is out of date.
+function API.ItemReady(itemID)
+    return (ResolveItem(itemID)) ~= nil
+end
+
+function API.ItemInfo(itemID)
+    local name, quality = ResolveItem(itemID)
+    if not name then return nil end
 
     local r, g, b = 1, 1, 1
-    if quality and C_Item.GetItemQualityColor then
+    if quality and C_Item and C_Item.GetItemQualityColor then
         local okColour, qr, qg, qb = pcall(C_Item.GetItemQualityColor, quality)
         if okColour and qr then r, g, b = qr, qg, qb end
     end

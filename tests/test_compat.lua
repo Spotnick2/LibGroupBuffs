@@ -435,4 +435,31 @@ H.check(not WoW.itemsRequested[60002],
 API.WarmItem(nil)
 H.check(true, "and survives a nil id")
 
+-- The case the cache FLAG and the DATA disagree on. IsItemDataCachedByID
+-- answers true while GetItemInfo still returns nothing; ItemInfo has always
+-- believed the data and asked again, and the warm-up has to do the same. A
+-- version that trusted the flag decided there was nothing to ask for, so the
+-- placeholder it exists to prevent was exactly what the first hover showed.
+WoW.reset()
+WoW.time = 4000
+WoW.itemsCachedButEmpty[60003] = true
+API.WarmItem(60003)
+H.check(WoW.itemsRequested[60003],
+    "WarmItem believes the data over the cache flag, the way ItemInfo does")
+
+-- And the same disagreement through ItemInfo, which is where it was first
+-- measured.
+WoW.reset()
+WoW.time = 5000
+WoW.itemsCachedButEmpty[60004] = true
+H.eq(API.ItemInfo(60004), nil, "ItemInfo answers nil when the data is not there")
+H.check(WoW.itemsRequested[60004], "and asks for it despite the flag")
+
+-- ItemReady is the same question without the colour work.
+WoW.reset()
+WoW.time = 6000
+H.check(API.ItemReady(17029), "a cached item is ready")
+WoW.itemsUncached[60005] = true
+H.check(not API.ItemReady(60005), "an uncached one is not")
+
 H.done("test_compat")

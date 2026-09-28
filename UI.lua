@@ -1164,8 +1164,12 @@ function Methods:FooterEnter(btn)
     OwnTooltip(btn, "ANCHOR_RIGHT", TIP_GAP)
     local name, r, g, b = lib.API.ItemInfo(btn._itemID)
     -- A cache miss is not an error: ItemInfo has asked the client for the
-    -- item, so the next hover will have it.
+    -- item. The load is asynchronous, though, so remember that this tooltip
+    -- is showing a placeholder - the ticker finishes the job when the data
+    -- lands, rather than leaving "Loading..." under the cursor.
     GameTooltip:SetText(name or "Loading...", r or 1, g or 1, b or 1)
+    self.tipButton = btn
+    self.tipPending = (name == nil)
     local have = lib.API.CountItem(btn._itemID)
     GameTooltip:AddLine((have == 1 and "1 in your bags" or (have .. " in your bags")),
         0.85, 0.85, 0.85)
@@ -1175,7 +1179,33 @@ function Methods:FooterEnter(btn)
     GameTooltip:Show()
 end
 
+-- Redraw a reagent tooltip that is still showing the placeholder, once the
+-- item's name arrives. Called from the ticker, which already runs while the
+-- cursor sits still.
+--
+-- Only ever OUR tooltip: GameTooltip is shared, and between the hover and the
+-- data arriving the player may have moved onto something else entirely. The
+-- owner is checked as well as our own flag, because a tooltip taken over by
+-- another addon is not ours to rewrite.
+function Methods:RefreshPendingTooltip()
+    if not self.tipPending then return end
+    local btn = self.tipButton
+    if not (btn and btn._itemID) then
+        self.tipPending = false
+        return
+    end
+    if GameTooltip:GetOwner() ~= btn or not GameTooltip:IsShown() then
+        self.tipPending = false
+        return
+    end
+    if not lib.API.ItemReady(btn._itemID) then return end
+    self.tipPending = false
+    self:FooterEnter(btn)
+end
+
 function Methods:FooterLeave()
+    self.tipPending = false
+    self.tipButton = nil
     ReleaseTooltip()
 end
 
@@ -1188,6 +1218,10 @@ function Methods:MainTick(dt)
     if self.tick >= 0.5 then
         self.tick = 0
         self:RefreshTimers()
+        -- On the half-second tick, not the footer's three: a placeholder
+        -- under the cursor is what the player is looking at, and three
+        -- seconds of "Loading..." is most of a hover.
+        self:RefreshPendingTooltip()
     end
     if self.footerTick >= 3.0 then
         self.footerTick = 0
