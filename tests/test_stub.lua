@@ -196,4 +196,61 @@ H.check(mouseFrame:IsMouseEnabled(), "and does once enabled")
 mouseFrame:EnableMouse(false)
 H.check(not mouseFrame:IsMouseEnabled(), "and stops again when disabled")
 
+------------------------------------------------------------
+-- An undefined widget method is an error, not a no-op
+--
+-- The stub is the list of what this client has, and that has to cover methods
+-- as well as globals. A catch-all that answers anything with a callable is how
+-- GameTooltip:SetItemByID - which does not exist on Forever at all - survived
+-- a green suite and failed only in game, and how four assertions in one
+-- afternoon came to be unfalsifiable: a frame's `iconEdge` answered with a
+-- function, so `if not f.iconEdge` was false under test and true in the
+-- client, and the branch the test existed to cover never ran.
+------------------------------------------------------------
+
+local strict = CreateFrame("Frame")
+
+H.check(not pcall(function() return strict:NoSuchWidgetMethod() end),
+    "a PascalCase method the stub does not define is an error")
+local _, why = pcall(function() return strict:NoSuchWidgetMethod() end)
+H.check(tostring(why):find("NoSuchWidgetMethod", 1, true),
+    "and the message names it: " .. tostring(why))
+H.check(tostring(why):find("forever%-api"),
+    "and says where to check whether this client has it")
+
+-- The ones it does define still work, and so do the deliberate no-ops.
+H.check(pcall(function() return strict:SetMovable(true) end),
+    "a method this client has, modelled as doing nothing, is fine")
+H.check(pcall(function() return strict:Show() end), "and one the stub implements")
+
+-- A host can add its own, having checked the dump.
+H.check(not pcall(function() return strict:HostOnlyMethod() end),
+    "a host's own method is an error until it is allowed")
+WoW.allowMethod("HostOnlyMethod")
+H.check(pcall(function() return strict:HostOnlyMethod() end),
+    "and works once the host allows it")
+
+------------------------------------------------------------
+-- The addon's OWN fields read nil, whatever they are called
+--
+-- An unset field is nil. Handing back a callable makes every unset flag read
+-- as true, which is how a test asserts a state the addon is not in - and it
+-- made `type(r.iconEdge) ~= "table"` necessary where `not r.iconEdge` should
+-- have done. The split is by case: this client's widget methods are all
+-- PascalCase and an addon's fields are not.
+------------------------------------------------------------
+
+H.eq(strict.iconEdge, nil, "a camelCase field the addon has not set reads nil")
+H.eq(strict.fill, nil, "and a lower-case one")
+H.eq(strict._private, nil, "and an underscored one, as before")
+strict.fill = { real = true }
+H.check(strict.fill.real, "and a field that IS set reads back")
+
+-- PascalCase members a Blizzard template would have created are absent until
+-- one really does. Tools/PriestlyProbe decides whether a template applied by
+-- asking whether frame.Left is nil, and a catch-all answered yes every time -
+-- so the probe could never report a template as missing.
+H.eq(strict.Left, nil, "a template's region reads nil when no template made it")
+H.eq(strict.Text, nil, "and so does its text")
+
 H.done("test_stub")

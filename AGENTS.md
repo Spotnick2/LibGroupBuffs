@@ -270,9 +270,22 @@ forgiving than the client lets broken code pass a green suite, which is how a ca
 `C:/Projects/References/forever-api-<build>.md`, and stub it with the client's exact signature.
 
 Strict globals only catch what actually runs, so every script handler the library installs needs a
-test that executes it. And they do not cover **methods**: the stub's frames answer any unknown
-method with a silent no-op, so a call to a widget method this client lacks passes unnoticed. For
-anything built on a widget method, execute it and assert what it produced.
+test that executes it.
+
+**Methods are strict too, since #34.** A frame answers an unknown PascalCase key with an error, not
+a silent no-op — the no-op is how a call to `GameTooltip:SetItemByID`, which this client does not
+have at all, passed a green suite and failed only in game. Confirm a method in the build dump, then
+implement it or add it to `KNOWN_METHODS`; if it is not in the dump, the caller is what needs
+fixing. `WoW.allowMethod` is the host's escape hatch, and it is for methods you have checked, not
+for quieting a failure.
+
+A key that is **not** PascalCase reads nil, because it is the addon's own field and an unset field
+is nil. That matters more than it sounds: while the stub handed back a callable, `if not f.iconEdge`
+was false under test and true in the client, so guards had to be written `type(f.iconEdge) ~=
+"table"` to work at all, and four assertions written in one afternoon could not fail. PascalCase
+members a Blizzard template would have created (`Left`, `Text`, `Low`, `High`) read nil for the same
+reason — `Tools/PriestlyProbe` decides whether a template applied by asking whether `frame.Left` is
+nil, and the catch-all answered yes every time.
 
 `tests/harness.lua` loads exactly what `LibGroupBuffs-1.0.xml` lists, in order, and fails on
 anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
