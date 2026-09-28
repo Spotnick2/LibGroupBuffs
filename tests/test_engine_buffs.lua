@@ -220,6 +220,25 @@ H.eq(E:DurationFor(fort, nil, PRAYER), 3600,
     "and a bar scales against the spell that member actually has")
 H.eq(E:DurationFor(fort, nil, SINGLE), 1800, "...not against the other one")
 
+-- groupScope is checked at construction, like every other def field. A typo
+-- would otherwise be read as "party" by the `or "raid"` default going the
+-- other way, and silently draw a raid-wide buff as eight separate casts.
+do
+    local function withScope(scope)
+        return pcall(lib.Engine.New, {
+            defs = { { id = "fort", snglID = H.SPELL.FORT_SINGLE,
+                       grpID = H.SPELL.FORT_GROUP, groupScope = scope } },
+            bucketSize = 8,
+        })
+    end
+    H.check(withScope("raid"), "a def may declare its group form raid-wide")
+    H.check(withScope("party"), "or party-only")
+    H.check(withScope(nil), "or say nothing, and take the default")
+    H.check(not withScope("Raid"), "but not a near-miss of one")
+    H.check(not withScope("everyone"), "nor a word the library does not know")
+    H.check(not withScope(true), "nor something that is not a string")
+end
+
 -- Storage is optional: an addon without it gets the seed.
 do
     local bare = lib.Engine.New({

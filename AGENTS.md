@@ -142,6 +142,15 @@ Vanilla content, Retail codebase.
     a string left on a Blizzard template is one line in the wrong typeface with no shadow, and on
     a translucent panel a light letter lands on a light patch of the world. The tests check both,
     because neither is visible to any other assertion.
+- **`def.groupScope`** — how far the GROUP form reaches: `"raid"` (the default) or `"party"`. On
+  Forever every group buff measured covers the whole raid, which is not what Vanilla or TBC did and
+  not what a window drawing one row per subgroup assumes. Declared by the host, because the tooltip
+  that says so is a localized string and the only alternative is to assume — silently wrong the day
+  a party-only group buff exists. For a raid-wide def, `Engine:PickRaidTarget` aims across the whole
+  roster and answers **nil once nobody needs it**, which is what stops eight subgroup rows spending
+  eight reagents on one cast (#19); `PickTarget` still always answers with somebody, which is right
+  for a cheap single-target top-up and wrong for this. Refreshing a raid-wide buff early is
+  deliberately not offered.
 - `Engine:RefreshSpells` resolves names from IDs, and records **per form** how each was arrived at
   — `resolved` (the client answered), `remembered` (it did not, but an earlier refresh did) or
   `fallback` (never has: this is the host's English literal) or `unknown`. The fallback stays,

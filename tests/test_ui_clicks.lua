@@ -411,4 +411,198 @@ H.check(not text:find("pets") and text:find("Broll"),
     "a group spell on a pet row names the pet it lands on: " .. text)
 H.eq(ui:GroupLabel(nil), "this group", "a group label for nothing still reads")
 
+------------------------------------------------------------
+-- A raid-wide group buff is cast ONCE, however many rows offer it
+--
+-- The window draws one row per subgroup per buff, which is the Vanilla and TBC
+-- model: a group buff covered the caster's party. On Forever every group buff
+-- measured covers the whole raid - all three Prayers read "Power infuses all
+-- party and raid members" - so eight rows were offering the same single cast,
+-- and each of those clicks spent a reagent to do nothing (#19).
+--
+-- The rows stay: buffing individually still matters, especially with no
+-- reagents in the bag. What changes is that the click goes quiet once nobody
+-- needs it, and that it is aimed across the ROSTER rather than inside one
+-- subgroup - so whichever row you click fixes everybody.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "FORT_GROUP" })
+WoW.inRaid = true
+WoW.groupMembers = 10
+for i = 1, 10 do
+    local nm = "Raider" .. i .. " Sur"
+    WoW.raidRoster[i] = { name = nm, subgroup = math.ceil(i / 5) }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "PRIEST" })
+end
+local rh = H.PriestUI()
+rh.config.visible.shadow = false
+rh.engine:RefreshSpells()
+rh.ui:Update()
+
+local function rowsFor(ui, defID)
+    local out = {}
+    for _, r in ipairs(ui.rows) do
+        if r._active and r._def and r._def.id == defID then out[#out + 1] = r end
+    end
+    return out
+end
+
+local fortRows = rowsFor(rh.ui, "fort")
+H.eq(#fortRows, 2, "two subgroups, so two rows still offer the buff")
+
+-- Nobody has it: every row is armed, and every one of them aims at the same
+-- cast, because one cast is all there is.
+for i, r in ipairs(fortRows) do
+    H.check(r:GetAttribute("spell1") ~= nil, "row " .. i .. " offers the group cast")
+end
+
+-- Now everybody has it. The rows still show their own subgroup's state, but
+-- there is nothing left to cast.
+for i = 1, 10 do WoW.SetAura("raid" .. i, H.NAME.FORT_GROUP, 3600, 3600) end
+rh.ui:Update()
+fortRows = rowsFor(rh.ui, "fort")
+for i, r in ipairs(fortRows) do
+    H.eq(r:GetAttribute("spell1"), nil,
+        "row " .. i .. " stops offering it once the whole raid has it")
+end
+
+-- A single member missing re-arms EVERY row, and each aims at that member -
+-- not at somebody in its own subgroup who is perfectly fine.
+WoW.ClearAuras("raid7")
+rh.ui:Update()
+fortRows = rowsFor(rh.ui, "fort")
+for i, r in ipairs(fortRows) do
+    H.check(r:GetAttribute("spell1") ~= nil, "row " .. i .. " offers it again")
+    H.eq(r:GetAttribute("unit1"), "raid7",
+        "row " .. i .. " aims across the roster at the one who needs it")
+end
+
+-- And this is where the reagent is actually saved: PreClick re-picks at click
+-- time, so the SECOND click - on another subgroup's row for the same buff -
+-- finds nobody missing and casts nothing.
+WoW.SetAura("raid7", H.NAME.FORT_GROUP, 3600, 3600)   -- the first cast landed
+H.runScript(fortRows[2], "PreClick", "LeftButton")
+H.eq(fortRows[2]:GetAttribute("spell1"), nil,
+    "a second click, before any refresh, casts nothing at all")
+
+-- Somebody we cannot cast on does NOT keep the click armed. An offline or
+-- dead member has no buff and cannot be given one, and PickTarget skips them -
+-- so counting them as missing left every row armed forever and handed the
+-- click an already-buffed member instead. One disconnected raider would have
+-- restored the whole reagent waste.
+for i = 1, 10 do WoW.SetAura("raid" .. i, H.NAME.FORT_GROUP, 3600, 3600) end
+WoW.SetUnit("raid4", { name = "Raider4 Sur", guid = "R4", class = "PRIEST", connected = false })
+WoW.ClearAuras("raid4")
+rh.ui:Update()
+fortRows = rowsFor(rh.ui, "fort")
+for i, r in ipairs(fortRows) do
+    H.eq(r:GetAttribute("spell1"), nil,
+        "row " .. i .. " stays quiet when the only one missing it is offline")
+end
+
+WoW.SetUnit("raid4", { name = "Raider4 Sur", guid = "R4", class = "PRIEST" })
+WoW.SetUnit("raid5", { name = "Raider5 Sur", guid = "R5", class = "PRIEST", dead = true })
+WoW.ClearAuras("raid5")
+WoW.SetAura("raid4", H.NAME.FORT_GROUP, 3600, 3600)
+rh.ui:Update()
+fortRows = rowsFor(rh.ui, "fort")
+for i, r in ipairs(fortRows) do
+    H.eq(r:GetAttribute("spell1"), nil,
+        "row " .. i .. " stays quiet when the only one missing it is dead")
+end
+
+-- ...and arms again the moment somebody we CAN cast on needs it.
+WoW.ClearAuras("raid2")
+rh.ui:Update()
+fortRows = rowsFor(rh.ui, "fort")
+H.check(fortRows[1]:GetAttribute("spell1") ~= nil,
+    "a living, connected member missing it arms the rows again")
+H.eq(fortRows[1]:GetAttribute("unit1"), "raid2", "and the click aims at them")
+WoW.SetUnit("raid5", { name = "Raider5 Sur", guid = "R5", class = "PRIEST" })
+WoW.SetAura("raid2", H.NAME.FORT_GROUP, 3600, 3600)
+
+-- The right click is untouched: a single-target top-up is cheap and is how you
+-- buff somebody when you have no reagents.
+H.runScript(fortRows[1], "PreClick", "RightButton")
+H.check(fortRows[1]:GetAttribute("spell2") ~= nil,
+    "the single-target click still works on a fully buffed raid")
+
+------------------------------------------------------------
+-- A party-scope group buff keeps the old behaviour exactly
+--
+-- Nothing on this client is known to be party-only, but the day one exists,
+-- assuming otherwise would silently skip people. The host declares it.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "FORT_GROUP" })
+WoW.inRaid = true
+WoW.groupMembers = 10
+for i = 1, 10 do
+    local nm = "Raider" .. i .. " Sur"
+    WoW.raidRoster[i] = { name = nm, subgroup = math.ceil(i / 5) }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "PRIEST" })
+end
+local ph = H.PriestUI()
+ph.config.visible.shadow = false
+for _, d in ipairs(ph.defs) do d.groupScope = "party" end
+ph.engine:RefreshSpells()
+for i = 1, 10 do WoW.SetAura("raid" .. i, H.NAME.FORT_GROUP, 3600, 3600) end
+ph.ui:Update()
+local partyRows = rowsFor(ph.ui, "fort")
+H.check(#partyRows >= 1, "a party-scope buff still draws its rows")
+H.check(partyRows[1]:GetAttribute("spell1") ~= nil,
+    "and keeps offering the cast even when everyone has it, as it always did")
+
+------------------------------------------------------------
+-- membersFor is asked ONCE per row, and the raid list is built from what it
+-- said
+--
+-- The contract is that one list drives the stats, the popover, the targets and
+-- the clicks alike, so they cannot disagree. membersFor is a host CALLBACK: it
+-- may answer differently between calls, and a first pass that asked again to
+-- build the raid-wide list made the row show somebody needing the buff while
+-- the click aimed at a list they were not in.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "FORT_GROUP" })
+WoW.inRaid = true
+WoW.groupMembers = 10
+for i = 1, 10 do
+    local nm = "Raider" .. i .. " Sur"
+    WoW.raidRoster[i] = { name = nm, subgroup = math.ceil(i / 5) }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "PRIEST" })
+end
+local calls = 0
+local ce = lib.Engine.New({
+    defs = { { id = "fort", snglID = H.SPELL.FORT_SINGLE, grpID = H.SPELL.FORT_GROUP,
+               sngl = H.NAME.FORT_SINGLE, grp = H.NAME.FORT_GROUP, duration = 3600 } },
+    bucketSize = 8,
+    membersFor = function(_, members)
+        calls = calls + 1
+        return members
+    end,
+})
+ce:RefreshSpells()
+local cui = lib.UI.New({ engine = ce, owner = "Priestly" })
+cui:Update()
+
+local rowCount = 0
+for _, r in ipairs(cui.rows) do if r._active then rowCount = rowCount + 1 end end
+H.check(rowCount > 0, "the window drew rows to count against: " .. rowCount)
+H.eq(calls, rowCount,
+    "membersFor was asked exactly once per row, not again for the raid list")
+
+-- And the list the click uses contains the members the row displays.
+local cRows = rowsFor(cui, "fort")
+local cast = cRows[1]._castMembers
+H.check(type(cast) == "table", "a raid-wide row carries the roster-wide list")
+for _, m in ipairs(cRows[1]._members) do
+    local found = false
+    for _, c in ipairs(cast) do if c.unit == m.unit then found = true break end end
+    H.check(found, "everyone the row displays is in the list its click aims at: " .. m.unit)
+end
+
 H.done("test_ui_clicks")

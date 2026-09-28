@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 23
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 22
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1448,15 +1448,6 @@ function Methods:HideClickHint()
     ReleaseTooltip()
 end
 
--- Where a row's LEFT click is aimed, re-picked now rather than trusted from
--- the last layout. A raid-wide group buff is aimed across the roster and
--- answers nil once nobody needs it; everything else keeps the old behaviour of
--- picking inside the row's own members.
-local function PrimaryPick(engine, r)
-    if r._castMembers then return engine:PickRaidTarget(r._castMembers, r._def) end
-    return engine:PickTarget(r._members, r._def, r._groupMode)
-end
-
 function Methods:ShowClickHint(row)
     local def = row and row._def
     if not def then return end
@@ -1484,12 +1475,7 @@ function Methods:ShowClickHint(row)
         end
         local spell = (which == 1) and row._primary or row._secondary
         if not spell or not row._members then return nil end
-        local unit
-        if which == 1 then
-            unit = PrimaryPick(engine, row)
-        else
-            unit = engine:PickTarget(row._members, def, false)
-        end
+        local unit = engine:PickTarget(row._members, def, (which == 1) and row._groupMode or false)
         if not unit then return nil end   -- PreClick clears the spell here too
         return spell, unit
     end
@@ -1601,11 +1587,7 @@ function Methods:RowPreClick(r, button)
             r:SetAttribute("spell1", nil)
             return
         end
-        -- THE moment the reagent is saved. A raid-wide buff is drawn on one
-        -- row per subgroup, so it is offered eight times in a full raid; this
-        -- re-picks at click time, finds nobody left missing after the first
-        -- cast, and clears the spell. Clicks two through eight cast nothing.
-        local unit = PrimaryPick(engine, r)
+        local unit = engine:PickTarget(ms, df, r._groupMode)
         r:SetAttribute("spell1", unit and r._primary or nil)
         if unit then r:SetAttribute("unit1", unit) end
     else
@@ -1628,7 +1610,7 @@ function Methods:RowPostClick(r)
     local df, ms = r._def, r._members
     if not df or not ms then return end
     local engine = self.engine
-    local pUnit = r._primary   and PrimaryPick(engine, r) or nil
+    local pUnit = r._primary   and engine:PickTarget(ms, df, r._groupMode) or nil
     local sUnit = r._secondary and engine:PickTarget(ms, df, false) or nil
     r:SetAttribute("spell1", pUnit and r._primary or nil)
     r:SetAttribute("unit1",  pUnit or "player")
@@ -1909,39 +1891,19 @@ function Methods:Update()
     local inRaid = IsInRaid()
     local PET_GROUP = lib.Engine.PET_GROUP
 
-    -- Each buff's members for each group, asked ONCE: the same list then drives
-    -- the stats, the targets, the popover and the clicks, so they cannot
-    -- disagree. A group where no buff covers anybody (Thorns on tanks, and this
-    -- group has none) gets no header and no rows.
-    --
-    -- The raid-wide lists are stitched together from THESE lists rather than
-    -- asked for again. A host's membersFor is a callback and may answer
-    -- differently between calls; asking twice made the row show somebody
-    -- needing the buff while the click aimed at a list they were not in.
-    local plan, raidWide = {}, {}
     for _, gNum in ipairs(ord) do
+        if rowIdx >= maxRows then break end
+
+        -- Each buff's members for this group, asked ONCE: the same list then
+        -- drives the stats, the targets, the popover and the clicks, so they
+        -- cannot disagree. A group where no buff covers anybody (Thorns on
+        -- tanks, and this group has none) gets no header and no rows.
+        local groupMembers = groups[gNum]
         local rowsHere = {}
         for _, def in ipairs(defs) do
-            local members = engine:MembersFor(def, groups[gNum])
-            if #members > 0 then
-                rowsHere[#rowsHere + 1] = { def = def, members = members }
-                -- One cast of a raid-wide buff covers everyone, so its target
-                -- is chosen across the roster rather than inside one subgroup.
-                -- That is what lets a click on any row fix everybody, and what
-                -- leaves the other rows' clicks nothing to do.
-                if engine:IsRaidWide(def) then
-                    local all = raidWide[def.id]
-                    if not all then all = {}; raidWide[def.id] = all end
-                    for _, m in ipairs(members) do all[#all + 1] = m end
-                end
-            end
+            local members = engine:MembersFor(def, groupMembers)
+            if #members > 0 then rowsHere[#rowsHere + 1] = { def = def, members = members } end
         end
-        plan[#plan + 1] = { gNum = gNum, rows = rowsHere }
-    end
-
-    for _, step in ipairs(plan) do
-        if rowIdx >= maxRows then break end
-        local gNum, rowsHere = step.gNum, step.rows
 
         if #rowsHere > 0 and (inRaid or gNum >= PET_GROUP) then
             hdrIdx = hdrIdx + 1
@@ -1971,16 +1933,7 @@ function Methods:Update()
                 local st = engine:GroupStat(members, def)
                 local primary, secondary = engine:ClickSpells(def)
                 local groupMode = def.hasGroup and true or false
-                -- A raid-wide group spell is aimed across the roster and goes
-                -- quiet once nobody needs it; a party-scope one keeps picking
-                -- inside this row's own members, as it always did.
-                local castMembers = raidWide[def.id] or members
-                local primaryUnit
-                if primary and raidWide[def.id] then
-                    primaryUnit = engine:PickRaidTarget(castMembers, def)
-                elseif primary then
-                    primaryUnit = engine:PickTarget(members, def, groupMode, st)
-                end
+                local primaryUnit   = primary   and engine:PickTarget(members, def, groupMode, st) or nil
                 local secondaryUnit = secondary and engine:PickTarget(members, def, false, st) or nil
 
                 r:ClearAllPoints()
@@ -1995,10 +1948,6 @@ function Methods:Update()
                 r._secondary = secondary
                 r._groupMode = groupMode
                 r._gNum      = gNum
-                -- Kept on the row so PreClick and the tooltip re-pick against
-                -- the same list this pass used. Nil for a party-scope def,
-                -- which reads as "use my own members".
-                r._castMembers = raidWide[def.id]
 
                 self:ApplyRowVisuals(r, st)
 

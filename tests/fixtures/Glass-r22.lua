@@ -22,7 +22,7 @@ local ADDON = ...
 
 -- Same MINOR as Compat.lua, and installed on the same terms: Compat claims
 -- the version, so this file only installs when that claim is ours.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 23
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 22
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.glassMinor == MINOR then return end
