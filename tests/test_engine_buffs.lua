@@ -467,6 +467,40 @@ H.eq(report.unresolved, 0, "so nothing counts as unresolved")
 
 -- The failure itself: the client answers for nothing. The names stay as the
 -- host wrote them, and the report says that is what they are.
+------------------------------------------------------------
+-- The report carries a rank the client described in words we cannot read
+--
+-- Rank decides which reagent a group spell burns, so an unreadable one is not
+-- a curiosity - it is the difference between counting the right item and
+-- counting a different one. The report is where a player's "this looks wrong"
+-- turns into a line saying why (#64).
+------------------------------------------------------------
+
+setup()
+lib.API.rankUnreadable["Prayer of Fortitude"] = nil
+E:RefreshSpells()
+H.eq(E:SpellReport().ranks, nil, "a report says nothing about ranks when all of them read")
+
+lib.API.rankUnreadable["Prayer of Fortitude"] = "Rang zwei"
+local ranked = E:SpellReport()
+H.check(ranked.ranks and #ranked.ranks == 1, "an unreadable rank reaches the report")
+H.eq(ranked.ranks[1].name, "Prayer of Fortitude", "naming the spell")
+H.eq(ranked.ranks[1].subtext, "Rang zwei",
+    "and quoting what the client said, rather than what we guessed from it")
+
+-- And only THIS engine's spells. API.rankUnreadable belongs to the library,
+-- which three addons share, so a report that copied all of it would have
+-- Wildly naming a Prayer - and a player reading it cannot tell whether their
+-- own addon is the one with the problem.
+lib.API.rankUnreadable["Prayer of Fortitude"] = "Rang zwei"
+lib.API.rankUnreadable["Gift of the Wild"] = "Rang drei"
+local mine = E:SpellReport()
+H.check(mine.ranks and #mine.ranks == 1,
+    "a report carries only the spells its own engine tracks")
+H.eq(mine.ranks[1].name, "Prayer of Fortitude", "this engine's spell")
+lib.API.rankUnreadable["Prayer of Fortitude"] = nil
+lib.API.rankUnreadable["Gift of the Wild"] = nil
+
 setup()
 local realName = lib.API.SpellName
 lib.API.SpellName = function() return nil end
