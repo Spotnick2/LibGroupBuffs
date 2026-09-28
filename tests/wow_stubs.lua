@@ -66,6 +66,7 @@ function WoW.reset()
     WoW.instanceType = nil       -- nil = derive from instanceName
     WoW.itemCounts  = {}         -- [itemID] = count, treated as sitting in bag 0
     WoW.itemsUncached = {}       -- [itemID] = true -> GetItemInfo returns nothing
+    WoW.itemQuality = {}         -- [itemID] = quality; 1 (common) when unset
     WoW.itemsRequested = {}      -- [itemID] = true once a load was requested
     WoW.bags        = {}         -- [bagID] = { {itemID=, stackCount=}, ... }
     WoW.messages    = {}         -- everything printed to DEFAULT_CHAT_FRAME
@@ -218,6 +219,37 @@ local PROTECTED_METHODS = {
     SetClampedToScreen = true, SetAlpha = true, SetSize = true, SetScale = true,
     StartMoving = true, StopMovingOrSizing = true, SetParent = true,
 }
+
+-- Widget methods this client has that the stub models as doing nothing.
+-- Every one was checked against the build dump before it was added; a method
+-- that is NOT there is not a candidate for this list, it is a bug in the
+-- caller. Hosts add their own with WoW.allowMethod.
+local KNOWN_METHODS = {}
+for _, name in ipairs({
+    -- Frame behaviour the tests never assert on.
+    "SetMovable", "SetObeyStepOnDrag", "SetScrollChild", "IsProtected",
+    "UnregisterAllEvents", "RegisterForDrag",
+    -- Fonts set from a font OBJECT rather than a file. Recorded nowhere,
+    -- because nothing reads them back; SetFont is modelled properly.
+    "SetFontObject", "SetNormalFontObject",
+    -- Sliders and status bars.
+    "SetValueStep", "SetThumbTexture", "SetOrientation",
+    -- BackdropTemplateMixin. NOT in the dump - it is Lua in FrameXML, not the
+    -- C widget API, so the dump cannot adjudicate it either way. Listed
+    -- because the template is in use and every caller already guards on
+    -- `if f.SetBackdrop then`.
+    "SetBackdropColor", "SetBackdropBorderColor",
+}) do KNOWN_METHODS[name] = true end
+
+-- PascalCase members that are NOT methods and must read nil: regions a
+-- Blizzard template would have created. `Left` is the one that matters -
+-- Tools/PriestlyProbe tests whether a template applied by asking whether
+-- `frame.Left` is nil, and a catch-all made that answer yes every time, so
+-- the probe could never report a template as missing.
+local ABSENT_MEMBERS = {}
+for _, name in ipairs({ "Left", "Right", "Middle", "Text", "Low", "High" }) do
+    ABSENT_MEMBERS[name] = true
+end
 
 local function makeFrame(name, parent, template)
     local f = { _attr = {}, _scripts = {}, _name = name, _shown = false, _parent = parent }
@@ -541,15 +573,36 @@ local function makeFrame(name, parent, template)
         end
     end
 
-    -- Anything else called as a method is a no-op returning the frame. But an
-    -- underscore-prefixed key is one of the ADDON's own private fields, and the
-    -- stub must not invent those: handing back a function makes every unset
-    -- flag (`_combatHidden`, `_active`, `_category`) read as true, which is how
-    -- a test can assert a state the addon is not actually in.
+    -- An unknown key is an ERROR, not a silent no-op.
+    --
+    -- The stub is the list of what this client has, and that has to cover
+    -- METHODS as well as globals. A catch-all that hands back a callable for
+    -- anything is how `GameTooltip:SetItemByID` - which does not exist here at
+    -- all - survived a green suite and failed only in game. It is also how
+    -- four assertions in one afternoon came to be unfalsifiable: a frame's
+    -- `iconEdge` answered with a function, so `if not f.iconEdge` was false
+    -- under test and true in the client, and the code the test existed to
+    -- cover never ran.
+    --
+    -- The split is by case, because the client's widget methods are all
+    -- PascalCase and an addon's own fields are not:
+    --
+    --   * a lower-case or underscored key is the ADDON's field. It reads nil,
+    --     because an unset field IS nil and inventing one lets a test assert a
+    --     state the addon is not in.
+    --   * a PascalCase key is a widget method. It must be one this client has.
     setmetatable(f, {
         __index = function(_, k)
-            if type(k) == "string" and k:sub(1, 1) == "_" then return nil end
-            return chain
+            if type(k) ~= "string" then return nil end
+            local first = k:sub(1, 1)
+            if first ~= first:upper() or first == "_" then return nil end
+            if ABSENT_MEMBERS[k] then return nil end
+            if KNOWN_METHODS[k] then return chain end
+            error("call to widget method '" .. k .. "', which this stub does "
+                .. "not define. Confirm it exists on this client in the newest "
+                .. "C:/Projects/References/forever-api-<build>.md, then either "
+                .. "implement it above or add it to KNOWN_METHODS. If it does "
+                .. "NOT exist, the addon is the thing to fix.", 2)
         end,
     })
     return f
@@ -633,13 +686,19 @@ GameTooltip.SetOwner = function(self, owner, anchor, xOff, yOff)
     self._anchorOffset = { xOff or 0, yOff or 0 }
     return self
 end
-GameTooltip.SetText = function(self, text)
+-- The colour is kept, not discarded. It was the only thing carrying an item's
+-- quality to the player, and with it thrown away the argument order could be
+-- shuffled - or the colour dropped entirely - and every test stayed green.
+GameTooltip.SetText = function(self, text, r, g, b)
     self._lines = { text }
+    self._colours = { { r, g, b } }
     return self
 end
-GameTooltip.AddLine = function(self, text)
+GameTooltip.AddLine = function(self, text, r, g, b)
     self._lines = self._lines or {}
     self._lines[#self._lines + 1] = text
+    self._colours = self._colours or {}
+    self._colours[#self._lines] = { r, g, b }
     return self
 end
 GameTooltip.AddDoubleLine = function(self, left, right)
@@ -648,6 +707,14 @@ end
 function WoW.clearTooltip()
     GameTooltip:Hide()
     GameTooltip._lines = nil
+    GameTooltip._colours = nil
+end
+
+-- The colour of one tooltip line, 1-based, as { r, g, b }.
+function WoW.tooltipColour(i)
+    local c = GameTooltip._colours and GameTooltip._colours[i or 1]
+    if not c then return nil end
+    return c[1], c[2], c[3]
 end
 
 -- Everything the tooltip is showing, colour codes stripped.
@@ -992,7 +1059,14 @@ C_Item = {
     -- reason API.ItemInfo checks the cache before trusting a result.
     GetItemInfo = function(itemID)
         if WoW.itemsUncached[itemID] then return end
-        return "Item " .. tostring(itemID), "link", 3, 1, 1, "", "", 20, "",
+        -- Ordinary white by default, not Rare. The reagents all three addons
+        -- actually read - 17028, 17029, 17056 - were measured as common in
+        -- Priestly's docs/FOREVER-PROBE.md section 6, so a stub that called
+        -- every item Rare started all of them from a wrong model of the only
+        -- items they look at. Set WoW.itemQuality[id] for a test that wants
+        -- the colour path.
+        local quality = WoW.itemQuality[itemID] or 1
+        return "Item " .. tostring(itemID), "link", quality, 1, 1, "", "", 20, "",
             "icon:" .. tostring(itemID)
     end,
     IsItemDataCachedByID = function(itemID) return not WoW.itemsUncached[itemID] end,
@@ -1073,6 +1147,14 @@ end
 -- has installed strictGlobals - which is the only order available to it.
 function WoW.allowGlobal(...)
     for i = 1, select("#", ...) do KNOWN_ABSENT[(select(i, ...))] = true end
+end
+
+-- The same escape hatch for widget methods, for a host that legitimately
+-- calls one this library does not. Confirm it in the build dump first: the
+-- point of the list is that it is the client's surface, not a way to quiet a
+-- failing test.
+function WoW.allowMethod(...)
+    for i = 1, select("#", ...) do KNOWN_METHODS[(select(i, ...))] = true end
 end
 
 WoW.reset()

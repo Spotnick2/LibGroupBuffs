@@ -321,9 +321,19 @@ H.check(API.AurasAreSecret() == true, "secrecy is reported when the client says 
 ------------------------------------------------------------
 
 WoW.reset()
+-- 17029 is a common white reagent on this client (Priestly's
+-- docs/FOREVER-PROBE.md section 6), which is what the stub now models, so the
+-- colour path is exercised on an item told to be something else rather than
+-- on a stub that called everything Rare.
 local name, r, g, b = API.ItemInfo(17029)
 H.eq(name, "Item 17029", "a cached item reports its name")
-H.near(r, 0.3, 0.001, "with its quality colour")
+H.near(r, 0.1, 0.001, "with the colour of its real quality - common, not rare")
+
+WoW.itemQuality[17029] = 3
+name, r = API.ItemInfo(17029)
+H.near(r, 0.3, 0.001, "and a rarer one colours differently")
+WoW.itemQuality[17029] = nil
+name, r, g, b = API.ItemInfo(17029)
 H.eq(g, 0.2, "...green")
 H.eq(b, 0.3, "...blue")
 

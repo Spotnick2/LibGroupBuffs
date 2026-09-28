@@ -570,6 +570,19 @@ H.runScript(ui.footerBtns[1], "OnEnter")
 local tip = WoW.tooltipText()
 H.check(tip:find("Item 17029") and tip:find("12 in your bags") and tip:find("group Prayers"),
     "the tooltip names the item, the count and what uses it: " .. tip)
+-- The item's quality reaches the PLAYER, not just API.ItemInfo. Until the
+-- stub kept the colour arguments this could only be checked coming out of the
+-- API: the call site could shuffle r, g and b, or drop them, and stay green.
+local tr, tg, tb = WoW.tooltipColour(1)
+H.check(tr and tg and tb, "the item's name line is coloured at all")
+H.near(tr, 0.1, 0.001, "by its quality - a common reagent here")
+WoW.itemQuality[17029] = 4
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+H.near(select(1, WoW.tooltipColour(1)), 0.4, 0.001,
+    "and a rarer item is coloured differently, in that order")
+WoW.itemQuality[17029] = nil
+
 H.runScript(ui.footerBtns[1], "OnLeave")
 H.eq(WoW.tooltipText(), "", "and goes away")
 
