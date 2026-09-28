@@ -357,7 +357,13 @@ function API.GetSpellRank(spellName)
         return 0, "absent"
     end
 
-    local rank, how = 0, "absent"
+    -- The whole book is scanned before anything is decided, because ONE
+    -- unreadable entry makes the highest rank unknown no matter what else was
+    -- read. A book holding "Rank 1" and an unreadable entry does not mean
+    -- rank 1: ranks are ordered, the unreadable one may be above it, and
+    -- answering 1 there is the original bug wearing a readable entry as
+    -- cover. Deciding per entry as they arrived got this wrong.
+    local best, sawUnranked, unreadable = nil, false, nil
     pcall(function()
         for i = 1, 300 do
             local nm, sub = C_SpellBook.GetSpellBookItemName(i, BANK)
@@ -365,25 +371,39 @@ function API.GetSpellRank(spellName)
             if nm == spellName then
                 sub = sub and tostring(sub) or ""
                 if sub == "" then
-                    -- No subtext: this client does not rank the spell.
-                    if how == "absent" then rank, how = 1, "unranked" end
+                    sawUnranked = true          -- no subtext: this client does not rank it
                 else
                     local r = tonumber(sub:match("(%d+)"))
                     if r then
-                        if how ~= "read" or r > rank then rank, how = r, "read" end
-                    elseif how == "absent" or how == "unranked" then
-                        -- A subtext we cannot read. Not rank 1: unknown.
-                        rank, how = nil, "unreadable"
-                        API.rankUnreadable[spellName] = sub
+                        if not best or r > best then best = r end
+                    else
+                        unreadable = unreadable or sub
                     end
                 end
             end
         end
     end)
-    -- A spell whose rank WAS read is not a spell we failed on, even if an
-    -- earlier entry in the book looked unreadable. Cleared rather than left,
-    -- or the report keeps naming a problem that is no longer there.
-    if how == "read" then API.rankUnreadable[spellName] = nil end
+
+    local rank, how
+    if unreadable then
+        rank, how = nil, "unreadable"
+    elseif best then
+        rank, how = best, "read"
+    elseif sawUnranked then
+        rank, how = 1, "unranked"
+    else
+        rank, how = 0, "absent"
+    end
+
+    -- The record holds what is wrong NOW. Anything other than a fresh
+    -- unreadable result clears it - including the spell being gone from the
+    -- book - or the report goes on describing a client that has since
+    -- changed, or a spell that is no longer there.
+    if how == "unreadable" then
+        API.rankUnreadable[spellName] = unreadable
+    else
+        API.rankUnreadable[spellName] = nil
+    end
     return rank, how
 end
 

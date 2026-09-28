@@ -487,7 +487,19 @@ H.check(ranked.ranks and #ranked.ranks == 1, "an unreadable rank reaches the rep
 H.eq(ranked.ranks[1].name, "Prayer of Fortitude", "naming the spell")
 H.eq(ranked.ranks[1].subtext, "Rang zwei",
     "and quoting what the client said, rather than what we guessed from it")
+
+-- And only THIS engine's spells. API.rankUnreadable belongs to the library,
+-- which three addons share, so a report that copied all of it would have
+-- Wildly naming a Prayer - and a player reading it cannot tell whether their
+-- own addon is the one with the problem.
+lib.API.rankUnreadable["Prayer of Fortitude"] = "Rang zwei"
+lib.API.rankUnreadable["Gift of the Wild"] = "Rang drei"
+local mine = E:SpellReport()
+H.check(mine.ranks and #mine.ranks == 1,
+    "a report carries only the spells its own engine tracks")
+H.eq(mine.ranks[1].name, "Prayer of Fortitude", "this engine's spell")
 lib.API.rankUnreadable["Prayer of Fortitude"] = nil
+lib.API.rankUnreadable["Gift of the Wild"] = nil
 
 setup()
 local realName = lib.API.SpellName

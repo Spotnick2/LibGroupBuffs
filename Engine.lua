@@ -203,11 +203,22 @@ function Methods:SpellReport()
     -- client actually said is worth more than any inference from it. Rank
     -- picks the reagent, so this is the difference between counting the right
     -- candle and counting a different one (#64).
+    -- Only THIS engine's spells. API.rankUnreadable belongs to the library,
+    -- which is shared by three addons, so copying all of it into every report
+    -- makes Wildly's report name a Prayer - and a player reading it cannot
+    -- tell whether their own addon is the one with the problem.
     local unreadable = lib.API.rankUnreadable
     if unreadable then
+        local mine = {}
+        for _, d in ipairs(self.defs) do
+            if d.grp then mine[d.grp] = true end
+            if d.sngl then mine[d.sngl] = true end
+        end
         for name, subtext in pairs(unreadable) do
-            out.ranks = out.ranks or {}
-            out.ranks[#out.ranks + 1] = { name = name, subtext = subtext }
+            if mine[name] then
+                out.ranks = out.ranks or {}
+                out.ranks[#out.ranks + 1] = { name = name, subtext = subtext }
+            end
         end
     end
     return out

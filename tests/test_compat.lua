@@ -513,15 +513,56 @@ rank, how = API.GetSpellRank("Prayer of Fortitude")
 H.eq(rank, nil, "and so is one written in digits Lua's %d does not match")
 H.eq(how, "unreadable", "same answer, same reason")
 
--- A book where one entry reads and another does not still gives the rank.
+-- A book where SOME entries read and one does not. One readable entry is NOT
+-- enough: ranks are ordered, the unreadable one may be above the ones we can
+-- read, and answering with the highest readable rank is the original bug
+-- wearing a readable entry as cover. The caller wants the HIGHEST rank, and
+-- that is what is unknown.
 WoW.reset()
 API.rankUnreadable["Prayer of Fortitude"] = nil
-WoW.Know(30005, "Prayer of Fortitude", "Rang zwei")
-WoW.Know(30006, "Prayer of Fortitude", "Rank 2")
+WoW.Know(30005, "Prayer of Fortitude", "Rank 1")
+WoW.Know(30006, "Prayer of Fortitude", "Rang zwei")
 rank, how = API.GetSpellRank("Prayer of Fortitude")
-H.eq(rank, 2, "one readable entry is enough")
-H.eq(how, "read", "and the answer is a read one")
-H.eq(API.rankUnreadable["Prayer of Fortitude"], nil,
-    "and the earlier failure is cleared, not left to be reported forever")
+H.eq(rank, nil, "a readable LOWER rank does not establish the highest one")
+H.eq(how, "unreadable", "so the answer is still unknown")
+H.eq(API.rankUnreadable["Prayer of Fortitude"], "Rang zwei",
+    "and the entry we could not read is still the one reported")
+
+-- The same the other way round, so the order entries arrive in cannot matter.
+WoW.reset()
+API.rankUnreadable["Prayer of Fortitude"] = nil
+WoW.Know(30007, "Prayer of Fortitude", "Rang zwei")
+WoW.Know(30008, "Prayer of Fortitude", "Rank 1")
+rank, how = API.GetSpellRank("Prayer of Fortitude")
+H.eq(rank, nil, "whichever order the book lists them in")
+H.eq(how, "unreadable", "the answer is the same")
+
+-- Every readable: the highest wins, and nothing is reported.
+WoW.reset()
+API.rankUnreadable["Prayer of Fortitude"] = nil
+WoW.Know(30009, "Prayer of Fortitude", "Rank 1")
+WoW.Know(30010, "Prayer of Fortitude", "Rank 3")
+WoW.Know(30011, "Prayer of Fortitude", "Rank 2")
+rank, how = API.GetSpellRank("Prayer of Fortitude")
+H.eq(rank, 3, "with every entry readable the highest rank wins")
+H.eq(how, "read", "and it is a read answer")
+H.eq(API.rankUnreadable["Prayer of Fortitude"], nil, "with nothing to report")
+
+-- The record holds what is wrong NOW. A spell that has left the book is not a
+-- spell with an unreadable rank, and neither is one the client stopped
+-- ranking - both used to leave the old subtext behind, so the report went on
+-- describing a client that had changed.
+WoW.reset()
+API.rankUnreadable["Prayer of Fortitude"] = "Rang zwei"
+rank, how = API.GetSpellRank("Prayer of Fortitude")
+H.eq(how, "absent", "a spell no longer in the book is absent")
+H.eq(API.rankUnreadable["Prayer of Fortitude"], nil, "and its old failure is cleared")
+
+WoW.reset()
+API.rankUnreadable["Prayer of Fortitude"] = "Rang zwei"
+WoW.Know(30012, "Prayer of Fortitude")
+rank, how = API.GetSpellRank("Prayer of Fortitude")
+H.eq(how, "unranked", "a spell the client stopped ranking is unranked")
+H.eq(API.rankUnreadable["Prayer of Fortitude"], nil, "and its old failure is cleared too")
 
 H.done("test_compat")
