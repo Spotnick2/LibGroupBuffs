@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 20
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 19
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -466,75 +466,41 @@ end
 -- rather than nil, and the cache is per client - the same call succeeds on one
 -- character and comes back empty on another.
 
--- When each item was last asked for, so an id the server will never answer
--- cannot produce an unbounded stream of requests. An item that is merely slow
--- is still retried; one that does not exist is retried rarely. The window is
--- longer than the footer's own refresh, which is what was firing it.
-local itemAsked = {}
-local ITEM_RETRY = 10
-
--- Ask the client to load an item, at most once every ITEM_RETRY seconds.
--- Returns whether it asked, which is only of interest to the tests.
-local function RequestItem(itemID)
-    if not (itemID and C_Item and C_Item.RequestLoadItemDataByID) then return false end
-    local now = (GetTime and GetTime()) or 0
-    local last = itemAsked[itemID]
-    if last and (now - last) < ITEM_RETRY then return false end
-    itemAsked[itemID] = now
-    pcall(C_Item.RequestLoadItemDataByID, itemID)
-    return true
-end
-
--- Ask for an item before anyone needs it. The window calls this for the
--- reagents it draws, at build time and on its own refresh, so the data is
--- there before a tooltip can be opened - the placeholder a cache miss shows
--- has nothing to re-run it, so a miss at hover time reads "Loading..." for as
--- long as the cursor stays put.
-function API.WarmItem(itemID)
-    if not (itemID and C_Item and C_Item.GetItemInfo) then return end
-    if C_Item.IsItemDataCachedByID then
-        local known, cached = pcall(C_Item.IsItemDataCachedByID, itemID)
-        if known and cached then return end
-    end
-    RequestItem(itemID)
-end
-
 function API.ItemInfo(itemID)
-    -- Guarded like API.CountItem twenty lines above. Without it a nil id
-    -- reaches three C_Item calls and asks the server to load nothing, and the
-    -- pcalls keep it quiet - so the caller cannot tell "you passed nil" from
-    -- "cache miss, try again", which are not the same problem.
-    if not itemID then return nil end
-
     -- C_Item is the file-local alias taken at load time, as every other
     -- contract here does.
     if not (C_Item and C_Item.GetItemInfo) then return nil end
 
+    local function requestLoad()
+        if C_Item.RequestLoadItemDataByID then
+            pcall(C_Item.RequestLoadItemDataByID, itemID)
+        end
+    end
+
     if C_Item.IsItemDataCachedByID then
         local known, cached = pcall(C_Item.IsItemDataCachedByID, itemID)
         if known and not cached then
-            RequestItem(itemID)
+            requestLoad()
             return nil   -- the caller shows a placeholder; the next hover has it
         end
     end
 
-    -- Read directly rather than packing pcall's returns into a table:
-    -- GetItemInfo answers with nineteen values, and building that table on
-    -- every hover to read two of them needed a comment explaining the index
-    -- offset as well.
-    local ok, name, _, quality = pcall(C_Item.GetItemInfo, itemID)
-    if not ok or name == nil then
+    -- Returns sit at index+1 inside `packed`, pcall's ok being [1]: the name is
+    -- the 1st return, quality the 3rd.
+    local packed = { pcall(C_Item.GetItemInfo, itemID) }
+    if not packed[1] or packed[2] == nil then
         -- The cache check said yes and the data still is not there. Believe the
         -- data over the flag and ask again, or every later call misses the
         -- same way.
-        RequestItem(itemID)
+        requestLoad()
         return nil
     end
 
+    local name, quality = packed[2], packed[4]
     local r, g, b = 1, 1, 1
     if quality and C_Item.GetItemQualityColor then
-        local okColour, qr, qg, qb = pcall(C_Item.GetItemQualityColor, quality)
-        if okColour and qr then r, g, b = qr, qg, qb end
+        local ok, qr, qg, qb = pcall(C_Item.GetItemQualityColor, quality)
+        if ok and qr then r, g, b = qr, qg, qb end
     end
     return name, r, g, b
 end

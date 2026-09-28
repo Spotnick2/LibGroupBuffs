@@ -592,6 +592,18 @@ H.runScript(ui.footerBtns[2], "OnEnter")
 H.check(WoW.tooltipText():find("Loading"), "an uncached item shows a placeholder")
 WoW.itemsUncached[17056] = nil
 
+-- And the footer asks for what it draws, so that placeholder is rare. A
+-- tooltip opened on a cache miss has nothing to re-run it, so it reads
+-- "Loading..." for as long as the cursor stays on it; the refresh runs at
+-- build time and every few seconds, well before anyone can hover.
+WoW.itemsRequested = {}
+WoW.itemsUncached[60101] = true
+WoW.time = (WoW.time or 0) + 100
+host.footer = { { itemID = 60101, usedBy = "something uncached" } }
+ui:Update()
+H.check(WoW.itemsRequested[60101],
+    "drawing a reagent asks the client to load its name")
+
 host.footer = {}
 ui:Update()
 H.check(not ui.footerBtns[1]:IsShown() and not ui.main.ftrLine:IsShown(),
