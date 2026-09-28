@@ -163,6 +163,27 @@ Vanilla content, Retail codebase.
   already be one the client gave that copy. Reporting it as the host's English literal would call
   a correctly localized addon broken. Unstamped is not the same as never-resolved, and only
   stamping at creation lets the two be told apart.
+- `Visibility.lua` — `lib.Visibility.New(spec)`: **when the window opens itself, and when it must
+  not.** The addon still owns its events, its slash commands and its class; it reports what changed
+  (`Login`, `ReadyCheck`, `GroupJoined`, `RosterChanged`, `SoloToggled`, `ContentChanged`) and this
+  decides whether that warrants opening, closing or refreshing.
+  - **This is the exception to "the addon keeps policy", and it was earned.** Three near
+    line-for-line copies produced five defects — a roster after login counting as a join, a settings
+    change reopening a deliberate close, a solo toggle dropped in combat, and two more — each found
+    in one addon, fixed there, and left standing in the others (#22).
+  - **Preference is not visibility.** `getPreference` is the saved "the player wants this window"
+    (true / false / **nil for never said**); `ui:IsVisible()` is whether it is logically open now.
+    They disagree constantly: in combat the frame can still be on screen after a close, and a window
+    that closed itself for want of rows never wrote false — which is exactly what lets
+    `ContentChanged` reopen one and not the other. **Never cache the preference**: the close button
+    and the addon's slash commands change it without passing through here.
+  - **`ContentChanged` is one method on purpose.** A setting, a spell learned, a tank appearing, an
+    aura landing — the decision is identical, and splitting it is what left a copy of `WantsOpen` in
+    each host's handlers. Whether the notification is *meaningful* stays with the host: Magely does
+    not report an aura in combat, because an aura cannot be read then.
+  - `lastGroupSize` is **nil until a roster is seen**, and a join is a 0-to-n change where the 0 was
+    observed. Only `Login` resets it — an upgrade must not, or a session that has watched a roster
+    forgets it. Test upgrades with an object that has already observed one.
 - `Settings` — whether saved settings came back is decided by **the marker's own build**, not by
   any constant. The marker records the build it was written on; a build only changes when the
   client is patched, and applying a patch requires a full exit, so a marker returning under a

@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 23
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -670,7 +670,7 @@ end
 -- version, so it is always the active copy's own list. lib.Status walks it: a
 -- newer copy with a fifth file says so here, and a host that never heard of
 -- that file still gets a correct answer.
-lib.FILES = { "Compat", "Glass", "Settings", "Engine", "UI", "Visibility" }
+lib.FILES = { "Compat", "Glass", "Settings", "Engine", "UI" }
 
 -- Each file records itself here on its last line, so a file that threw partway
 -- leaves no record. Reused across upgrades, and every entry is compared with
