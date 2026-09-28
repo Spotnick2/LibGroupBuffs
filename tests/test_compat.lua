@@ -375,4 +375,91 @@ for _, want in ipairs({ "LeftButtonDown", "RightButtonDown", "LeftButtonUp", "Ri
     H.check(seen[want], "registers " .. want)
 end
 
+------------------------------------------------------------
+-- The item cache: a nil id, a slow item, and one that will never answer
+--
+-- All three go through the same pcalls, so all three used to look alike from
+-- the outside: nil back, nothing said. They are different problems.
+------------------------------------------------------------
+
+WoW.reset()
+
+-- A nil id is the CALLER's mistake, and must not reach the client. Without
+-- the guard it runs three C_Item calls and asks the server to load nothing,
+-- and the pcalls keep it silent - so it reads exactly like a cache miss.
+local before = 0
+for _ in pairs(WoW.itemsRequested) do before = before + 1 end
+H.eq(API.ItemInfo(nil), nil, "a nil item id answers nil")
+local after = 0
+for _ in pairs(WoW.itemsRequested) do after = after + 1 end
+H.eq(after, before, "and asks the client for nothing")
+
+-- An uncached item is asked for once, then left alone for a while. Hovering
+-- back and forth over a reagent the server will never answer - a typo'd id,
+-- or one cut from the build - used to issue a request every single time.
+WoW.reset()
+WoW.itemsUncached[55555] = true
+WoW.time = 1000
+H.eq(API.ItemInfo(55555), nil, "an uncached item answers nil")
+H.check(WoW.itemsRequested[55555], "having asked the client to load it")
+
+WoW.itemsRequested[55555] = nil
+H.eq(API.ItemInfo(55555), nil, "asking again still answers nil")
+H.check(not WoW.itemsRequested[55555],
+    "but does not ask again straight away - an id nothing can answer would "
+    .. "otherwise re-request on every hover, without bound")
+
+-- It is a throttle, not a memo: an item that is merely slow still gets asked
+-- for again, or one that arrives late would never be requested after a
+-- fumbled first attempt.
+WoW.time = 1000 + 11
+H.eq(API.ItemInfo(55555), nil, "and still nil once the window has passed")
+H.check(WoW.itemsRequested[55555], "but it does ask again - slow is not absent")
+
+-- WarmItem asks for what is missing and leaves what is there alone, which is
+-- what lets the footer fill the cache before anyone can hover.
+-- A fresh id, because the throttle is deliberately NOT reset with the client:
+-- it models what this session has already asked the server for, and a test
+-- reusing an id would be measuring the earlier section's request.
+WoW.reset()
+WoW.time = 2000
+WoW.itemsUncached[60001] = true
+API.WarmItem(60001)
+H.check(WoW.itemsRequested[60001], "WarmItem asks for an item that is not cached")
+
+WoW.reset()
+WoW.time = 3000
+API.WarmItem(60002)
+H.check(not WoW.itemsRequested[60002],
+    "and asks for nothing when the item is already there")
+API.WarmItem(nil)
+H.check(true, "and survives a nil id")
+
+-- The case the cache FLAG and the DATA disagree on. IsItemDataCachedByID
+-- answers true while GetItemInfo still returns nothing; ItemInfo has always
+-- believed the data and asked again, and the warm-up has to do the same. A
+-- version that trusted the flag decided there was nothing to ask for, so the
+-- placeholder it exists to prevent was exactly what the first hover showed.
+WoW.reset()
+WoW.time = 4000
+WoW.itemsCachedButEmpty[60003] = true
+API.WarmItem(60003)
+H.check(WoW.itemsRequested[60003],
+    "WarmItem believes the data over the cache flag, the way ItemInfo does")
+
+-- And the same disagreement through ItemInfo, which is where it was first
+-- measured.
+WoW.reset()
+WoW.time = 5000
+WoW.itemsCachedButEmpty[60004] = true
+H.eq(API.ItemInfo(60004), nil, "ItemInfo answers nil when the data is not there")
+H.check(WoW.itemsRequested[60004], "and asks for it despite the flag")
+
+-- ItemReady is the same question without the colour work.
+WoW.reset()
+WoW.time = 6000
+H.check(API.ItemReady(17029), "a cached item is ready")
+WoW.itemsUncached[60005] = true
+H.check(not API.ItemReady(60005), "an uncached one is not")
+
 H.done("test_compat")

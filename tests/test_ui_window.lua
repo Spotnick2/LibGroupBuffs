@@ -592,6 +592,63 @@ H.runScript(ui.footerBtns[2], "OnEnter")
 H.check(WoW.tooltipText():find("Loading"), "an uncached item shows a placeholder")
 WoW.itemsUncached[17056] = nil
 
+-- And the footer asks for what it draws, so that placeholder is rare. A
+-- tooltip opened on a cache miss has nothing to re-run it, so it reads
+-- "Loading..." for as long as the cursor stays on it; the refresh runs at
+-- build time and every few seconds, well before anyone can hover.
+WoW.itemsRequested = {}
+WoW.itemsUncached[60101] = true
+WoW.time = (WoW.time or 0) + 100
+host.footer = { { itemID = 60101, usedBy = "something uncached" } }
+ui:Update()
+H.check(WoW.itemsRequested[60101],
+    "drawing a reagent asks the client to load its name")
+
+-- A hover that lands BEFORE the data does. The load is asynchronous, so
+-- preloading lowers the odds of a miss without removing it: a player can
+-- hover the moment the window appears. The placeholder has nothing to re-run
+-- it, so without this it stays under the cursor for the whole hover.
+setup()
+host.footer = { { itemID = 60201, usedBy = "something slow" } }
+WoW.itemsUncached[60201] = true
+ui:Update()
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+H.check(WoW.tooltipText():find("Loading"), "hovering before the data arrives shows the placeholder")
+
+-- ... the item lands, and the ticker finishes the job.
+WoW.itemsUncached[60201] = nil
+ui:MainTick(1)
+H.check(WoW.tooltipText():find("Item 60201"),
+    "and the tooltip catches up once the item arrives: " .. WoW.tooltipText())
+H.check(WoW.tooltipText():find("in your bags"), "with the rest of its lines intact")
+
+-- Only OUR tooltip. Between the hover and the data landing the player may
+-- have moved onto something else, and GameTooltip is shared.
+setup()
+host.footer = { { itemID = 60202, usedBy = "something slow" } }
+WoW.itemsUncached[60202] = true
+ui:Update()
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+H.check(WoW.tooltipText():find("Loading"), "the placeholder is showing")
+GameTooltip:SetOwner(UIParent, "ANCHOR_RIGHT")
+GameTooltip:SetText("Somebody else's tooltip")
+WoW.itemsUncached[60202] = nil
+ui:MainTick(1)
+H.check(WoW.tooltipText():find("Somebody else"),
+    "a tooltip that is no longer ours is left alone: " .. WoW.tooltipText())
+
+-- And leaving the button stops it waiting.
+setup()
+host.footer = { { itemID = 60203, usedBy = "something slow" } }
+WoW.itemsUncached[60203] = true
+ui:Update()
+WoW.clearTooltip()
+H.runScript(ui.footerBtns[1], "OnEnter")
+H.runScript(ui.footerBtns[1], "OnLeave")
+H.check(not ui.tipPending, "leaving the reagent stops the tooltip waiting for it")
+
 host.footer = {}
 ui:Update()
 H.check(not ui.footerBtns[1]:IsShown() and not ui.main.ftrLine:IsShown(),

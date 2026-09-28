@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 20
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 19
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -384,7 +384,7 @@ end
 -- themselves are free, there is no reason to find out which of these calls
 -- the client refuses under lockdown. It is retried on the next refresh.
 local function Panel(f)
-    if f.glass then return f.glass end
+    if type(f.glass) == "table" then return f.glass end
     if InCombatLockdown() then return nil end
     if f.SetBackdrop then f:SetBackdrop(nil) end
     f.glass = lib.Glass.Apply(f, "large")
@@ -415,7 +415,7 @@ local FILL_MASK_MARGIN = 8
 local FILL_TAG = "glassFill"
 
 local function Fill(row, height)
-    if row.fill and rawget(row.fill, FILL_TAG) then return row.fill end
+    if type(row.fill) == "table" and rawget(row.fill, FILL_TAG) then return row.fill end
     if InCombatLockdown() then return nil end
 
     -- r17 put the fill in a child StatusBar. Replacing the reference is not
@@ -424,7 +424,7 @@ local function Fill(row, height)
     -- be destroyed on this client. A FRAME has Hide; the table this builds
     -- does not, which is what tells the two apart.
     local previous = row.fill
-    if previous and not rawget(previous, FILL_TAG)
+    if type(previous) == "table" and not rawget(previous, FILL_TAG)
         and type(previous.Hide) == "function" then
         previous:Hide()
     end
@@ -469,7 +469,7 @@ local function Fill(row, height)
 
     -- The older copy's flat background would otherwise show through the
     -- rounded corners of this one.
-    if row.bg and row.bg.SetColorTexture then
+    if type(row.bg) == "table" and row.bg.SetColorTexture then
         row.bg:SetColorTexture(0, 0, 0, 0)
     end
     row.fill = fill
@@ -494,10 +494,10 @@ local HDR_TAG   = "glassHeader"
 local HDR_TINT  = 0.30
 
 local function HeaderGlass(main)
-    if main.hdr and rawget(main.hdr, HDR_TAG) then return main.hdr end
+    if type(main.hdr) == "table" and rawget(main.hdr, HDR_TAG) then return main.hdr end
     if InCombatLockdown() then return nil end
     local tint = main.hdrBg
-    if not tint or not tint.AddMaskTexture then return nil end
+    if type(tint) ~= "table" or not tint.AddMaskTexture then return nil end
 
     -- hdrBg itself becomes the tint, rather than a second band drawn over it:
     -- an older copy upgrading in place already has this texture, and two of
@@ -527,7 +527,7 @@ end
 -- be destroyed on this client. It is emptied and hidden, its image handed to
 -- the tile that replaces it, and the reference moved on.
 local function ReplaceIcon(old, tile)
-    if not old or old == tile then return end
+    if type(old) ~= "table" or old == tile then return end
     if old.GetTexture and tile.SetTexture then tile:SetTexture(old:GetTexture()) end
     if old.SetTexture then old:SetTexture(nil) end
     if old.Hide then old:Hide() end
@@ -543,7 +543,11 @@ end
 local function StyleRow(r)
     r:SetSize(ROW_W, ROW_H)
 
-    if not r.iconEdge then
+    -- A table, not merely present: the test stub answers any unknown field
+    -- with a no-op method, so `if not r.iconEdge` is true on a fresh row in
+    -- game and false under test - which would leave every tested row without
+    -- the tile this is here to build.
+    if type(r.iconEdge) ~= "table" then
         local old = r.icon
         r.icon, r.iconEdge = IconTile(r, ROW_H - 6, "LEFT", r, "LEFT", 3, 0)
         ReplaceIcon(old, r.icon)
@@ -599,7 +603,7 @@ local function StylePopRow(pr, i)
     pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
     pr.rangeTxt:SetWidth(14)
 
-    if not pr.classEdge then
+    if type(pr.classEdge) ~= "table" then
         local old = pr.classIcon
         pr.classIcon, pr.classEdge =
             IconTile(pr, POP_ROW_H - 8, "LEFT", pr.rangeTxt, "RIGHT", 4, 0)
@@ -642,7 +646,7 @@ end
 local function StyleFooterButton(btn)
     btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
 
-    if not btn.iconEdge then
+    if type(btn.iconEdge) ~= "table" then
         local old = btn.icon
         btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4, "LEFT", btn, "LEFT", 0, 0)
         ReplaceIcon(old, btn.icon)
@@ -704,7 +708,7 @@ end
 
 -- The popover's own header. Same rules as StyleHeader.
 local function StylePopHeader(pop)
-    if not pop.hdrEdge then
+    if type(pop.hdrEdge) ~= "table" then
         local old = pop.hdrIcon
         pop.hdrIcon, pop.hdrEdge =
             IconTile(pop, POP_HDR_H - 10, "TOPLEFT", pop, "TOPLEFT", 7, -6)
@@ -725,9 +729,9 @@ local function StyleHeader(main)
     -- The drag strip covers the header, so it is the header's height or a
     -- band of it stops answering the mouse. Set once at build before r19,
     -- which left an adopted window draggable only by its top 24px.
-    if main.dragHandle then main.dragHandle:SetHeight(HDR_H) end
+    if type(main.dragHandle) == "table" then main.dragHandle:SetHeight(HDR_H) end
 
-    if not main.specEdge then
+    if type(main.specEdge) ~= "table" then
         local old = main.specIcon
         main.specIcon, main.specEdge =
             IconTile(main, HDR_H - 10, "LEFT", main.hdrBg, "LEFT", 5, 0)
@@ -1104,13 +1108,6 @@ function Methods:RefreshFooter()
     for i, btn in ipairs(self.footerBtns) do
         local item = self.footerItems[i]
         if item and btn:IsShown() then
-            -- Ask for the item's name here, where there is something that
-            -- runs again. A tooltip opened on a cache miss shows a
-            -- placeholder and has nothing to re-run it, so it would read
-            -- "Loading..." for as long as the cursor stayed on it; this runs
-            -- at build time and every few seconds after, so by the time
-            -- anyone can hover, the data has arrived.
-            lib.API.WarmItem(item.itemID)
             local count = lib.API.CountItem(item.itemID)
             btn.countTxt:SetText(count)
             if item.color then
@@ -1164,12 +1161,8 @@ function Methods:FooterEnter(btn)
     OwnTooltip(btn, "ANCHOR_RIGHT", TIP_GAP)
     local name, r, g, b = lib.API.ItemInfo(btn._itemID)
     -- A cache miss is not an error: ItemInfo has asked the client for the
-    -- item. The load is asynchronous, though, so remember that this tooltip
-    -- is showing a placeholder - the ticker finishes the job when the data
-    -- lands, rather than leaving "Loading..." under the cursor.
+    -- item, so the next hover will have it.
     GameTooltip:SetText(name or "Loading...", r or 1, g or 1, b or 1)
-    self.tipButton = btn
-    self.tipPending = (name == nil)
     local have = lib.API.CountItem(btn._itemID)
     GameTooltip:AddLine((have == 1 and "1 in your bags" or (have .. " in your bags")),
         0.85, 0.85, 0.85)
@@ -1179,33 +1172,7 @@ function Methods:FooterEnter(btn)
     GameTooltip:Show()
 end
 
--- Redraw a reagent tooltip that is still showing the placeholder, once the
--- item's name arrives. Called from the ticker, which already runs while the
--- cursor sits still.
---
--- Only ever OUR tooltip: GameTooltip is shared, and between the hover and the
--- data arriving the player may have moved onto something else entirely. The
--- owner is checked as well as our own flag, because a tooltip taken over by
--- another addon is not ours to rewrite.
-function Methods:RefreshPendingTooltip()
-    if not self.tipPending then return end
-    local btn = self.tipButton
-    if not (btn and btn._itemID) then
-        self.tipPending = false
-        return
-    end
-    if GameTooltip:GetOwner() ~= btn or not GameTooltip:IsShown() then
-        self.tipPending = false
-        return
-    end
-    if not lib.API.ItemReady(btn._itemID) then return end
-    self.tipPending = false
-    self:FooterEnter(btn)
-end
-
 function Methods:FooterLeave()
-    self.tipPending = false
-    self.tipButton = nil
     ReleaseTooltip()
 end
 
@@ -1218,10 +1185,6 @@ function Methods:MainTick(dt)
     if self.tick >= 0.5 then
         self.tick = 0
         self:RefreshTimers()
-        -- On the half-second tick, not the footer's three: a placeholder
-        -- under the cursor is what the player is looking at, and three
-        -- seconds of "Loading..." is most of a hover.
-        self:RefreshPendingTooltip()
     end
     if self.footerTick >= 3.0 then
         self.footerTick = 0
@@ -1838,7 +1801,7 @@ function Methods:AdoptLayout()
     -- Blizzard's close button has no label of ours. It cannot be destroyed,
     -- so it is hidden, unhooked from the mouse, and replaced.
     local x = main.closeBtn
-    if x and not x.label then
+    if type(x) == "table" and type(x.label) ~= "table" then
         if x.Hide then x:Hide() end
         if x.EnableMouse then x:EnableMouse(false) end
         main.closeBtn = MakeCloseButton(self, main)

@@ -66,6 +66,10 @@ function WoW.reset()
     WoW.instanceType = nil       -- nil = derive from instanceName
     WoW.itemCounts  = {}         -- [itemID] = count, treated as sitting in bag 0
     WoW.itemsUncached = {}       -- [itemID] = true -> GetItemInfo returns nothing
+    -- [itemID] = true -> IsItemDataCachedByID says YES and GetItemInfo still
+    -- returns nothing. Measured on this client: the flag runs ahead of the
+    -- data, which is why nothing here may trust it.
+    WoW.itemsCachedButEmpty = {}
     WoW.itemQuality = {}         -- [itemID] = quality; 1 (common) when unset
     WoW.itemsRequested = {}      -- [itemID] = true once a load was requested
     WoW.bags        = {}         -- [bagID] = { {itemID=, stackCount=}, ... }
@@ -678,6 +682,12 @@ DEFAULT_CHAT_FRAME = {
 
 GameTooltip = makeFrame("GameTooltip")
 -- Records what was put in it, so a test can assert what the player is told.
+-- Declared on this client (GameTooltip:GetOwner, 70009 dump). Modelled
+-- because GameTooltip is shared: an addon that redraws a tooltip it opened
+-- earlier has to check it still owns it, and a stub that could not answer
+-- would make that check untestable.
+GameTooltip.GetOwner = function(self) return self._owner end
+
 GameTooltip.SetOwner = function(self, owner, anchor, xOff, yOff)
     self._owner, self._anchor, self._lines = owner, anchor, {}
     -- The offsets too: ANCHOR_RIGHT measures from the OWNER, and an owner
@@ -1058,7 +1068,7 @@ C_Item = {
     -- Returns NOTHING on a cache miss, not nil - the live behaviour, and the
     -- reason API.ItemInfo checks the cache before trusting a result.
     GetItemInfo = function(itemID)
-        if WoW.itemsUncached[itemID] then return end
+        if WoW.itemsUncached[itemID] or WoW.itemsCachedButEmpty[itemID] then return end
         -- Ordinary white by default, not Rare. The reagents all three addons
         -- actually read - 17028, 17029, 17056 - were measured as common in
         -- Priestly's docs/FOREVER-PROBE.md section 6, so a stub that called
