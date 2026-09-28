@@ -129,8 +129,10 @@ function Methods:ReadyCheck()
 end
 
 -- The client saying you joined, rather than us inferring it from the roster
--- changing. Latched rather than acted on: the roster that follows is what
--- knows how many people there are.
+-- changing. It fires: Blizzard's own UI for this build registers and acts on
+-- it (Blizzard_DamageMeter/DamageMeter.lua:78 in C:/Projects/wow-ui-source).
+-- Latched rather than acted on here: the roster that follows is what knows how
+-- many people there are.
 function Methods:GroupJoined()
     self.joinedPending = true
 end
