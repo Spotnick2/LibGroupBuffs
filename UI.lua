@@ -523,27 +523,62 @@ local function HeaderGlass(main)
     return hdr
 end
 
-local function MakeRow(ui, parent, i)
-    local r = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
-    r._ui = ui
+-- An older copy's icon is a bare texture on the frame, and a texture cannot
+-- be destroyed on this client. It is emptied and hidden, its image handed to
+-- the tile that replaces it, and the reference moved on.
+local function ReplaceIcon(old, tile)
+    if type(old) ~= "table" or old == tile then return end
+    if old.GetTexture and tile.SetTexture then tile:SetTexture(old:GetTexture()) end
+    if old.SetTexture then old:SetTexture(nil) end
+    if old.Hide then old:Hide() end
+end
+
+-- This version's geometry, applied to a row whether it was built a moment ago
+-- or by an older copy upgrading in place. Separate from MakeRow because
+-- frames are built ONCE: Init returns early when self.main exists, so a
+-- window an r18 copy made would otherwise keep 15px rows, a bare 14px icon
+-- and the old font under r19's code. Everything here is idempotent - anchors
+-- are cleared before they are set, fonts are set again, and the icon tile is
+-- built only if there is not already one.
+local function StyleRow(r)
     r:SetSize(ROW_W, ROW_H)
-    r:EnableMouse(true)
-    r:RegisterForClicks(lib.API.ClickEdges())
 
+    -- A table, not merely present: the test stub answers any unknown field
+    -- with a no-op method, so `if not r.iconEdge` is true on a fresh row in
+    -- game and false under test - which would leave every tested row without
+    -- the tile this is here to build.
+    if type(r.iconEdge) ~= "table" then
+        local old = r.icon
+        r.icon, r.iconEdge = IconTile(r, ROW_H - 6, "LEFT", r, "LEFT", 3, 0)
+        ReplaceIcon(old, r.icon)
+    end
 
-    r.icon, r.iconEdge = IconTile(r, ROW_H - 6, "LEFT", r, "LEFT", 3, 0)
-
-    r.timer = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
+    Style(r.timer, ROW_FONT, "RIGHT")
+    r.timer:ClearAllPoints()
     r.timer:SetPoint("RIGHT", r, "RIGHT", -6, 0)
 
-    r.missCount = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "LEFT")
+    Style(r.missCount, ROW_FONT, "LEFT")
+    r.missCount:ClearAllPoints()
     r.missCount:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
     r.missCount:SetTextColor(1.0, 1.0, 1.0)
 
-    r.missAll = Style(r:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
+    Style(r.missAll, ROW_FONT, "RIGHT")
+    r.missAll:ClearAllPoints()
     r.missAll:SetPoint("RIGHT", r, "RIGHT", -6, 0)
     r.missAll:SetTextColor(unpack(COLOUR.MISS))
     r.missAll:SetText("MISS")
+end
+
+local function MakeRow(ui, parent, i)
+    local r = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
+    r._ui = ui
+    r:EnableMouse(true)
+    r:RegisterForClicks(lib.API.ClickEdges())
+
+    r.timer     = r:CreateFontString(nil, "OVERLAY")
+    r.missCount = r:CreateFontString(nil, "OVERLAY")
+    r.missAll   = r:CreateFontString(nil, "OVERLAY")
+    StyleRow(r)
 
     r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
     r:SetScript("PostClick", function(self, button) return self._ui:RowPostClick(self, button) end)
@@ -555,30 +590,48 @@ local function MakeRow(ui, parent, i)
     return r
 end
 
+-- As StyleRow, for a popover row. `i` is its place in the pool, which decides
+-- where it sits.
+local function StylePopRow(pr, i)
+    pr:SetSize(POP_W - 10, POP_ROW_H)
+    pr:ClearAllPoints()
+    pr:SetPoint("TOPLEFT", pr:GetParent(), "TOPLEFT",
+        5, -(POP_HDR_H + 5) - (i - 1) * (POP_ROW_H + 2))
+
+    Style(pr.rangeTxt, ROW_FONT, "CENTER")
+    pr.rangeTxt:ClearAllPoints()
+    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
+    pr.rangeTxt:SetWidth(14)
+
+    if type(pr.classEdge) ~= "table" then
+        local old = pr.classIcon
+        pr.classIcon, pr.classEdge =
+            IconTile(pr, POP_ROW_H - 8, "LEFT", pr.rangeTxt, "RIGHT", 4, 0)
+        ReplaceIcon(old, pr.classIcon)
+    end
+
+    Style(pr.nameTxt, NAME_FONT, "LEFT")
+    pr.nameTxt:ClearAllPoints()
+    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 5,  0)
+    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -46, 0)
+
+    Style(pr.timeTxt, ROW_FONT, "RIGHT")
+    pr.timeTxt:ClearAllPoints()
+    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -5, 0)
+    pr.timeTxt:SetWidth(42)
+end
+
 local function MakePopRow(ui, parent, i)
     local pr = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
     pr._ui = ui
-    pr:SetSize(POP_W - 10, POP_ROW_H)
-    pr:SetPoint("TOPLEFT", parent, "TOPLEFT",
-        5, -(POP_HDR_H + 5) - (i - 1) * (POP_ROW_H + 2))
     pr:EnableMouse(true)
     pr:RegisterForClicks(lib.API.ClickEdges())
     pr:SetFrameLevel(202)  -- above the popover's level 200
 
-
-    pr.rangeTxt = Style(pr:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
-    pr.rangeTxt:SetPoint("LEFT", pr, "LEFT", 4, 0)
-    pr.rangeTxt:SetWidth(14)
-
-    pr.classIcon, pr.classEdge = IconTile(pr, POP_ROW_H - 8, "LEFT", pr.rangeTxt, "RIGHT", 4, 0)
-
-    pr.nameTxt = Style(pr:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
-    pr.nameTxt:SetPoint("LEFT",  pr.classIcon, "RIGHT", 5,  0)
-    pr.nameTxt:SetPoint("RIGHT", pr,           "RIGHT", -46, 0)
-
-    pr.timeTxt = Style(pr:CreateFontString(nil, "OVERLAY"), ROW_FONT, "RIGHT")
-    pr.timeTxt:SetPoint("RIGHT", pr, "RIGHT", -5, 0)
-    pr.timeTxt:SetWidth(42)
+    pr.rangeTxt = pr:CreateFontString(nil, "OVERLAY")
+    pr.nameTxt  = pr:CreateFontString(nil, "OVERLAY")
+    pr.timeTxt  = pr:CreateFontString(nil, "OVERLAY")
+    StylePopRow(pr, i)
 
     pr:SetScript("PreClick",  function(self, button) return self._ui:PopRowPreClick(self, button) end)
     pr:SetScript("PostClick", function(self, button) return self._ui:PopRowPostClick(self, button) end)
@@ -605,6 +658,62 @@ local function MakeFooterButton(ui, parent)
     btn:SetScript("OnLeave", function(self) return self._ui:FooterLeave(self) end)
     btn:Hide()
     return btn
+end
+
+-- Built here rather than from UIPanelCloseButton: that one is a Blizzard
+-- gold-and-red disc, which on a glass panel reads as a sticker from another
+-- addon. This is the same rounded, sliced edge the rows use, with an x drawn
+-- in the panel's own text colour.
+--
+-- The hover handlers dispatch through the ui object like every other handler
+-- in this file. Handlers are installed once and the frames outlive an
+-- upgrade, so a closure that recolours the label itself would keep doing
+-- exactly what r19 decided, in a window a later copy is otherwise driving.
+local function MakeCloseButton(ui, main)
+    local xBtn = CreateFrame("Button", nil, main)
+    xBtn._ui = ui
+    xBtn:SetSize(HDR_H - 12, HDR_H - 12)
+    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", -6, -6)
+    xBtn:EnableMouse(true)
+
+    local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
+    xEdge:SetAllPoints(xBtn)
+    xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
+    xEdge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
+    local xModes = Enum and Enum.UITextureSliceMode
+    xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
+
+    local xTxt = Style(xBtn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
+    xTxt:SetPoint("CENTER", xBtn, "CENTER", 0, 0)
+    xTxt:SetText("\195\151")
+    xBtn.label = xTxt
+
+    xBtn:SetScript("OnEnter", function(b) return b._ui:CloseButtonHover(b, true) end)
+    xBtn:SetScript("OnLeave", function(b) return b._ui:CloseButtonHover(b, false) end)
+    xBtn:SetScript("OnClick", function(b) return b._ui:Close(true) end)
+    ui:CloseButtonHover(xBtn, false)
+    return xBtn
+end
+
+-- This version's header, on a window built a moment ago or by an older copy.
+-- Same rules as StyleRow: idempotent, and the tile only if there is not one.
+local function StyleHeader(main)
+    main.hdrBg:SetHeight(HDR_H)
+
+    if type(main.specEdge) ~= "table" then
+        local old = main.specIcon
+        main.specIcon, main.specEdge =
+            IconTile(main, HDR_H - 10, "LEFT", main.hdrBg, "LEFT", 5, 0)
+        ReplaceIcon(old, main.specIcon)
+    end
+
+    Style(main.title, TITLE_FONT, "LEFT")
+    main.title:ClearAllPoints()
+    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 5, 0)
+
+    Style(main.version, GRP_FONT, "LEFT")
+    main.version:ClearAllPoints()
+    main.version:SetPoint("LEFT", main.title, "RIGHT", 3, -1)
 end
 
 -- Build the frames, once. Refused in combat: secure buttons cannot be created
@@ -637,46 +746,13 @@ function Methods:Init()
     hdrLine:SetPoint("TOPRIGHT", hdrBg, "BOTTOMRIGHT", 0, 0)
     main.hdrLine = hdrLine
 
-    main.specIcon, main.specEdge = IconTile(main, HDR_H - 10, "LEFT", hdrBg, "LEFT", 5, 0)
-
-    main.title = Style(main:CreateFontString(nil, "OVERLAY"), TITLE_FONT, "LEFT")
-    main.title:SetPoint("LEFT", main.specIcon, "RIGHT", 5, 0)
+    main.title   = main:CreateFontString(nil, "OVERLAY")
+    main.version = main:CreateFontString(nil, "OVERLAY")
+    StyleHeader(main)
     main.title:SetText(self.host.title or self.host.owner)
-
-    main.version = Style(main:CreateFontString(nil, "OVERLAY"), GRP_FONT, "LEFT")
-    main.version:SetPoint("LEFT", main.title, "RIGHT", 3, -1)
     main.version:SetText(self.host.version and ("|cff555577" .. self.host.version .. "|r") or "")
 
-    -- Built here rather than from UIPanelCloseButton: that one is a Blizzard
-    -- gold-and-red disc, which on a glass panel reads as a sticker from
-    -- another addon. This is the same rounded, sliced edge the rows use, with
-    -- an X drawn in the panel's own text colour.
-    local xBtn = CreateFrame("Button", nil, main)
-    xBtn._ui = self
-    xBtn:SetSize(HDR_H - 12, HDR_H - 12)
-    xBtn:SetPoint("TOPRIGHT", main, "TOPRIGHT", -6, -6)
-    xBtn:EnableMouse(true)
-
-    local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
-    xEdge:SetAllPoints(xBtn)
-    xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    xEdge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
-    local xModes = Enum and Enum.UITextureSliceMode
-    xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
-
-    local xTxt = Style(xBtn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "CENTER")
-    xTxt:SetPoint("CENTER", xBtn, "CENTER", 0, 0)
-    xTxt:SetText("\195\151")
-    xBtn.label = xTxt
-
-    -- Brightens under the cursor, which is the only affordance a flat square
-    -- has: a Blizzard button announces itself by being gold.
-    xBtn:SetScript("OnEnter", function(b) b.label:SetTextColor(1, 1, 1) end)
-    xBtn:SetScript("OnLeave", function(b) b.label:SetTextColor(0.75, 0.75, 0.8) end)
-    xTxt:SetTextColor(0.75, 0.75, 0.8)
-
-    xBtn:SetScript("OnClick", function(b) return b._ui:Close(true) end)
-    main.closeBtn = xBtn
+    main.closeBtn = MakeCloseButton(self, main)
 
     -- Covers the header only, so the row buttons still get their clicks.
     local drag = CreateFrame("Frame", nil, main)
@@ -1524,6 +1600,18 @@ end
 -- same fight (the group emptied) leaves it shown while `visible` is already
 -- false. Said once per pending close, not once per click. The return value is
 -- there for a caller that wants to handle it itself.
+-- A flat square has no affordance of its own - a Blizzard button announces
+-- itself by being gold - so it brightens under the cursor. A method rather
+-- than a closure, because the frame outlives the copy that installed it.
+function Methods:CloseButtonHover(btn, over)
+    if not (btn and btn.label) then return end
+    if over then
+        btn.label:SetTextColor(1, 1, 1)
+    else
+        btn.label:SetTextColor(0.75, 0.75, 0.8)
+    end
+end
+
 function Methods:Close(manual)
     if InCombatLockdown() then
         self.closePending = true
@@ -1653,6 +1741,55 @@ end
 -- Rebuild and SHOW the window. In combat it only refreshes what is on screen
 -- (secure attributes cannot be written) and remembers a show request for
 -- when combat ends.
+-- The layout this copy draws. Bumped whenever the geometry changes, which is
+-- what tells an older copy's window apart from one this copy built.
+local LAYOUT = 2
+
+-- Bring a window an older copy built up to this one's layout.
+--
+-- Frames are built ONCE: Init returns early when self.main exists, so without
+-- this an r18 window keeps 15px rows, bare icons, the old font and Blizzard's
+-- close button while r19's code drives it - the same class of bug Panel and
+-- Fill already adopt around, and the one Codex found in r19 (#37). Refused in
+-- combat, because rows are secure buttons and resizing one is a protected
+-- call; the next rebuild out of combat comes back here.
+function Methods:AdoptLayout()
+    local main = self.main
+    if not main then return false end
+    if main._layout == LAYOUT then return true end
+    if InCombatLockdown() then return false end
+
+    StyleHeader(main)
+    for _, r  in ipairs(self.rows)    do StyleRow(r) end
+    for i, pr in ipairs(self.popRows) do StylePopRow(pr, i) end
+    for _, fs in ipairs(self.headers) do
+        Style(fs, GRP_FONT, "CENTER")
+        fs:SetWidth(ROW_W)
+    end
+
+    -- Blizzard's close button has no label of ours. It cannot be destroyed,
+    -- so it is hidden, unhooked from the mouse, and replaced.
+    local x = main.closeBtn
+    if type(x) == "table" and type(x.label) ~= "table" then
+        if x.Hide then x:Hide() end
+        if x.EnableMouse then x:EnableMouse(false) end
+        main.closeBtn = MakeCloseButton(self, main)
+    end
+
+    -- The divider was adopted where the OLD header put it, which is no longer
+    -- under the header. FindOlderDivider knows every height this library has
+    -- shipped, so it is found; moving it is this step's job.
+    local hdiv = self:PopDivider()
+    if hdiv and hdiv.ClearAllPoints then
+        hdiv:ClearAllPoints()
+        hdiv:SetPoint("TOPLEFT",  self.pop, "TOPLEFT",  DIVIDER_X, DIVIDER_Y)
+        hdiv:SetPoint("TOPRIGHT", self.pop, "TOPRIGHT", -DIVIDER_X, DIVIDER_Y)
+    end
+
+    main._layout = LAYOUT
+    return true
+end
+
 function Methods:Update()
     if InCombatLockdown() then
         if self.visible then
@@ -1663,6 +1800,10 @@ function Methods:Update()
         return
     end
     if not self:Init() then return end
+    -- Before anything is measured or placed: a window an older copy built
+    -- arrives here with the previous layout, and every position below is
+    -- computed from this one's metrics.
+    self:AdoptLayout()
     local engine = self.engine
     local main = self.main
 

@@ -108,6 +108,15 @@ Vanilla content, Retail codebase.
   `Glass.MEDIA` pointing at the `Media/` folder the packager copies into the host. Keep it
   verbatim. A local improvement here is a local divergence from the addon the material is defined
   by, and the next sync silently reverts it; fix it there and copy the file down.
+  - **Geometry is adopted too, not only looks.** Frames are built ONCE - `Init` returns early when
+    `self.main` exists - so a window an older copy built reaches newer code with the previous
+    sizes, fonts and icons while every position the newer code computes is measured against metrics
+    those frames do not have. `Methods:AdoptLayout` brings them up: it runs before anything is
+    placed, once per window (`main._layout`), and refuses in combat. Its parts are the `Style*`
+    helpers, which are separate from the `Make*` builders precisely so both paths share them and
+    stay idempotent. **A change to the metrics means bumping `LAYOUT` and covering it in
+    `tests/test_versions.lua`, which builds a window from the previous tag's fixture and upgrades
+    it in place.** Fresh construction passing proves nothing about this.
   - **Adoption is on demand, never at load.** A host upgrading in place hands the new code the OLD
     frames, already wearing an r16 backdrop or an r17 StatusBar fill. `Panel` and `Fill` clear
     what they find before they draw, and both refuse in combat, because the window's frames are

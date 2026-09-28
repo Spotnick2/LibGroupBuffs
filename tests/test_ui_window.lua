@@ -1046,6 +1046,19 @@ H.runScript(x, "OnEnter")
 local r2 = { x.label:GetTextColor() }
 H.check(r2[1] > r1[1], "and brightens when the cursor is on it")
 
+-- Through the ui object, not in the handler's own body. Handlers are
+-- installed once and the frames outlive an upgrade, so a closure that
+-- recolours the label itself keeps doing what THIS copy decided in a window a
+-- later copy is otherwise driving. Checking the colour alone cannot tell the
+-- two apart - a direct closure passes that just as well.
+local dispatched
+ui.CloseButtonHover = function(self, btn, over) dispatched = over end
+H.runScript(x, "OnEnter")
+H.eq(dispatched, true, "the hover handler dispatches through the ui object")
+H.runScript(x, "OnLeave")
+H.eq(dispatched, false, "and so does the one that undoes it")
+ui.CloseButtonHover = nil
+
 -- Every string the window draws is the addon's own font, not a Blizzard
 -- template. One string left on GameFontNormalSmall is one line in the wrong
 -- typeface, which on a panel this small is the whole difference between a
