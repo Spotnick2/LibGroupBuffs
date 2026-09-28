@@ -104,14 +104,24 @@ local glassFile = assert(io.open("Glass.lua", "r"),
     "Glass.lua must be readable from the repository root")
 local glassSrc = glassFile:read("*a")
 glassFile:close()
-do
-    for name in glassSrc:gmatch('MEDIA %.%. "([%w_]+)"') do
-        H.check(shipped[name], "Glass.lua draws " .. name .. ", so Media/" .. name .. ".tga must exist")
+-- Every runtime file, not just Glass.lua: UI.lua draws bar_edge and bar_mask
+-- directly for the icon tiles and the close button, and scanning only the
+-- material's own file would have let a typo in either through.
+local checked = 0
+for _, file in ipairs(scripts) do
+    local fh = assert(io.open(file, "r"), file .. " must be readable from the repository root")
+    local src = fh:read("*a")
+    fh:close()
+    for name in src:gmatch('MEDIA %.%. "([%w_]+)"') do
+        checked = checked + 1
+        H.check(shipped[name], file .. " draws " .. name .. ", so Media/" .. name .. ".tga must exist")
     end
-    for name in glassSrc:gmatch('= "([%w_]+)", [%w]*[Mm]argin') do
-        H.check(shipped[name], "Glass.SIZES names " .. name .. ", so Media/" .. name .. ".tga must exist")
+    for name in src:gmatch('= "([%w_]+)", [%w]*[Mm]argin') do
+        checked = checked + 1
+        H.check(shipped[name], file .. " names " .. name .. ", so Media/" .. name .. ".tga must exist")
     end
 end
+H.check(checked >= 14, "and the scan found the textures rather than nothing: " .. checked)
 
 -- The development files named explicitly as well, so the intent survives even
 -- if one of them is ever untracked.
