@@ -98,29 +98,52 @@ local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
 -- where that empty mask happens to be - a sliver of the icon in one corner,
 -- which is what r19 and the first fix both shipped. So: size it, place it,
 -- and only then build the mask.
+-- A 9-slice draws its four corners at their native size and stretches what is
+-- between them, so the margins have to LEAVE something between them. Give a
+-- 16px box 8px margins and left+right is the whole width: no centre, no edge
+-- strips, and this client renders the result as a fragment in one corner
+-- rather than as nothing. The row fills never hit it (123x26 against 16) and
+-- neither does the tile's own ring (20x20 against 16); only the mask, inset
+-- inside an already small tile, was degenerate - which is why icons broke
+-- while everything else drawn from the same file was right.
+local function SliceMargin(box)
+    return math.max(2, math.min(8, math.floor(box / 4)))
+end
+
+-- The tile gets a FRAME of its own, and the mask is anchored to that frame
+-- rather than to the icon texture beside it. That is not ceremony: a mask
+-- anchored to a SIBLING texture drew a sliver of the art in one corner at
+-- every size and every margin tried, while the row fills - whose mask is
+-- anchored to the frame that owns it - have been right from the first build.
+-- Anchoring a mask to the frame it belongs to is the one arrangement measured
+-- to work on this client, so the icons are built that shape too.
 local function IconTile(parent, size, point, relTo, relPoint, x, y, inset)
-    local tile = parent:CreateTexture(nil, "ARTWORK")
-    tile:SetSize(size, size)
-    tile:SetPoint(point or "LEFT", relTo or parent, relPoint or "LEFT", x or 0, y or 0)
+    local box = CreateFrame("Frame", nil, parent)
+    box:SetSize(size, size)
+    box:SetPoint(point or "LEFT", relTo or parent, relPoint or "LEFT", x or 0, y or 0)
+
+    local tile = box:CreateTexture(nil, "ARTWORK")
+    tile:SetAllPoints(box)
 
     -- The client's icons carry a border in the outer few percent of the image,
     -- which is what makes them look square. It is cropped by INSETTING THE
     -- MASK, not with SetTexCoord: on this client a mask is applied in the
     -- texture's untransformed space, so cropping a masked texture moves the
-    -- mask off the art and leaves a fraction of the icon in one corner. The
-    -- mask does both jobs, eating the border and rounding what is left.
+    -- mask off the art. The mask does both jobs, eating the border and
+    -- rounding what is left.
     inset = inset or math.max(1, math.floor(size * 0.08 + 0.5))
-    local mask = lib.Glass.Mask(parent, "bar_mask", 8, inset, tile)
+    local mask = lib.Glass.Mask(box, "bar_mask", SliceMargin(size - 2 * inset), inset)
     tile:AddMaskTexture(mask)
 
-    local edge = parent:CreateTexture(nil, "OVERLAY")
-    edge:SetAllPoints(tile)
+    local edge = box:CreateTexture(nil, "OVERLAY")
+    edge:SetAllPoints(box)
     edge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    edge:SetTextureSliceMargins(8, 8, 8, 8)
+    local em = SliceMargin(size)
+    edge:SetTextureSliceMargins(em, em, em, em)
     local modes = Enum and Enum.UITextureSliceMode
     edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
 
-    return tile, edge, mask
+    return tile, edge, mask, box
 end
 
 -- Text over glass needs its own shadow: the panel behind it is translucent,
@@ -167,6 +190,12 @@ end
 -- shadow around it - so with no offset the tooltip lands ON the window it is
 -- describing. This is that inset plus a gap.
 local TIP_GAP = 16
+
+-- The client's tooltip is sized for the default UI, which is bigger than this
+-- window: at full size it reads as a different addon's panel parked next to
+-- ours. GameTooltip is SHARED, so the scale is put back whenever we let go of
+-- it - leaving it at 0.8 would shrink every other addon's tooltips too.
+local TIP_SCALE = 0.8
 
 -- Colours an addon can override through appearance(); these are Priestly's.
 UI.DEFAULT_APPEARANCE = UI.DEFAULT_APPEARANCE or {}
@@ -468,18 +497,22 @@ local function HeaderGlass(main)
     -- hdrBg itself becomes the tint, rather than a second band drawn over it:
     -- an older copy upgrading in place already has this texture, and two of
     -- them would simply add up.
+    --
+    -- Deliberately NOT masked. The band is a region of `main`, so rounding it
+    -- would mean a mask anchored to a sibling texture - the arrangement that
+    -- draws a sliver of the art in one corner, and the reason the icons were
+    -- broken for three builds. A flat colour hides that damage where an icon
+    -- cannot, which is exactly why it would sit here unnoticed. The band is
+    -- inset 4px inside a panel that is already rounded, so its own corners are
+    -- barely on screen; the gloss is what makes it read as glass.
     local Glass = lib.Glass
-    local mask = Glass.Mask(main, "bar_mask", FILL_MASK_MARGIN, 0, tint)
-    tint:AddMaskTexture(mask)
-
     local gloss = main:CreateTexture(nil, "ARTWORK", nil, 2)
     gloss:SetAllPoints(tint)
     gloss:SetTexture(Glass.MEDIA .. "gloss")
     gloss:SetBlendMode("ADD")
     gloss:SetAlpha(Glass.STYLE.gloss)
-    gloss:AddMaskTexture(mask)
 
-    local hdr = { tint = tint, gloss = gloss, mask = mask, [HDR_TAG] = true }
+    local hdr = { tint = tint, gloss = gloss, [HDR_TAG] = true }
     main.hdr = hdr
     return hdr
 end
@@ -621,7 +654,8 @@ function Methods:Init()
     local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
     xEdge:SetAllPoints(xBtn)
     xEdge:SetTexture(lib.Glass.MEDIA .. "bar_edge")
-    xEdge:SetTextureSliceMargins(8, 8, 8, 8)
+    local xm = SliceMargin(HDR_H - 12)
+    xEdge:SetTextureSliceMargins(xm, xm, xm, xm)
     local xModes = Enum and Enum.UITextureSliceMode
     xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
 
@@ -920,6 +954,23 @@ local function RimColour(f, colour)
     g.rim:SetVertexColor(colour[1], colour[2], colour[3])
 end
 
+-- Ours while we own it, the way we found it afterwards.
+local function OwnTooltip(owner, anchor, xOff)
+    if GameTooltip._lgbScale == nil then
+        GameTooltip._lgbScale = GameTooltip:GetScale() or 1
+    end
+    GameTooltip:SetOwner(owner, anchor, xOff or 0, 0)
+    GameTooltip:SetScale(TIP_SCALE)
+end
+
+local function ReleaseTooltip()
+    GameTooltip:Hide()
+    if GameTooltip._lgbScale then
+        GameTooltip:SetScale(GameTooltip._lgbScale)
+        GameTooltip._lgbScale = nil
+    end
+end
+
 function Methods:ApplyAppearance()
     if not self.main then return end
     local look = self:Appearance()
@@ -1000,7 +1051,7 @@ end
 -- API.ItemInfo).
 function Methods:FooterEnter(btn)
     if not btn._itemID then return end
-    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT", TIP_GAP, 0)
+    OwnTooltip(btn, "ANCHOR_RIGHT", TIP_GAP)
     local name, r, g, b = lib.API.ItemInfo(btn._itemID)
     -- A cache miss is not an error: ItemInfo has asked the client for the
     -- item, so the next hover will have it.
@@ -1015,7 +1066,7 @@ function Methods:FooterEnter(btn)
 end
 
 function Methods:FooterLeave()
-    GameTooltip:Hide()
+    ReleaseTooltip()
 end
 
 -- ─── Ticker ─────────────────────────────────────────────────────────────────
@@ -1222,7 +1273,7 @@ end
 
 function Methods:PopRowEnter(pr)
     if pr._unit and not UnitIsConnected(pr._unit) then
-        GameTooltip:SetOwner(pr, "ANCHOR_RIGHT", TIP_GAP, 0)
+        OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 0.6, 0.6, 0.6)
         GameTooltip:AddLine("This player is offline", 1, 0.5, 0.5)
         GameTooltip:Show()
@@ -1230,7 +1281,7 @@ function Methods:PopRowEnter(pr)
 end
 
 function Methods:PopRowLeave()
-    GameTooltip:Hide()
+    ReleaseTooltip()
 end
 
 -- ─── Click hints ────────────────────────────────────────────────────────────
@@ -1250,7 +1301,7 @@ function Methods:GroupLabel(gNum)
 end
 
 function Methods:HideClickHint()
-    GameTooltip:Hide()
+    ReleaseTooltip()
 end
 
 function Methods:ShowClickHint(row)
@@ -1267,7 +1318,7 @@ function Methods:ShowClickHint(row)
 
     -- The popover opens on this same hover, so sit on the other side.
     local side = (self:PopoverSide(row) == "right") and "ANCHOR_LEFT" or "ANCHOR_RIGHT"
-    GameTooltip:SetOwner(row, side, (side == "ANCHOR_RIGHT") and TIP_GAP or -TIP_GAP, 0)
+    OwnTooltip(row, side, (side == "ANCHOR_RIGHT") and TIP_GAP or -TIP_GAP)
     GameTooltip:SetText(def.hasGroup and def.grp or def.sngl, 0.62, 0.85, 1.0)
 
     -- Resolve each click the way the click itself resolves it. Out of combat

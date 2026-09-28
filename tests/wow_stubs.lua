@@ -221,6 +221,13 @@ local PROTECTED_METHODS = {
 
 local function makeFrame(name, parent, template)
     local f = { _attr = {}, _scripts = {}, _name = name, _shown = false, _parent = parent }
+    -- Children as well as regions: a test that walks a window to check what it
+    -- drew stops at the first child frame otherwise, and reports a clean sweep
+    -- of the half it could see.
+    if type(parent) == "table" then
+        parent._children = parent._children or {}
+        parent._children[#parent._children + 1] = f
+    end
     if template and tostring(template):find("Secure") then
         f._protected = true
         local p = parent
@@ -384,6 +391,14 @@ local function makeFrame(name, parent, template)
         return self
     end
     f.ClearAllPoints = function(self) self._points = nil return self end
+    -- Recorded as the two corners it really is, not swallowed by the catch-all:
+    -- a region anchored this way has a size, and a test that cannot derive it
+    -- silently skips the region instead of checking it.
+    f.SetAllPoints = function(self, rel)
+        self._points = { { "TOPLEFT", rel, "TOPLEFT", 0, 0 },
+                         { "BOTTOMRIGHT", rel, "BOTTOMRIGHT", 0, 0 } }
+        return self
+    end
     -- The client declares `RegisterEvent(eventName:cstring) -> registered:bool`
     -- and throws on a name it does not know. WoW.badEvents models the throw,
     -- WoW.refusedEvents a refusal by return value.

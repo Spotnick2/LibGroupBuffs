@@ -981,6 +981,33 @@ H.check(type(legacyRow.fill) == "table", "an older copy's row gets a fill when f
 H.eq(legacyRow.bg._colorTexture[4], 0,
     "and its flat background is cleared, so it cannot show through the corners")
 
+-- The box a region really occupies, or nil when it cannot be told. A region
+-- given an explicit size answers for itself; one stretched between two
+-- anchors on another region is that region's box less the two insets - which
+-- is exactly how every mask here is built, and the only reason this check can
+-- see them at all. GetWidth() would answer with the stub's stand-in and the
+-- assertion below would be comparing two constants.
+local function Box(r)
+    if r._width and r._height then return r._width, r._height end
+    local pts = r._points
+    if not pts or #pts < 2 then return nil end
+    -- Which corner is which, rather than which call came first: the sign of an
+    -- offset means the opposite at the two ends. +x on TOPLEFT pulls the edge
+    -- in; +x on BOTTOMRIGHT pushes it out. Taking absolute values made the
+    -- panel's shadow - anchored OUTSIDE its host, which is the whole point of
+    -- a shadow - read as 44px narrower than the window instead of 44 wider,
+    -- and the assertion below failed on a region that was never wrong.
+    local tl, br
+    for _, p in ipairs(pts) do
+        if p[1] == "TOPLEFT" then tl = p elseif p[1] == "BOTTOMRIGHT" then br = p end
+    end
+    if not (tl and br and tl[2] and tl[2] == br[2]) then return nil end
+    local pw, ph = Box(tl[2])
+    if not pw then return nil end
+    return pw - (tl[4] or 0) + (br[4] or 0),
+           ph + (tl[5] or 0) - (br[5] or 0)
+end
+
 ------------------------------------------------------------
 -- The glass layout
 --
@@ -996,8 +1023,9 @@ ui:Update()
 local row = ui.rows[1]
 H.check(row:GetHeight() >= 16,
     "a row is tall enough for the mask's corners: " .. tostring(row:GetHeight()))
-H.check(row.icon:GetWidth() < row:GetHeight(),
-    "its icon fits inside it with room to spare")
+local iw = select(1, Box(row.icon))
+H.check(iw and iw < row:GetHeight(),
+    "its icon fits inside it with room to spare: " .. tostring(iw))
 H.check(row.iconEdge ~= nil and row.iconEdge._slice ~= nil,
     "and sits in a tile with the same sliced edge as the fill")
 H.check(row.icon._masks and #row.icon._masks == 1,
@@ -1084,6 +1112,8 @@ ui:Update()
 ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
 
 local walked, both, early = 0, {}, {}
+local sliced, crushed = 0, {}
+
 local function walk(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
     for _, r in ipairs(frame._regions or {}) do
@@ -1095,6 +1125,18 @@ local function walk(frame, name, depth)
         -- rectangle, and never gets one. See the stub's SetPoint.
         if r._isMask and r._anchoredBeforePlaced then
             early[#early + 1] = name
+        end
+        -- A 9-slice draws its corners at native size and stretches what is
+        -- between them. Margins that meet or cross leave no centre and no
+        -- edge strips, and this client draws a fragment in one corner rather
+        -- than nothing - which is how it reached the game three times.
+        local sl, w, h = r._slice, Box(r)
+        if sl and w and h then
+            sliced = sliced + 1
+            if (sl[1] + sl[3]) >= w or (sl[2] + sl[4]) >= h then
+                crushed[#crushed + 1] = name .. " (" .. w .. "x" .. h
+                    .. " with margins " .. sl[1] .. "/" .. sl[2] .. ")"
+            end
         end
         walk(r, name, depth + 1)
     end
@@ -1109,6 +1151,36 @@ H.eq(#both, 0,
 H.eq(#early, 0,
     "and no mask was anchored to a texture that had no position yet, which "
     .. "leaves it with no rectangle at all: " .. (early[1] or "none"))
+H.check(sliced >= 8, "the walk found the sliced textures: " .. sliced)
+
+-- No mask is anchored to a texture. A mask anchored to a SIBLING texture drew
+-- a sliver of the art in one corner at every size and margin tried, while the
+-- row fills - masked against the frame that owns them - were right from the
+-- first build. Anchoring a mask to its own frame is the one arrangement
+-- measured to work here, so it is a rule rather than a fix to the icons: the
+-- next thing to want a rounded corner will not be an icon either.
+local sibling = {}
+local function checkMasks(frame, name, depth)
+    if depth > 4 or type(frame) ~= "table" then return end
+    for _, r in ipairs(frame._regions or {}) do
+        if r._isMask then
+            for _, pt in ipairs(r._points or {}) do
+                if type(pt[2]) == "table" and pt[2]._objectType == "Texture" then
+                    sibling[#sibling + 1] = name
+                end
+            end
+        end
+        checkMasks(r, name, depth + 1)
+    end
+    for _, c in ipairs(frame._children or {}) do checkMasks(c, name, depth + 1) end
+end
+checkMasks(ui.main, "the window", 0)
+checkMasks(ui.pop, "the popover", 0)
+H.eq(#sibling, 0,
+    "every mask is anchored to a frame, not to a texture beside it: "
+    .. (sibling[1] or "none"))
+H.eq(#crushed, 0,
+    "and every one has room between its margins for a middle: " .. (crushed[1] or "none"))
 
 -- Tooltips clear the window instead of landing on it. ANCHOR_RIGHT measures
 -- from the ROW, which is inset from the panel edge and inset again from the
@@ -1130,11 +1202,23 @@ local foff = GameTooltip._anchorOffset
 H.check(foff and foff[1] >= 10,
     "the reagent tooltip clears it too: " .. tostring(foff and foff[1]))
 
+-- And it is drawn at the window's size, not the default UI's. GameTooltip is
+-- SHARED, so what matters as much as the scale is that it is given back:
+-- leaving it at 0.8 shrinks every other addon's tooltips for the rest of the
+-- session, and nothing in this addon would ever show it.
+H.near(GameTooltip:GetScale(), 0.8, 0.001,
+    "the tooltip is drawn at the window's size while we own it")
+H.runScript(ui.footerBtns[1], "OnLeave")
+H.near(GameTooltip:GetScale(), 1.0, 0.001,
+    "and handed back at its old size, because every addon shares it")
+
 -- The header is glass too, not an opaque band with square corners sitting on
 -- a translucent panel - which is the one piece r19 left flat.
 local hdr = ui.main.hdr
 H.check(hdr ~= nil and hdr.gloss ~= nil, "the header has the material's gloss")
-H.check(hdr.mask and hdr.mask._isMask, "and is rounded by a mask like the rows")
+H.check(hdr.mask == nil,
+    "and is NOT masked: the band is a region of the window, so a mask would "
+    .. "have to anchor to a sibling texture, which this client draws wrong")
 local band = ui.main.hdrBg._colorTexture
 H.check(band and band[4] < 0.5,
     "and lets the panel through rather than painting over it: " .. tostring(band and band[4]))
