@@ -185,4 +185,15 @@ WoW.inCombat = false
 window:Hide()
 H.eq(#WoW.blockedCalls, 1, "out of combat the same call goes through")
 
+-- Whether a frame takes the mouse: a tooltip that can never open looks
+-- exactly like one that can, and the catch-all answered the question with
+-- the frame itself until this was written down. Both states, because one
+-- implementation of this returned true unconditionally.
+local mouseFrame = WoW.makeFrame("MouseProbe")
+H.check(not mouseFrame:IsMouseEnabled(), "a frame does not take the mouse until told to")
+mouseFrame:EnableMouse(true)
+H.check(mouseFrame:IsMouseEnabled(), "and does once enabled")
+mouseFrame:EnableMouse(false)
+H.check(not mouseFrame:IsMouseEnabled(), "and stops again when disabled")
+
 H.done("test_stub")

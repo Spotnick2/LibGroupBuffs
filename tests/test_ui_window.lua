@@ -944,6 +944,23 @@ local pr2, pg2, pb2 = ui.pop.glass.rim:GetVertexColor()
 H.near(pr2, 0.1, 0.001, "and the popover takes its own")
 H.near(pg2, 0.9, 0.001, "which differs from the window's")
 
+-- An r17 row has a fill, but the WRONG KIND: a child StatusBar, whose gloss
+-- draws over the class icon. Forgetting the reference is not enough - the
+-- frame stays parented to the row and keeps drawing, and this client cannot
+-- destroy one. It has to be hidden.
+setup()
+ui:Update()
+local r17Row = ui.rows[3]
+local oldBar = WoW.makeFrame("r17Fill", r17Row)
+oldBar:Show()
+oldBar.SetStatusBarColor = function() end
+r17Row.fill = oldBar
+ui:ApplyRowVisuals(r17Row, { nUnknown = 0, nTotal = 2, nMiss = 0, allHave = true,
+                             minR = 300, minDur = 3600 })
+H.check(r17Row.fill ~= oldBar, "an r17 row's StatusBar is replaced")
+H.check(r17Row.fill.SetColour ~= nil, "by a fill drawn on the row itself")
+H.check(not oldBar:IsShown(), "and the old bar is hidden, not just forgotten")
+
 -- A row built by an OLDER copy has no fill: LibStub hands these methods the
 -- frames r16 created, and asking one for a bar it never had is a nil index in
 -- the middle of a refresh. It is built on demand instead.
