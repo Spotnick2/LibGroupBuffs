@@ -108,6 +108,7 @@ local GLASS_FILES = { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "
 local R17, R18 = Fixtures(17, GLASS_FILES), Fixtures(18, GLASS_FILES)
 local R19, R20 = Fixtures(19, GLASS_FILES), Fixtures(20, GLASS_FILES)
 local R21, R22 = Fixtures(21, GLASS_FILES), Fixtures(22, GLASS_FILES)
+local R23 = Fixtures(23, GLASS_FILES)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -176,7 +177,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -776,7 +777,10 @@ H.eq(scripts[2], "Compat.lua", "Compat.lua claims the version before any other f
 local position = {}
 for i, file in ipairs(scripts) do position[file] = i end
 H.check((position["Engine.lua"] or 0) > (position["Compat.lua"] or 99), "Engine.lua loads after the API it calls")
-H.eq(scripts[#scripts], "UI.lua", "and UI.lua last, after the engine it draws")
+H.check((position["UI.lua"] or 0) > (position["Engine.lua"] or 99),
+    "UI.lua after the engine it draws")
+H.check((position["Visibility.lua"] or 0) > (position["UI.lua"] or 99),
+    "and Visibility.lua last, after the window whose opening it decides")
 for _, file in ipairs(scripts) do
     local f = io.open(file, "rb")
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")

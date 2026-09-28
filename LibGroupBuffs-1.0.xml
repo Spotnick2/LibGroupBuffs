@@ -24,4 +24,5 @@
     <Script file="Settings.lua"/>
     <Script file="Engine.lua"/>
     <Script file="UI.lua"/>
+    <Script file="Visibility.lua"/>
 </Ui>
