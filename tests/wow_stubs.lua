@@ -263,6 +263,12 @@ local function makeFrame(name, parent, template)
     -- Recorded rather than left to the catch-all: PROTECTED_METHODS wraps what
     -- exists, and a method the catch-all swallows can be called in combat
     -- without the refusal being recorded.
+    -- Whether a frame takes the mouse decides whether a tooltip or a click
+    -- can ever reach it, and the catch-all answered every question about it
+    -- with the frame itself. Wildly's copy of this stub modelled it; the
+    -- shared one did not, which is the drift finally visible from one side.
+    f.EnableMouse = function(self, on) self._mouseEnabled = on and true or false return self end
+    f.IsMouseEnabled = function(self) return self._mouseEnabled == true end
     f.SetAlpha = function(self, a) self._alpha = a return self end
     -- Recorded, including the nil that CLEARS it: a backdrop left under the
     -- glass shows through as a dark square-cornered rectangle, and a no-op
@@ -294,7 +300,6 @@ local function makeFrame(name, parent, template)
     f.SetParent = function(self, p) self._parent = p return self end
     f.GetParent = function(self) return self._parent end
     f.IsVisible = function(self) return self._shown end
-    f.IsMouseEnabled = function(self) return true end
     f.RegisterForClicks = function(self, ...) self._clicks = { ... } return self end
     -- Recorded, so a test can assert what a font string or texture shows
     -- rather than only that the call did not throw.
@@ -371,7 +376,15 @@ local function makeFrame(name, parent, template)
         parent._regions[#parent._regions + 1] = r
         return r
     end
-    f.CreateTexture    = function(self) return region(self, "Texture") end
+    -- The draw layer is recorded because it decides what covers what, which
+    -- is not a detail: a fill created in the wrong place drew its gloss over
+    -- the class icons and washed them green, in game, with a green suite.
+    f.CreateTexture = function(self, name, layer, _, subLayer)
+        local t = region(self, "Texture")
+        t._drawLayer, t._subLayer = layer, subLayer
+        return t
+    end
+    f.GetDrawLayer = function(self) return self._drawLayer, self._subLayer end
     f.CreateFontString = function(self) return region(self, "FontString") end
     -- Below `region`, which these need: a local declared further down is a
     -- GLOBAL inside a closure written above it, and would have thrown on the
@@ -721,7 +734,12 @@ function GetRaidRosterInfo(i)
         e.level or (u and u.level) or WoW.playerDefaults.level,
         class, class, e.zone or "", e.online ~= false,
         e.isDead or (u and u.dead) or false,
-        e.role or (u and u.role) or "NONE", e.isML or false, e.combatRole or "NONE"
+        -- The roster's role is NOT UnitGroupRolesAssigned's. This one is
+        -- Retail's MAINTANK/MAINASSIST slot, empty for everyone who is
+        -- neither, so it comes from the roster entry alone and defaults to
+        -- nil - inventing "NONE" here would be inventing data about a tuple
+        -- that has no measured signature on this client.
+        e.role, e.isML or false, e.combatRole
 end
 function GetInstanceInfo()
     -- Outdoors the live client returns the continent name with instanceType

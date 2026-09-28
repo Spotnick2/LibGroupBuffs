@@ -841,9 +841,24 @@ H.check(glass.shadow._texture:find(media, 1, true) == 1,
 -- A row's colour is a glass bar's colour now.
 local row = ui.rows[1]
 H.check(type(row.fill) == "table", "a row has a glass fill")
-H.check(row.fill:GetStatusBarTexture() ~= nil, "with a fill texture")
-local r, g, b, a = row.fill:GetStatusBarColor()
+H.check(row.fill.mask and row.fill.mask._isMask, "rounded by a mask")
+-- Each layer clipped to it, or the colour keeps its square corners while the
+-- gloss above it is rounded - which reads as a sticker rather than as glass.
+for _, layer in ipairs({ "bg", "gloss", "inner" }) do
+    local masks = row.fill[layer]._masks
+    H.check(masks and #masks == 1, "the " .. layer .. " is clipped to the rounded shape")
+end
+H.check(row.fill.gloss and row.fill.gloss._blend == "ADD", "with the gloss added over it")
+H.check(row.fill.edge and row.fill.edge._slice ~= nil, "and a sliced edge")
+local a = row.fill:Colour()[4]
 H.check(a and a > 0, "and a colour with some opacity: " .. tostring(a))
+
+-- On the ROW, not in a child frame: a child draws above its parent's regions
+-- whatever the draw layers say, and a fill in one put its gloss over the
+-- class icon and washed it green.
+H.eq(row.fill.bg._parent, row, "the fill belongs to the row, not to a child frame")
+H.eq(row.fill.bg._drawLayer, "BACKGROUND", "and is drawn behind everything the row draws")
+H.eq(row.icon._drawLayer, "ARTWORK", "while the class icon is in front of it")
 
 -- Reused, never rebuilt. The client has no way to destroy a frame, so a bar
 -- made on every refresh would leak one per row per tick, for the session.
@@ -861,8 +876,8 @@ for _, st in ipairs({
     { nUnknown = 0, nTotal = 3, nMiss = 1, allHave = false, minR = 300, minDur = 3600 },
 }) do
     ui:ApplyRowVisuals(row, st)
-    local cr, cg, cb = row.fill:GetStatusBarColor()
-    local key = string.format("%.2f/%.2f/%.2f", cr, cg, cb)
+    local c = row.fill:Colour()
+    local key = string.format("%.2f/%.2f/%.2f", c[1], c[2], c[3])
     H.check(not seen[key], "state colour is distinct: " .. key)
     seen[key] = true
 end
@@ -928,6 +943,23 @@ H.near(rb, 0.1, 0.001, "not just the first")
 local pr2, pg2, pb2 = ui.pop.glass.rim:GetVertexColor()
 H.near(pr2, 0.1, 0.001, "and the popover takes its own")
 H.near(pg2, 0.9, 0.001, "which differs from the window's")
+
+-- An r17 row has a fill, but the WRONG KIND: a child StatusBar, whose gloss
+-- draws over the class icon. Forgetting the reference is not enough - the
+-- frame stays parented to the row and keeps drawing, and this client cannot
+-- destroy one. It has to be hidden.
+setup()
+ui:Update()
+local r17Row = ui.rows[3]
+local oldBar = WoW.makeFrame("r17Fill", r17Row)
+oldBar:Show()
+oldBar.SetStatusBarColor = function() end
+r17Row.fill = oldBar
+ui:ApplyRowVisuals(r17Row, { nUnknown = 0, nTotal = 2, nMiss = 0, allHave = true,
+                             minR = 300, minDur = 3600 })
+H.check(r17Row.fill ~= oldBar, "an r17 row's StatusBar is replaced")
+H.check(r17Row.fill.SetColour ~= nil, "by a fill drawn on the row itself")
+H.check(not oldBar:IsShown(), "and the old bar is hidden, not just forgotten")
 
 -- A row built by an OLDER copy has no fill: LibStub hands these methods the
 -- frames r16 created, and asking one for a bar it never had is a nil index in

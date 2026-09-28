@@ -148,9 +148,9 @@ H.eq(file, "MAGE", "and class file name")
 H.eq(zone, "", "zone is empty unless the test sets one")
 H.eq(online, true, "online unless said otherwise")
 H.eq(dead, true, "dead follows the unit")
-H.eq(role, "NONE", "role claims nothing")
+H.eq(role, nil, "role is empty, not a value this stub made up")
 H.eq(isML, false, "and nobody is master looter by default")
-H.eq(combatRole, "NONE", "nor has a combat role")
+H.eq(combatRole, nil, "nor is a combat role invented")
 
 local n2, r2, s2, l2, c2, f2, z2, o2, d2, ro2, ml2, cr2 = GetRaidRosterInfo(2)
 H.eq(n2 .. "|" .. r2 .. "|" .. s2, "Tanky Person|2|1", "an entry with no unit reads its own fields")
@@ -158,7 +158,8 @@ H.eq(l2 .. "|" .. c2 .. "|" .. f2, "58|WARRIOR|WARRIOR", "level and class")
 H.eq(z2, "Blackrock Depths", "zone")
 H.eq(o2, false, "offline")
 H.eq(d2, false, "not dead")
-H.eq(ro2 .. "|" .. tostring(ml2) .. "|" .. cr2, "NONE|true|TANK", "role, master looter, combat role")
+H.eq(tostring(ro2) .. "|" .. tostring(ml2) .. "|" .. tostring(cr2), "nil|true|TANK",
+    "role, master looter, combat role")
 
 H.eq(GetRaidRosterInfo(3), nil, "past the end of the roster there is nobody")
 
@@ -183,5 +184,16 @@ H.eq(WoW.blockedCalls[1].method, "Hide", "and recorded as the call the client bl
 WoW.inCombat = false
 window:Hide()
 H.eq(#WoW.blockedCalls, 1, "out of combat the same call goes through")
+
+-- Whether a frame takes the mouse: a tooltip that can never open looks
+-- exactly like one that can, and the catch-all answered the question with
+-- the frame itself until this was written down. Both states, because one
+-- implementation of this returned true unconditionally.
+local mouseFrame = WoW.makeFrame("MouseProbe")
+H.check(not mouseFrame:IsMouseEnabled(), "a frame does not take the mouse until told to")
+mouseFrame:EnableMouse(true)
+H.check(mouseFrame:IsMouseEnabled(), "and does once enabled")
+mouseFrame:EnableMouse(false)
+H.check(not mouseFrame:IsMouseEnabled(), "and stops again when disabled")
 
 H.done("test_stub")
