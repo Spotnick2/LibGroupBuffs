@@ -309,6 +309,11 @@ local function makeFrame(name, parent, template)
     f.GetFrameStrata = function(self) return self._strata or "MEDIUM" end
     f.GetAlpha = function(self) return self._alpha or 1 end
     f.SetSize = function(self, w, h) self._width, self._height = w, h return self end
+    -- Separately, because the catch-all was swallowing these: a height set
+    -- with SetHeight read back as the stand-in, so any assertion comparing
+    -- two such heights compared one constant with itself.
+    f.SetWidth  = function(self, w) self._width  = w return self end
+    f.SetHeight = function(self, h) self._height = h return self end
     f.SetScale = function(self, s) self._scale = s return self end
     f.GetScale = function(self) return self._scale or 1 end
     f.SetParent = function(self, p) self._parent = p return self end

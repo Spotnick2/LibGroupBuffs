@@ -643,16 +643,27 @@ local function MakePopRow(ui, parent, i)
     return pr
 end
 
+local function StyleFooterButton(btn)
+    btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
+
+    if type(btn.iconEdge) ~= "table" then
+        local old = btn.icon
+        btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4, "LEFT", btn, "LEFT", 0, 0)
+        ReplaceIcon(old, btn.icon)
+    end
+
+    Style(btn.countTxt, ROW_FONT, "LEFT")
+    btn.countTxt:ClearAllPoints()
+    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 4, 0)
+end
+
 local function MakeFooterButton(ui, parent)
     local btn = CreateFrame("Button", nil, parent)
     btn._ui = ui
-    btn:SetSize(FTR_H - 2 + 24, FTR_H)  -- icon + room for the count
     btn:EnableMouse(true)
 
-    btn.icon, btn.iconEdge = IconTile(btn, FTR_H - 4, "LEFT", btn, "LEFT", 0, 0)
-
-    btn.countTxt = Style(btn:CreateFontString(nil, "OVERLAY"), ROW_FONT, "LEFT")
-    btn.countTxt:SetPoint("LEFT", btn.icon, "RIGHT", 4, 0)
+    btn.countTxt = btn:CreateFontString(nil, "OVERLAY")
+    StyleFooterButton(btn)
 
     btn:SetScript("OnEnter", function(self) return self._ui:FooterEnter(self) end)
     btn:SetScript("OnLeave", function(self) return self._ui:FooterLeave(self) end)
@@ -695,10 +706,30 @@ local function MakeCloseButton(ui, main)
     return xBtn
 end
 
+-- The popover's own header. Same rules as StyleHeader.
+local function StylePopHeader(pop)
+    if type(pop.hdrEdge) ~= "table" then
+        local old = pop.hdrIcon
+        pop.hdrIcon, pop.hdrEdge =
+            IconTile(pop, POP_HDR_H - 10, "TOPLEFT", pop, "TOPLEFT", 7, -6)
+        ReplaceIcon(old, pop.hdrIcon)
+    end
+
+    Style(pop.hdrTxt, NAME_FONT, "LEFT")
+    pop.hdrTxt:ClearAllPoints()
+    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 6, 0)
+    pop.hdrTxt:SetPoint("RIGHT", pop,         "RIGHT", -6, 0)
+    pop.hdrTxt:SetPoint("TOP",   pop,         "TOP",   0, -8)
+end
+
 -- This version's header, on a window built a moment ago or by an older copy.
 -- Same rules as StyleRow: idempotent, and the tile only if there is not one.
 local function StyleHeader(main)
     main.hdrBg:SetHeight(HDR_H)
+    -- The drag strip covers the header, so it is the header's height or a
+    -- band of it stops answering the mouse. Set once at build before r19,
+    -- which left an adopted window draggable only by its top 24px.
+    if type(main.dragHandle) == "table" then main.dragHandle:SetHeight(HDR_H) end
 
     if type(main.specEdge) ~= "table" then
         local old = main.specIcon
@@ -791,13 +822,8 @@ function Methods:Init()
     -- No EnableMouse, so the secure child buttons receive the clicks.
     pop:Hide()
 
-    pop.hdrIcon, pop.hdrEdge = IconTile(pop, POP_HDR_H - 10, "TOPLEFT", pop, "TOPLEFT", 7, -6)
-
-    pop.hdrTxt = Style(pop:CreateFontString(nil, "OVERLAY"), NAME_FONT, "LEFT")
-    pop.hdrTxt:SetPoint("LEFT",  pop.hdrIcon, "RIGHT", 6, 0)
-    pop.hdrTxt:SetPoint("RIGHT", pop,         "RIGHT", -6, 0)
-    pop.hdrTxt:SetPoint("TOP",   pop,         "TOP",   0, -8)
-    pop.hdrTxt:SetJustifyH("LEFT")
+    pop.hdrTxt = pop:CreateFontString(nil, "OVERLAY")
+    StylePopHeader(pop)
     pop.hdrTxt:SetTextColor(1.0, 0.82, 0.22)
 
     self:PopDivider()
@@ -1760,8 +1786,13 @@ function Methods:AdoptLayout()
     if InCombatLockdown() then return false end
 
     StyleHeader(main)
-    for _, r  in ipairs(self.rows)    do StyleRow(r) end
-    for i, pr in ipairs(self.popRows) do StylePopRow(pr, i) end
+    if self.pop then StylePopHeader(self.pop) end
+    for _, r   in ipairs(self.rows)       do StyleRow(r) end
+    for i, pr  in ipairs(self.popRows)    do StylePopRow(pr, i) end
+    -- The footer's buttons are built lazily, one per item the host offers, so
+    -- there may be none yet - and LayoutFooter adds more later. New ones come
+    -- out of MakeFooterButton already styled; these are the ones r18 made.
+    for _, btn in ipairs(self.footerBtns) do StyleFooterButton(btn) end
     for _, fs in ipairs(self.headers) do
         Style(fs, GRP_FONT, "CENTER")
         fs:SetWidth(ROW_W)

@@ -577,9 +577,23 @@ H.TeachSpells({ "FORT_SINGLE" })
 H.Party3()
 local oldHost = H.PriestUI()
 oldHost.config.visible.shadow = false
+-- With a reagent, so the footer's buttons exist BEFORE the upgrade: they are
+-- built lazily, one per item, so a window with no footer would leave that
+-- part of the pass untested while looking covered.
+oldHost.footer = { { itemID = 17029, usedBy = "the group Prayers" } }
 oldHost.engine:RefreshSpells()
 oldHost.ui:Update()
 H.check(oldHost.ui.main:IsShown(), "r18 built and opened the window")
+
+local oldBtn = oldHost.ui.footerBtns[1]
+H.check(type(oldBtn) == "table", "with a reagent button r18 built")
+local oldBtnH = oldBtn:GetHeight()
+H.check(oldBtnH < 20, "at r18's footer height: " .. tostring(oldBtnH))
+H.check(type(oldBtn.iconEdge) ~= "table", "whose icon is a bare texture")
+
+local oldPopIcon = oldHost.ui.pop.hdrIcon
+H.check(type(oldHost.ui.pop.hdrEdge) ~= "table",
+    "and a popover header icon that is one too")
 
 local oldPop = oldHost.ui.popRows[1]
 local oldPopH = oldPop:GetHeight()
@@ -622,6 +636,22 @@ H.check(oldHost.ui.headers[1]:GetFont() == "Fonts" .. string.char(92) .. "ARIALN
     "and the group separators are restyled as well")
 H.eq(oldHost.ui.headers[1]:GetJustifyH(), "CENTER",
     "and centred, which is what r19 changed them to")
+
+-- The popover's own header and the footer's buttons: built by the same Init,
+-- skipped by the same early return, and missed by the first version of this
+-- pass. An adopted window reached _layout == 2 with both still on r18.
+H.eq(oldHost.ui.main.dragHandle:GetHeight(), oldHost.ui.main.hdrBg:GetHeight(),
+    "the drag strip still covers the whole header, which is taller now")
+H.check(type(oldHost.ui.pop.hdrEdge) == "table",
+    "the popover's header icon gets its tile")
+H.check(oldHost.ui.pop.hdrIcon ~= oldPopIcon, "drawn by a new texture")
+H.check(oldHost.ui.pop.hdrTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and its title is restyled")
+H.check(oldBtn:GetHeight() > oldBtnH,
+    "the reagent button is resized: " .. tostring(oldBtn:GetHeight()))
+H.check(type(oldBtn.iconEdge) == "table", "its icon gets a tile")
+H.check(oldBtn.countTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
+    "and its count is restyled")
 
 -- Once, not on every rebuild: this walks every row and popover row.
 local builtBefore = select("#", oldRow:GetRegions())
