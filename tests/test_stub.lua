@@ -57,6 +57,16 @@ H.eq(select(2, GetBuildInfo()), "70009", "which is what GetBuildInfo reports")
 H.eq(select(3, GetBuildInfo()), "Sep 23 2026", "with the date that build reports")
 H.eq(select("#", GetInstanceInfo()), 11, "and GetInstanceInfo returns this client's tuple")
 
+-- The eighth is the instance's own id - `instanceID` in the 70009
+-- declaration, and what `/pprobe here` prints as instanceMapID. Matching on
+-- it rather than on the NAME is both verifiable and locale-proof, so a stub
+-- answering 0 for every instance could not tell the two apart.
+WoW.instanceName, WoW.instanceType = "Ruins of Lordaeron", "party"
+WoW.instanceMapID = 2999
+H.eq(select(8, GetInstanceInfo()), 2999, "the eighth return is the instance's own id")
+WoW.reset()
+H.eq(select(8, GetInstanceInfo()), 0, "and a reset client is not in one")
+
 -- The realm slot: 70009 splits every unit, 69913 joined for the player and
 -- gave a real realm. Unresolved which changed, so both are reachable.
 WoW.SetUnit("player", { name = "Karuzo Elegia" })

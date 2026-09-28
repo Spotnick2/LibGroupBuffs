@@ -80,6 +80,7 @@ function WoW.reset()
     WoW.mouseOver   = {}         -- [frame] = true; drives frame:IsMouseOver()
     WoW.centers     = {}         -- [frame] = x; drives frame:GetCenter()
     WoW.screenWidth = 1920       -- what UIParent:GetWidth() reports
+    WoW.instanceMapID = 0        -- GetInstanceInfo's 8th return; 0 outdoors
     WoW.combatWrites = {}        -- SetAttribute calls made while WoW.inCombat
     WoW.blockedCalls = {}        -- protected calls refused while WoW.inCombat
     WoW.byNameBlind = false      -- simulate GetAuraDataBySpellName not resolving
@@ -913,7 +914,12 @@ function GetInstanceInfo()
     -- Eleven returns, measured on 70009 (nine on 69913): the last two are
     -- new. A stub that models the old arity is a stub that disagrees with the
     -- client, which is the one thing this file must not do.
-    return WoW.instanceName, t, 0, "", 5, 0, false, 0, 0, nil, false
+    -- The EIGHTH return is the instance's own id - `instanceID` in the 70009
+    -- declaration, and what `/pprobe here` prints as instanceMapID (2999 for
+    -- Ruins of Lordaeron). It is the locale-proof way to know where you are,
+    -- so a stub that answers 0 for every instance cannot tell a test that
+    -- matches on it from one that does not.
+    return WoW.instanceName, t, 0, "", 5, 0, false, WoW.instanceMapID or 0, 0, nil, false
 end
 function GetRealZoneText() return WoW.instanceName end
 
