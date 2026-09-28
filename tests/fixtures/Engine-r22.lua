@@ -30,7 +30,7 @@
 
 -- Same MINOR as every runtime file; see Settings.lua for why the guard is two
 -- checks, and tests/test_versions.lua for the load orders.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 23
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 22
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.engineMinor == MINOR then return end
@@ -80,19 +80,6 @@ function Engine.New(host)
         end
         if def.grpID ~= nil and type(def.grpID) ~= "number" then
             Fail("def " .. def.id .. ": grpID must be a spell ID or nil")
-        end
-        -- How far the GROUP form reaches. On Forever every group buff measured
-        -- so far covers the whole raid - all three Prayers read "Power infuses
-        -- all party and raid members" in game - which is not what Vanilla and
-        -- TBC did, and not what a window drawing one row per subgroup assumes.
-        --
-        -- Declared by the host rather than guessed: the tooltip saying so is a
-        -- localized string, and the only alternative is to assume, which is
-        -- silently wrong the day a party-only group buff exists.
-        if def.groupScope ~= nil
-            and def.groupScope ~= "raid" and def.groupScope ~= "party"
-        then
-            Fail("def " .. def.id .. ": groupScope must be \"raid\", \"party\" or nil")
         end
     end
     -- The names in a def are the host's own literals right now, so that is
@@ -426,44 +413,6 @@ end
 function Methods:PickTarget(members, def, anyValid, st)
     return PickCandidate(self, members, def, anyValid, true, st)
         or PickCandidate(self, members, def, anyValid, false, st)
-end
-
--- Whether a def's group form covers the whole raid. Defaults to raid, because
--- every group buff measured on this client does.
-function Methods:IsRaidWide(def)
-    return def.hasGroup and (def.groupScope or "raid") == "raid"
-end
-
--- Who to cast a RAID-WIDE group spell at, or nil when nobody needs it.
---
--- The difference from PickTarget is the nil. PickTarget always answers with
--- somebody - the lowest remaining, if nobody is missing - which is right for a
--- cheap single-target top-up and wrong for this: the window draws one row per
--- subgroup, so a raid-wide buff was offered eight times, and each of those
--- clicks cast it again at a reagent each. One cast covers everyone, so once
--- everyone has it there is nothing left to offer and the click goes quiet.
---
--- That is what makes "click any row" safe rather than expensive: PreClick
--- re-picks at click time out of combat, so the second click through the eighth
--- find nobody missing and cast nothing at all.
---
--- Refreshing early is deliberately NOT offered here. It costs a reagent and
--- buys little on an hour-long buff; a member who needs topping up individually
--- is what the single-target click and the popover are for.
-function Methods:PickRaidTarget(members, def, st)
-    local anyMissing = false
-    for _, m in ipairs(members) do
-        if not UnitIsConnected(m.unit) then
-            anyMissing = true
-            break
-        end
-        local known = st and st.byUnit and st.byUnit[m.unit]
-        local state = known and known.state
-        if not state then local _; _, _, state = self:BuffRem(m.unit, def) end
-        if state == ST_MISSING then anyMissing = true break end
-    end
-    if not anyMissing then return nil end
-    return self:PickTarget(members, def, true, st)
 end
 
 -- ─── Roster ─────────────────────────────────────────────────────────────────
