@@ -91,33 +91,26 @@ local EM         = "\226\128\148"   -- an em dash, as UTF-8 bytes
 -- An icon on glass, in a tile of its own: the material rounds everything
 -- else, and a hard-edged square in the middle of it reads as pasted on. The
 -- edge is the same sliced texture a row's fill uses, so the two agree.
--- Takes the tile's anchor rather than leaving the caller to set it, because
--- the ORDER matters and is not obvious: a mask anchored to a texture that has
--- no position yet gets no rectangle, and the client does not go back and give
--- it one when the texture is anchored later. The texture then draws only
--- where that empty mask happens to be - a sliver of the icon in one corner,
--- which is what r19 and the first fix both shipped. So: size it, place it,
--- and only then build the mask.
--- A 9-slice draws its four corners at their native size and stretches what is
--- between them, so the margins have to LEAVE something between them. Give a
--- 16px box 8px margins and left+right is the whole width: no centre, no edge
--- strips, and this client renders the result as a fragment in one corner
--- rather than as nothing. The row fills never hit it (123x26 against 16) and
--- neither does the tile's own ring (20x20 against 16); only the mask, inset
--- inside an already small tile, was degenerate - which is why icons broke
--- while everything else drawn from the same file was right.
 local function SliceMargin(box)
     return math.max(2, math.min(8, math.floor(box / 4)))
 end
 
--- The tile gets a FRAME of its own, and the mask is anchored to that frame
--- rather than to the icon texture beside it. That is not ceremony: a mask
--- anchored to a SIBLING texture drew a sliver of the art in one corner at
--- every size and every margin tried, while the row fills - whose mask is
--- anchored to the frame that owns it - have been right from the first build.
--- Anchoring a mask to the frame it belongs to is the one arrangement measured
--- to work on this client, so the icons are built that shape too.
-local function IconTile(parent, size, point, relTo, relPoint, x, y, inset)
+-- A small rounded icon tile.
+--
+-- Four explanations for the icons rendering as a sliver were deployed and
+-- none of them was it. What settled it was an experiment rather than a fifth
+-- guess: the window draws five of these and they are all on screen together,
+-- so each call site got a different arrangement and one screenshot answered.
+-- No mask drew a whole square icon; an unsliced mask drew a whole rounded
+-- one; both sliced cells failed, and differed from the working one ONLY in
+-- being sliced. See SetIconTexture below for the rule that came out of it.
+--
+-- The tile keeps a frame of its own. That was built to test one of the wrong
+-- theories, but it earns its place anyway: SetAllPoints on a frame is how the
+-- mask gets its rectangle without an anchor whose sign has to be reasoned
+-- about, and it is the same shape as the row fills, which have been right
+-- from the first build.
+local function IconTile(parent, size, point, relTo, relPoint, x, y)
     local box = CreateFrame("Frame", nil, parent)
     box:SetSize(size, size)
     box:SetPoint(point or "LEFT", relTo or parent, relPoint or "LEFT", x or 0, y or 0)
@@ -125,14 +118,23 @@ local function IconTile(parent, size, point, relTo, relPoint, x, y, inset)
     local tile = box:CreateTexture(nil, "ARTWORK")
     tile:SetAllPoints(box)
 
-    -- The client's icons carry a border in the outer few percent of the image,
-    -- which is what makes them look square. It is cropped by INSETTING THE
-    -- MASK, not with SetTexCoord: on this client a mask is applied in the
-    -- texture's untransformed space, so cropping a masked texture moves the
-    -- mask off the art. The mask does both jobs, eating the border and
-    -- rounding what is left.
-    inset = inset or math.max(1, math.floor(size * 0.08 + 0.5))
-    local mask = lib.Glass.Mask(box, "bar_mask", SliceMargin(size - 2 * inset), inset)
+    -- The mask is NOT sliced, and that is the whole of it. A sliced
+    -- MaskTexture at this size draws a fragment of the masked art in the
+    -- top-left corner of the shape and nothing else. The same asset SLICED
+    -- works at 123x26 on a row's fill, so there is a size below which it
+    -- stops; where that line falls has not been measured, and nothing here
+    -- needs it to be.
+    --
+    -- Unsliced, the 32px asset is scaled to the tile, which leaves a corner
+    -- radius of about 2.5px at 20px - right for something this small, so
+    -- nothing is given up by not slicing it. The client's icons carry a
+    -- border in their outer few percent, and the rounding eats its corners;
+    -- cropping the rest with SetTexCoord is NOT the way to remove it, because
+    -- a mask is applied in the texture's untransformed space.
+    local mask = box:CreateMaskTexture()
+    mask:SetTexture(lib.Glass.MEDIA .. "bar_mask",
+                    "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(box)
     tile:AddMaskTexture(mask)
 
     local edge = box:CreateTexture(nil, "OVERLAY")

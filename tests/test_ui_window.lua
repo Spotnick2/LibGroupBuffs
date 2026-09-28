@@ -1153,21 +1153,28 @@ H.eq(#early, 0,
     .. "leaves it with no rectangle at all: " .. (early[1] or "none"))
 H.check(sliced >= 8, "the walk found the sliced textures: " .. sliced)
 
--- No mask is anchored to a texture. A mask anchored to a SIBLING texture drew
--- a sliver of the art in one corner at every size and margin tried, while the
--- row fills - masked against the frame that owns them - were right from the
--- first build. Anchoring a mask to its own frame is the one arrangement
--- measured to work here, so it is a rule rather than a fix to the icons: the
--- next thing to want a rounded corner will not be an icon either.
-local sibling = {}
+-- A small mask must not be sliced.
+--
+-- Measured in game, not reasoned about: four explanations were deployed as
+-- fixes and none of them was it, so the window's five icon tiles were set to
+-- four different arrangements at once and one screenshot answered. No mask
+-- drew a whole square icon. An unsliced mask drew a whole rounded one. Both
+-- SLICED cells drew a fragment in the top-left corner and nothing else, and
+-- differed from the working cell only in being sliced.
+--
+-- The same asset sliced works at 123x26 on a row's fill, so there is a size
+-- below which it stops. Where that line falls was not measured; the bound
+-- used here is the asset's own 32px, which every observation so far fits and
+-- which nothing in the window needs to be exact.
+local MASK_ASSET_PX = 32
+local slicedSmall = {}
 local function checkMasks(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
     for _, r in ipairs(frame._regions or {}) do
-        if r._isMask then
-            for _, pt in ipairs(r._points or {}) do
-                if type(pt[2]) == "table" and pt[2]._objectType == "Texture" then
-                    sibling[#sibling + 1] = name
-                end
+        if r._isMask and r._slice then
+            local w = select(1, Box(r))
+            if w and w < MASK_ASSET_PX then
+                slicedSmall[#slicedSmall + 1] = name .. " (" .. w .. "px)"
             end
         end
         checkMasks(r, name, depth + 1)
@@ -1176,9 +1183,9 @@ local function checkMasks(frame, name, depth)
 end
 checkMasks(ui.main, "the window", 0)
 checkMasks(ui.pop, "the popover", 0)
-H.eq(#sibling, 0,
-    "every mask is anchored to a frame, not to a texture beside it: "
-    .. (sibling[1] or "none"))
+H.eq(#slicedSmall, 0,
+    "no mask narrower than the asset it is drawn from is sliced, which this "
+    .. "client renders as a fragment in one corner: " .. (slicedSmall[1] or "none"))
 H.eq(#crushed, 0,
     "and every one has room between its margins for a middle: " .. (crushed[1] or "none"))
 
