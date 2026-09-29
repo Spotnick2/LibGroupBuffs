@@ -157,6 +157,7 @@ function H.PriestUI(opts)
         unknownClassIcon = "PRIEST_ICON",
         footerItems = function() return host.footer end,
         alpha       = function() return host.ui_config.alpha end,
+        scale       = function() return host.ui_config.scale end,
         locked      = function() return host.ui_config.locked end,
         popoverSide = function() return host.ui_config.popoverSide end,
         showClickHints = function() return host.ui_config.hints end,
