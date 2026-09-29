@@ -352,6 +352,18 @@ local function makeFrame(name, parent, template)
     f.SetWidth  = function(self, w) self._width  = w return self end
     f.SetHeight = function(self, h) self._height = h return self end
     f.SetScale = function(self, s) self._scale = s return self end
+    -- The product up the parent chain, the way the client computes it. Without
+    -- it a frame's own coordinates and UIParent's look like the same space,
+    -- and every comparison between them is right only at scale 1.
+    f.GetEffectiveScale = function(self)
+        local scale = self._scale or 1
+        local p = self._parent
+        while p do
+            scale = scale * (p._scale or 1)
+            p = p._parent
+        end
+        return scale
+    end
     f.GetScale = function(self) return self._scale or 1 end
     f.SetParent = function(self, p) self._parent = p return self end
     f.GetParent = function(self) return self._parent end

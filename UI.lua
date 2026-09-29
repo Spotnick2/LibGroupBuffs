@@ -1370,7 +1370,18 @@ function Methods:PopoverSide(anchorRow)
     local rowX = anchorRow and anchorRow:GetCenter()
     local screenW = UIParent and UIParent:GetWidth()
     if not rowX or not screenW or screenW == 0 then return "left" end
-    return (rowX < screenW / 2) and "right" or "left"
+    -- Both sides in PHYSICAL pixels. A row's GetCenter is in its own frame's
+    -- coordinate space, and scaling the window makes that a different space
+    -- from UIParent's - so comparing them directly is right only at scale 1,
+    -- and at scale 2 a row against the right edge reports a number from the
+    -- left half and the popover opens into the crowded side.
+    --
+    -- Multiplying by the effective scale is what the client's own
+    -- GetScaledCenter does (Blizzard_SharedXMLBase/FrameUtil.lua:226 in
+    -- C:/Projects/wow-ui-source).
+    local rowMid    = rowX * anchorRow:GetEffectiveScale()
+    local screenMid = screenW * UIParent:GetEffectiveScale() / 2
+    return (rowMid < screenMid) and "right" or "left"
 end
 
 function Methods:UpdatePopover(anchorRow, members, def)
