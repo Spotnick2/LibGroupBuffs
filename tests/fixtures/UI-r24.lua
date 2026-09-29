@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -307,7 +307,7 @@ end
 local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 
 local OPTIONAL_FUNCTIONS = {
-    "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
+    "appearance", "footerItems", "alpha", "locked", "popoverSide", "showClickHints",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
 }
 
@@ -362,39 +362,6 @@ end
 function Methods:Alpha()
     local a = Call(self.host.alpha)
     return type(a) == "number" and a or 0.96
-end
-
--- How large the window is drawn. SetScale rather than rescaling every
--- constant: it takes the text and the textures with it, needs no layout
--- arithmetic, and cannot get the row maths wrong - and the glass is sized
--- against those constants, so touching them would squeeze the corners flat
--- again (see the note above ROW_H).
---
--- Clamped rather than trusted. A host slider is one typo from 0, which draws
--- nothing and gives the player no way back to the options panel.
-local SCALE_MIN, SCALE_MAX = 0.5, 2.5
-function Methods:Scale()
-    local v = Call(self.host.scale)
-    if type(v) ~= "number" or v ~= v then return 1 end
-    if v < SCALE_MIN then return SCALE_MIN end
-    if v > SCALE_MAX then return SCALE_MAX end
-    return v
-end
-
--- One scale for both frames. The popover anchors to a row on the main frame,
--- so scaling them apart makes the anchoring drift.
---
--- Refused in combat, like everything else that touches these frames: both
--- parent secure buttons, and the client silently blocks a SetScale on one.
--- ApplyAppearance runs on every rebuild, so the next one out of combat
--- carries it.
-local function ApplyScale(self)
-    if InCombatLockdown() then return false end
-    local want = self:Scale()
-    for _, f in ipairs({ self.main, self.pop }) do
-        if f and f.SetScale and (f:GetScale() or 1) ~= want then f:SetScale(want) end
-    end
-    return true
 end
 
 -- ─── The glass material ──────────────────────────────────────────────────────
@@ -1040,10 +1007,6 @@ end
 -- it is what runs in combat. (It still reads auras through the engine, which
 -- updates the engine's cache and learned durations.)
 function Methods:RefreshTimers()
-    -- One aura pass for the whole refresh. Every row here is asking about the
-    -- same members at the same instant, and each member's auras are walked
-    -- once for all of them rather than once per buff (#6).
-    self.engine:BeginAuraPass()
     for _, r in ipairs(self.rows) do
         if r._active then
             self:ApplyRowVisuals(r, self.engine:GroupStat(r._members, r._def))
@@ -1054,7 +1017,6 @@ function Methods:RefreshTimers()
             if pr._active then self:ApplyPopRowVisuals(pr) end
         end
     end
-    self.engine:EndAuraPass()
     -- In combat the hint's list of who needs the buff is the only per-member
     -- view there is, and OnEnter does not fire again while the mouse rests on
     -- the row - so buff somebody and the tooltip would still call them
@@ -1114,7 +1076,6 @@ end
 
 function Methods:ApplyAppearance()
     if not self.main then return end
-    ApplyScale(self)
     local look = self:Appearance()
     local alpha = self:Alpha()
     local main, pop = self.main, self.pop
@@ -1375,18 +1336,7 @@ function Methods:PopoverSide(anchorRow)
     local rowX = anchorRow and anchorRow:GetCenter()
     local screenW = UIParent and UIParent:GetWidth()
     if not rowX or not screenW or screenW == 0 then return "left" end
-    -- Both sides in PHYSICAL pixels. A row's GetCenter is in its own frame's
-    -- coordinate space, and scaling the window makes that a different space
-    -- from UIParent's - so comparing them directly is right only at scale 1,
-    -- and at scale 2 a row against the right edge reports a number from the
-    -- left half and the popover opens into the crowded side.
-    --
-    -- Multiplying by the effective scale is what the client's own
-    -- GetScaledCenter does (Blizzard_SharedXMLBase/FrameUtil.lua:226 in
-    -- C:/Projects/wow-ui-source).
-    local rowMid    = rowX * anchorRow:GetEffectiveScale()
-    local screenMid = screenW * UIParent:GetEffectiveScale() / 2
-    return (rowMid < screenMid) and "right" or "left"
+    return (rowX < screenW / 2) and "right" or "left"
 end
 
 function Methods:UpdatePopover(anchorRow, members, def)
@@ -1945,18 +1895,8 @@ function Methods:Update()
 
     local groups, ord = engine:GatherGroups()
     if #ord == 0 then self:Close(); return end
-
-    -- As above, for the rebuild: the stats, the targets and the popover
-    -- re-drive at the bottom all describe one moment.
-    --
-    -- Opened BEFORE ActiveDefs, not after. A host's visibility rule can read
-    -- auras too - Priestly's "show Shadow Protection when somebody has it"
-    -- walks the whole roster looking for one - and it is asking about the same
-    -- members this refresh is about to ask about again (#6).
-    engine:BeginAuraPass()
-
     local defs = engine:ActiveDefs(groups, ord)
-    if #defs == 0 then engine:EndAuraPass(); self:Close(); return end
+    if #defs == 0 then self:Close(); return end
 
     self:ApplyAppearance()
 
@@ -2080,7 +2020,7 @@ function Methods:Update()
     end
 
     -- Every buff filtered down to nobody: there is nothing to show.
-    if rowIdx == 0 then engine:EndAuraPass(); self:Close(); return end
+    if rowIdx == 0 then self:Close(); return end
 
     y = y - 2
     y = self:LayoutFooter(y)
@@ -2123,7 +2063,6 @@ function Methods:Update()
             pop:Hide()    -- the row it belonged to is gone
         end
     end
-    engine:EndAuraPass()
 end
 
 -- ─── Is this copy usable? ───────────────────────────────────────────────────

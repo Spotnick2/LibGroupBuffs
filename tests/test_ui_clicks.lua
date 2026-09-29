@@ -230,6 +230,40 @@ WoW.screenWidth = 0
 H.eq(ui:PopoverSide(anchor), "left", "and so does a zero-width screen, which is truthy")
 WoW.screenWidth = 1920
 
+-- The same row, at the same place on the SCREEN, at three window scales.
+--
+-- GetCenter answers in the row's OWN coordinate space, so scaling the window
+-- changes the number a row that has not moved reports: enlarged, a row against
+-- the right edge reads a left-half number, and reduced, a row at the left edge
+-- reads a right-half one. Comparing that straight against UIParent's width -
+-- which is what this did until the scale option arrived - is right only at
+-- scale 1, and wrong the moment anyone uses the slider.
+--
+-- Driven through the setting rather than SetScale, so the accessor, the clamp
+-- and ApplyScale are all in the path being asserted.
+local function SideAtScale(s, ownCenter)
+    host.ui_config.scale = s
+    ui:ApplyAppearance()
+    WoW.centers[anchor] = ownCenter
+    return ui:PopoverSide(anchor)
+end
+-- 1700 physical pixels across a 1920 screen: hard against the right edge.
+H.eq(SideAtScale(1,   1700), "left",
+    "a row at the right edge opens the popover left")
+H.eq(SideAtScale(2,    850), "left",
+    "and still left enlarged, though its own coordinates read left-half")
+H.eq(SideAtScale(0.5, 3400), "left",
+    "and still left reduced")
+-- 500 physical pixels: the left edge.
+H.eq(SideAtScale(1,    500), "right",
+    "a row at the left edge opens the popover right")
+H.eq(SideAtScale(0.5, 1000), "right",
+    "and still right reduced, though its own coordinates read right-half")
+H.eq(SideAtScale(2,    250), "right",
+    "and still right enlarged")
+host.ui_config.scale = nil
+ui:ApplyAppearance()
+
 WoW.centers[anchor] = 200
 ui:UpdatePopover(anchor, anchor._members, anchor._def)
 local point, rel, relPoint = ui.pop:GetPoint()
