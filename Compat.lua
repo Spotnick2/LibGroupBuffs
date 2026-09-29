@@ -200,6 +200,23 @@ end
 -- That is the whole point: confirming an absence is what costs a walk, and a
 -- priest tracking three buffs used to walk each member's auras three times per
 -- refresh pass to confirm three absences (#6). One walk answers all of them.
+-- Does this pass's walk answer for every one of `names`?
+--
+-- `pass.covers` is built once, the first time it is asked, rather than per
+-- read: this sits on the hot path and the union does not change inside a pass.
+function API.PassCovers(pass, names)
+    local covers = pass.covers
+    if not covers then
+        covers = {}
+        for i = 1, #(pass.names or {}) do covers[pass.names[i]] = true end
+        pass.covers = covers
+    end
+    for i = 1, #names do
+        if names[i] and not covers[names[i]] then return false end
+    end
+    return true
+end
+
 function API.ScanAuras(unit, names)
     local rec = { blocked = false, sawAny = false, found = {} }
     if not C_UnitAuras then rec.blocked = true return rec end
@@ -227,12 +244,19 @@ end
 
 -- `pass`, when given, is a table the caller keeps for one refresh pass:
 --
---   { names = <every tracked name>, units = {} }
+--   { names = <every tracked name>, covers = <that list as a set>, units = {} }
 --
 -- ReadBuff fills `pass.units[unit]` with that unit's scan the first time it
 -- has to walk, and every later buff on the same unit in the same pass reads
 -- the answer out of it. Without a pass the behaviour is exactly what it was:
 -- a fresh walk, scoped to this buff's names.
+--
+-- A scan only records the names it was asked to match, so it can only answer
+-- for those. Asking a pass about a name outside its union would get a
+-- confident "not there" for an aura the walk simply never looked for - and the
+-- ReadAura seam hands a host's own name list straight in here, so that is not
+-- a hypothetical. Such a call bypasses the pass and reads live: slower, and an
+-- answer rather than a wrong one.
 --
 -- The caller owns the boundary deliberately. A pass that expired on a timer,
 -- or on some guess about what counts as "now", would be a cache that answers
@@ -262,10 +286,10 @@ function API.ReadBuff(unit, names, pass)
     -- Prayer of Fortitude would never see it on people another priest buffed.
     -- So confirm an absence by walking.
     local scan
-    if pass then
+    if pass and API.PassCovers(pass, names) then
         scan = pass.units[unit]
         if not scan then
-            scan = API.ScanAuras(unit, pass.names or names)
+            scan = API.ScanAuras(unit, pass.names)
             pass.units[unit] = scan
         end
     else

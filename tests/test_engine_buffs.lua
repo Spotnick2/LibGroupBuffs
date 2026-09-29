@@ -664,6 +664,32 @@ H.check(rem > 0, "with its clock still running")
 H.secrecy(false)
 WoW.byNameBlind = false
 
+-- ReadAura hands a HOST's own name list straight into the pass, and a scan
+-- only records the names it was asked to match - so a name outside the union
+-- would come back as a confident absence for an aura the walk never looked
+-- for. The seam promises API.ReadBuff's answer, so it has to be the real one:
+-- a call the pass cannot cover reads live instead.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", "Renew", 15, 10)       -- nothing this engine tracks
+WoW.byNameBlind = true                       -- the walk is the only route
+local OUTSIDE = { "Renew" }
+H.eq(E:ReadAura("party1", OUTSIDE), "HAS", "a name outside the union is found")
+E:BeginAuraPass()
+H.eq(E:ReadAura("party1", OUTSIDE), "HAS", "and still found inside a pass, not called absent")
+-- ...while a name the pass DOES cover still goes through it.
+WoW.auraReads.byIndex = 0
+E:BuffRem("party1", host.def("fort"))
+E:BuffRem("party1", host.def("fort"))
+H.check(WoW.auraReads.byIndex > 0, "a covered name walks once")
+local covered = WoW.auraReads.byIndex
+WoW.auraReads.byIndex = 0
+E:BuffRem("party1", host.def("fort"))
+H.eq(WoW.auraReads.byIndex, 0, "and not again: the bypass has not disabled the pass")
+H.check(covered > 0, "which needed a walk to begin with")
+E:EndAuraPass()
+WoW.byNameBlind = false
+
 -- With no union to match against, a pass would match nothing and call
 -- everybody unbuffed. That is not hypothetical: LibStub upgrades in place, so
 -- this method can be called on an engine table an OLDER copy built, whose

@@ -1450,4 +1450,54 @@ H.eq(table.concat(after, " "), table.concat(before, " "),
     "and every row counts the same members missing with the pass as without")
 WoW.byNameBlind = false
 
+------------------------------------------------------------
+-- A refresh that throws must not leave its aura pass behind
+--
+-- The pass belongs to one refresh. Host callbacks - onLayout, footerItems,
+-- the duration and visibility seams - are the ADDON's code running inside
+-- ours, and they can throw. A pass that outlived a failed refresh would still
+-- be answering at CLICK time, which is the read that has to be live: buff
+-- somebody after the snapshot and the button would still think they need it,
+-- or still think they do not.
+--
+-- Replacing the pass at the next refresh is not enough. The click comes
+-- first.
+------------------------------------------------------------
+
+setup()
+ui:Update()
+H.check(host.engine.auraPass == nil, "a refresh that finishes leaves no pass")
+
+host.throwFrom = "onLayout"
+local threw, why = pcall(function() ui:Update() end)
+host.throwFrom = nil
+H.check(not threw, "a host callback that throws is not swallowed")
+H.check(tostring(why):find("onLayout blew up", 1, true) ~= nil,
+    "and arrives as its own message, not as one from the library: " .. tostring(why))
+H.check(host.engine.auraPass == nil, "and the pass it was holding is gone")
+
+-- The read that would have been wrong. Inside the leaked pass party1 is
+-- buffed; live, they are not.
+local fortDef = host.def("fort")
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+ui:Update()
+H.eq(select(3, host.engine:BuffRem("party1", fortDef)), lib.Engine.STATES.HAS,
+    "party1 is buffed while the snapshot is taken")
+host.throwFrom = "onLayout"
+pcall(function() ui:Update() end)
+host.throwFrom = nil
+WoW.auras["party1"] = nil
+H.eq(select(3, host.engine:BuffRem("party1", fortDef)), lib.Engine.STATES.MISSING,
+    "and after the failed refresh the next read is live, not the snapshot")
+
+-- The same for RefreshTimers, whose bracket is a separate one.
+setup()
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+ui:Update()
+host.throwFrom = "learnDuration"
+threw = pcall(function() ui:RefreshTimers() end)
+host.throwFrom = nil
+H.check(not threw, "a throw inside RefreshTimers propagates too")
+H.check(host.engine.auraPass == nil, "and leaves no pass behind either")
+
 H.done("test_ui_window")

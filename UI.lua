@@ -1039,11 +1039,32 @@ end
 -- Visual only: colours, timers, counts. Never touches a secure attribute, so
 -- it is what runs in combat. (It still reads auras through the engine, which
 -- updates the engine's cache and learned durations.)
-function Methods:RefreshTimers()
-    -- One aura pass for the whole refresh. Every row here is asking about the
-    -- same members at the same instant, and each member's auras are walked
-    -- once for all of them rather than once per buff (#6).
-    self.engine:BeginAuraPass()
+-- Runs `body` with an aura pass open, and closes it whether body returns or
+-- THROWS.
+--
+-- The throw is the whole reason this exists. A pass belongs to one refresh;
+-- one that outlived a failed refresh would still be answering at click time,
+-- which is the read that must be live - a member buffed since the snapshot
+-- would still look unbuffed, and the click would refuse to fire. Host
+-- callbacks run inside both brackets (onLayout, footerItems, the visibility
+-- and duration seams), so a throw here is somebody else's bug arriving in the
+-- middle of ours. Replacing the pass at the NEXT refresh does not help: the
+-- click comes first.
+--
+-- The error is re-raised at level 0, so it reads as the original message
+-- rather than pointing at this line.
+local function WithAuraPass(self, body)
+    local engine = self.engine
+    engine:BeginAuraPass()
+    local ok, err = pcall(body, self)
+    engine:EndAuraPass()
+    if not ok then error(err, 0) end
+end
+
+-- One aura pass for the whole refresh. Every row here is asking about the
+-- same members at the same instant, and each member's auras are walked once
+-- for all of them rather than once per buff (#6).
+local function RefreshTimersBody(self)
     for _, r in ipairs(self.rows) do
         if r._active then
             self:ApplyRowVisuals(r, self.engine:GroupStat(r._members, r._def))
@@ -1054,7 +1075,6 @@ function Methods:RefreshTimers()
             if pr._active then self:ApplyPopRowVisuals(pr) end
         end
     end
-    self.engine:EndAuraPass()
     -- In combat the hint's list of who needs the buff is the only per-member
     -- view there is, and OnEnter does not fire again while the mouse rests on
     -- the row - so buff somebody and the tooltip would still call them
@@ -1065,6 +1085,10 @@ function Methods:RefreshTimers()
     then
         self:ShowClickHint(self.hintRow)
     end
+end
+
+function Methods:RefreshTimers()
+    WithAuraPass(self, RefreshTimersBody)
 end
 
 -- Colours and icon, re-read from the addon. Backdrop opacity only, never the
@@ -1926,15 +1950,11 @@ function Methods:AdoptLayout()
     return true
 end
 
-function Methods:Update()
-    if InCombatLockdown() then
-        if self.visible then
-            self:RefreshTimers()
-        else
-            self.pendingShow = true
-        end
-        return
-    end
+-- The rebuild proper. Split from Update so it can run inside WithAuraPass,
+-- and so the combat branch stays OUTSIDE it: that branch calls RefreshTimers,
+-- which opens a pass of its own, and a pass nested inside a pass would have
+-- the inner one's close end the outer.
+local function Rebuild(self)
     if not self:Init() then return end
     -- Before anything is measured or placed: a window an older copy built
     -- arrives here with the previous layout, and every position below is
@@ -1946,17 +1966,13 @@ function Methods:Update()
     local groups, ord = engine:GatherGroups()
     if #ord == 0 then self:Close(); return end
 
-    -- As above, for the rebuild: the stats, the targets and the popover
-    -- re-drive at the bottom all describe one moment.
-    --
-    -- Opened BEFORE ActiveDefs, not after. A host's visibility rule can read
-    -- auras too - Priestly's "show Shadow Protection when somebody has it"
-    -- walks the whole roster looking for one - and it is asking about the same
-    -- members this refresh is about to ask about again (#6).
-    engine:BeginAuraPass()
-
+    -- The pass this runs inside is open from the top, which puts ActiveDefs
+    -- inside it too - deliberately. A host's visibility rule can read auras:
+    -- Priestly's "show Shadow Protection when somebody has it" walks the whole
+    -- roster looking for one, immediately before these rows ask about the same
+    -- members (#6).
     local defs = engine:ActiveDefs(groups, ord)
-    if #defs == 0 then engine:EndAuraPass(); self:Close(); return end
+    if #defs == 0 then self:Close(); return end
 
     self:ApplyAppearance()
 
@@ -2080,7 +2096,7 @@ function Methods:Update()
     end
 
     -- Every buff filtered down to nobody: there is nothing to show.
-    if rowIdx == 0 then engine:EndAuraPass(); self:Close(); return end
+    if rowIdx == 0 then self:Close(); return end
 
     y = y - 2
     y = self:LayoutFooter(y)
@@ -2123,7 +2139,18 @@ function Methods:Update()
             pop:Hide()    -- the row it belonged to is gone
         end
     end
-    engine:EndAuraPass()
+end
+
+function Methods:Update()
+    if InCombatLockdown() then
+        if self.visible then
+            self:RefreshTimers()
+        else
+            self.pendingShow = true
+        end
+        return
+    end
+    WithAuraPass(self, Rebuild)
 end
 
 -- ─── Is this copy usable? ───────────────────────────────────────────────────

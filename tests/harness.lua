@@ -127,7 +127,13 @@ function H.PriestEngine()
             host.visibilityCalls[#host.visibilityCalls + 1] = { def = def, groups = groups, ord = ord }
             return host.config.visible[def.id] ~= false
         end,
-        learnDuration = function(spell, seconds) host.durations[spell] = seconds end,
+        -- Host callbacks are the ADDON's code running inside the library, and
+        -- an addon can throw. Set host.throwFrom to a seam's name and it does,
+        -- which is how a test gets a failure into the middle of a refresh.
+        learnDuration = function(spell, seconds)
+            if host.throwFrom == "learnDuration" then error("learnDuration blew up", 0) end
+            host.durations[spell] = seconds
+        end,
         learnedDuration = function(spell) return host.durations[spell] end,
     })
     function host.def(id)
@@ -167,7 +173,10 @@ function H.PriestUI(opts)
         end,
         setPos     = function(pos) host.saved.pos = pos end,
         setVisible = function(v) host.saved.visible = v end,
-        onLayout   = function() host.layouts = host.layouts + 1 end,
+        onLayout   = function()
+            host.layouts = host.layouts + 1
+            if host.throwFrom == "onLayout" then error("onLayout blew up", 0) end
+        end,
         onVisibility = function(_, v) host.visibility[#host.visibility + 1] = v end,
         onCloseDeferred = function() host.deferredCloses = (host.deferredCloses or 0) + 1 end,
     })
