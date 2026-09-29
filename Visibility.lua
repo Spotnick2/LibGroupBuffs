@@ -2,11 +2,14 @@
 -- Visibility.lua  -  when the window opens itself, and when it must not.
 --
 -- Priestly, Wildly and Magely each carried their own copy of this, near
--- line-for-line, and the copies produced five separate defects: a roster
--- arriving after login counting as a join, a settings change reopening a
--- window the player closed, a solo toggle dropped in combat, and two more
--- besides. Each was found in one addon, fixed there, and left standing in the
--- others (LibGroupBuffs#22).
+-- line-for-line. Every defect that produced had the same shape: found in one
+-- addon, fixed there, and left standing in the other two - a roster arriving
+-- after login counting as a join, a settings change reopening a window the
+-- player closed, a solo toggle dropped in combat, and more.
+--
+-- The list is on #22, in one place. A tally repeated in each file is a tally
+-- that drifts out of step with the other two, which is exactly the failure
+-- mode this file exists to end.
 --
 -- So the DECISION lives here. The addon still owns its events, its slash
 -- commands and its class: it reports what changed, this decides whether that
