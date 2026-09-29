@@ -109,6 +109,9 @@ local R17, R18 = Fixtures(17, GLASS_FILES), Fixtures(18, GLASS_FILES)
 local R19, R20 = Fixtures(19, GLASS_FILES), Fixtures(20, GLASS_FILES)
 local R21, R22 = Fixtures(21, GLASS_FILES), Fixtures(22, GLASS_FILES)
 local R23 = Fixtures(23, GLASS_FILES)
+-- r24 added Visibility.lua, so its fixture is six files rather than five.
+local R24 = Fixtures(24, { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "UI.lua",
+                           "Visibility.lua" })
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -177,7 +180,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")

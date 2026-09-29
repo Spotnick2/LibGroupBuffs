@@ -2,14 +2,11 @@
 -- Visibility.lua  -  when the window opens itself, and when it must not.
 --
 -- Priestly, Wildly and Magely each carried their own copy of this, near
--- line-for-line. Every defect that produced had the same shape: found in one
--- addon, fixed there, and left standing in the other two - a roster arriving
--- after login counting as a join, a settings change reopening a window the
--- player closed, a solo toggle dropped in combat, and more.
---
--- The list is on #22, in one place. A tally repeated in each file is a tally
--- that drifts out of step with the other two, which is exactly the failure
--- mode this file exists to end.
+-- line-for-line, and the copies produced five separate defects: a roster
+-- arriving after login counting as a join, a settings change reopening a
+-- window the player closed, a solo toggle dropped in combat, and two more
+-- besides. Each was found in one addon, fixed there, and left standing in the
+-- others (LibGroupBuffs#22).
 --
 -- So the DECISION lives here. The addon still owns its events, its slash
 -- commands and its class: it reports what changed, this decides whether that
@@ -44,7 +41,7 @@
 
 -- Same MINOR as Compat.lua; tests/test_versions.lua checks they agree. Compat
 -- claims the version, so this file only installs when that claim is ours.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.visibilityMinor == MINOR then return end
@@ -132,10 +129,8 @@ function Methods:ReadyCheck()
 end
 
 -- The client saying you joined, rather than us inferring it from the roster
--- changing. It fires: Blizzard's own UI for this build registers and acts on
--- it (Blizzard_DamageMeter/DamageMeter.lua:78 in C:/Projects/wow-ui-source).
--- Latched rather than acted on here: the roster that follows is what knows how
--- many people there are.
+-- changing. Latched rather than acted on: the roster that follows is what
+-- knows how many people there are.
 function Methods:GroupJoined()
     self.joinedPending = true
 end

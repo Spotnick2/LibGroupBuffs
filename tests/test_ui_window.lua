@@ -1326,4 +1326,58 @@ H.check(ui.main.hdrBg._colorTexture[1] > before,
 H.check(ui.main.hdrBg._colorTexture[4] < 1,
     "with the material deciding how solid it is, not the host")
 
+------------------------------------------------------------
+-- Frame scale
+--
+-- The window is drawn small against this client's UI: the layout constants
+-- were tuned for TBC Anniversary, and Forever runs the Retail codebase where
+-- the default UI scale differs (Spotnick2/priestly#14).
+--
+-- SetScale rather than rescaling the constants. The glass is sized against
+-- those - a row shorter than twice the mask's corner radius has its corners
+-- squeezed flat - so scaling them would undo the layout. SetScale takes the
+-- text and textures with it and cannot get the row maths wrong.
+------------------------------------------------------------
+
+setup()
+host.ui_config.scale = nil
+ui:Update()
+H.near(ui.main:GetScale(), 1, 0.001, "a host that says nothing is drawn at its own size")
+
+host.ui_config.scale = 1.4
+ui:ApplyAppearance()
+H.near(ui.main:GetScale(), 1.4, 0.001, "and a host that asks for bigger gets it")
+H.near(ui.pop:GetScale(), 1.4, 0.001,
+    "the popover with it: it anchors to a row, so scaling them apart drifts")
+
+-- Clamped, not trusted. A slider is one typo from 0, which draws nothing and
+-- leaves the player no way back to the options panel.
+host.ui_config.scale = 0
+ui:ApplyAppearance()
+H.check(ui.main:GetScale() >= 0.5, "zero is clamped to something still visible")
+host.ui_config.scale = 99
+ui:ApplyAppearance()
+H.check(ui.main:GetScale() <= 2.5, "and a wild value to something still on screen")
+host.ui_config.scale = "big"
+ui:ApplyAppearance()
+H.near(ui.main:GetScale(), 1, 0.001, "a value that is not a number is ignored")
+
+-- Both frames parent secure buttons, so this waits for the fight to end like
+-- everything else that touches them.
+--
+-- Asserted as "made no call the client would refuse", not as "the scale did
+-- not change": the stub REFUSES SetScale on a protected frame in combat, so
+-- the scale stays put whether or not this file guards - and the first version
+-- of this assertion passed with the guard deleted, testing the stub rather
+-- than the code.
+host.ui_config.scale = 1.6
+WoW.inCombat = true
+local blocked = #WoW.blockedCalls
+ui:ApplyAppearance()
+H.eq(#WoW.blockedCalls, blocked, "a scale change in combat asks for nothing the client refuses")
+WoW.inCombat = false
+ui:ApplyAppearance()
+H.near(ui.main:GetScale(), 1.6, 0.001, "and lands on the next rebuild after it")
+host.ui_config.scale = nil
+
 H.done("test_ui_window")

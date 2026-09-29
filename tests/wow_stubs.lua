@@ -558,7 +558,14 @@ local function makeFrame(name, parent, template)
     f.GetHeight = function(self) return self._height or 20 end
     f.GetChecked = function(self) return self._checked end
     f.SetChecked = function(self, v) self._checked = v return self end
-    f.GetMinMaxValues = function() return 0, 1 end
+    -- The range that was SET, not a constant. Answering 0, 1 for every slider
+    -- made any assertion about a slider's range a comparison of two literals -
+    -- and a fill drawn from it looked right whatever the slider was for.
+    f.GetMinMaxValues = function(self)
+        local r = self._range
+        if not r then return 0, 1 end
+        return r[1], r[2]
+    end
     f.GetValue = function(self) return self._value or 0 end
     f.SetValue = function(self, v) self._value = v return self end
     f.GetID = function() return 1 end

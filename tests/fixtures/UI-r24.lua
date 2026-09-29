@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -307,7 +307,7 @@ end
 local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 
 local OPTIONAL_FUNCTIONS = {
-    "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
+    "appearance", "footerItems", "alpha", "locked", "popoverSide", "showClickHints",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
 }
 
@@ -362,39 +362,6 @@ end
 function Methods:Alpha()
     local a = Call(self.host.alpha)
     return type(a) == "number" and a or 0.96
-end
-
--- How large the window is drawn. SetScale rather than rescaling every
--- constant: it takes the text and the textures with it, needs no layout
--- arithmetic, and cannot get the row maths wrong - and the glass is sized
--- against those constants, so touching them would squeeze the corners flat
--- again (see the note above ROW_H).
---
--- Clamped rather than trusted. A host slider is one typo from 0, which draws
--- nothing and gives the player no way back to the options panel.
-local SCALE_MIN, SCALE_MAX = 0.5, 2.5
-function Methods:Scale()
-    local v = Call(self.host.scale)
-    if type(v) ~= "number" or v ~= v then return 1 end
-    if v < SCALE_MIN then return SCALE_MIN end
-    if v > SCALE_MAX then return SCALE_MAX end
-    return v
-end
-
--- One scale for both frames. The popover anchors to a row on the main frame,
--- so scaling them apart makes the anchoring drift.
---
--- Refused in combat, like everything else that touches these frames: both
--- parent secure buttons, and the client silently blocks a SetScale on one.
--- ApplyAppearance runs on every rebuild, so the next one out of combat
--- carries it.
-local function ApplyScale(self)
-    if InCombatLockdown() then return false end
-    local want = self:Scale()
-    for _, f in ipairs({ self.main, self.pop }) do
-        if f and f.SetScale and (f:GetScale() or 1) ~= want then f:SetScale(want) end
-    end
-    return true
 end
 
 -- ─── The glass material ──────────────────────────────────────────────────────
@@ -1109,7 +1076,6 @@ end
 
 function Methods:ApplyAppearance()
     if not self.main then return end
-    ApplyScale(self)
     local look = self:Appearance()
     local alpha = self:Alpha()
     local main, pop = self.main, self.pop
