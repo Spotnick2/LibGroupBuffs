@@ -572,4 +572,139 @@ H.eq(report.locale, "deDE", "the report says which language")
 H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "and the name the client gave")
 H.eq(report[1].forms[1].from, "resolved", "resolved, not fallen back to")
 
+------------------------------------------------------------
+-- Aura passes (#6)
+--
+-- Confirming an ABSENCE is what costs a walk of somebody's auras - a hit
+-- answers from the by-name lookup in one call. So a priest tracking three
+-- buffs used to walk each member three times per refresh to confirm three
+-- absences, which at 40 members and a refresh twice a second is where the
+-- measured ~1700 reads per pass came from.
+--
+-- These count the client calls rather than the window's output, because the
+-- output is identical either way - which is exactly why this could regress
+-- unnoticed.
+------------------------------------------------------------
+
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+H.TeachSpells({ "FORT_SINGLE", "SPIRIT_SINGLE", "SHADOW_SINGLE" })
+E:RefreshSpells()
+local three = { host.def("fort"), host.def("spirit"), host.def("shadow") }
+WoW.SetAura("party1", "Renew", 15, 10)         -- something, but none of ours
+
+WoW.auraReads.byIndex = 0
+for _, d in ipairs(three) do E:BuffRem("party1", d) end
+local without = WoW.auraReads.byIndex
+H.check(without > 0, "without a pass each buff walks the unit itself: " .. without .. " reads")
+
+WoW.auraReads.byIndex = 0
+E:BeginAuraPass()
+for _, d in ipairs(three) do E:BuffRem("party1", d) end
+E:EndAuraPass()
+local with = WoW.auraReads.byIndex
+H.check(with * 3 <= without,
+    "one pass walks it once for all three instead: " .. with .. " vs " .. without)
+
+-- And the answers are the same ones. A cheaper wrong answer is not the point.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+H.TeachSpells({ "FORT_SINGLE", "SPIRIT_SINGLE", "SHADOW_SINGLE" })
+E:RefreshSpells()
+three = { host.def("fort"), host.def("spirit"), host.def("shadow") }
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+WoW.byNameBlind = true     -- force the walk, which is the path being changed
+local plain = {}
+for i, d in ipairs(three) do local r, _, st = E:BuffRem("party1", d); plain[i] = st .. "/" .. r end
+E:BeginAuraPass()
+local passed = {}
+for i, d in ipairs(three) do local r, _, st = E:BuffRem("party1", d); passed[i] = st .. "/" .. r end
+E:EndAuraPass()
+H.eq(table.concat(passed, " "), table.concat(plain, " "),
+    "and a pass reports what the per-buff walks reported, hit and miss alike")
+WoW.byNameBlind = false
+
+-- The boundary is the caller's, and it is the whole contract: inside one pass
+-- a unit is read once, so a stub changed mid-pass is NOT seen. That is the
+-- point (one refresh describes one instant), and it is why the boundary has to
+-- be explicit rather than expiring on a timer where nothing could observe it.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+local fortPass = host.def("fort")
+WoW.byNameBlind = true
+E:BeginAuraPass()
+local _, _, before = E:BuffRem("party1", fortPass)
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+local _, _, during = E:BuffRem("party1", fortPass)
+H.eq(during, before, "a change mid-pass does not reach the second read")
+E:BeginAuraPass()
+local _, _, after = E:BuffRem("party1", fortPass)
+H.eq(after, HAS, "and the next pass sees it")
+H.eq(before, MISSING, "which was genuinely a different answer")
+E:EndAuraPass()
+local _, _, ended = E:BuffRem("party1", fortPass)
+H.eq(ended, HAS, "ending the pass goes back to reading live")
+WoW.byNameBlind = false
+
+-- A pass must not turn "cannot look" into "not buffed" - BLOCKED is the
+-- answer that keeps the cache in play, and it is shared by every buff on that
+-- member just as a successful walk is.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+E:BuffRem("party1", host.def("fort"))          -- seed the cache while readable
+H.secrecy(true)
+WoW.byNameBlind = true
+E:BeginAuraPass()
+local rem, _, st, _, basis = E:BuffRem("party1", host.def("fort"))
+E:EndAuraPass()
+H.eq(st, HAS, "an unreadable member still reports the remembered buff")
+H.eq(basis, "remembered", "and says so")
+H.check(rem > 0, "with its clock still running")
+H.secrecy(false)
+WoW.byNameBlind = false
+
+-- ReadAura hands a HOST's own name list straight into the pass, and a scan
+-- only records the names it was asked to match - so a name outside the union
+-- would come back as a confident absence for an aura the walk never looked
+-- for. The seam promises API.ReadBuff's answer, so it has to be the real one:
+-- a call the pass cannot cover reads live instead.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", "Renew", 15, 10)       -- nothing this engine tracks
+WoW.byNameBlind = true                       -- the walk is the only route
+local OUTSIDE = { "Renew" }
+H.eq(E:ReadAura("party1", OUTSIDE), "HAS", "a name outside the union is found")
+E:BeginAuraPass()
+H.eq(E:ReadAura("party1", OUTSIDE), "HAS", "and still found inside a pass, not called absent")
+-- ...while a name the pass DOES cover still goes through it.
+WoW.auraReads.byIndex = 0
+E:BuffRem("party1", host.def("fort"))
+E:BuffRem("party1", host.def("fort"))
+H.check(WoW.auraReads.byIndex > 0, "a covered name walks once")
+local covered = WoW.auraReads.byIndex
+WoW.auraReads.byIndex = 0
+E:BuffRem("party1", host.def("fort"))
+H.eq(WoW.auraReads.byIndex, 0, "and not again: the bypass has not disabled the pass")
+H.check(covered > 0, "which needed a walk to begin with")
+E:EndAuraPass()
+WoW.byNameBlind = false
+
+-- With no union to match against, a pass would match nothing and call
+-- everybody unbuffed. That is not hypothetical: LibStub upgrades in place, so
+-- this method can be called on an engine table an OLDER copy built, whose
+-- RefreshSpells never filled the union in. Opening a pass has to refuse, and
+-- the reads go back to walking per buff - slower, and right.
+setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+WoW.byNameBlind = true
+E.allNames = nil                             -- the engine an older copy left
+E:BeginAuraPass()
+H.check(E.auraPass == nil, "no union, no pass")
+local _, _, oldState = E:BuffRem("party1", host.def("fort"))
+H.eq(oldState, HAS, "and the read still finds the buff")
+E:EndAuraPass()
+WoW.byNameBlind = false
+
 H.done("test_engine_buffs")

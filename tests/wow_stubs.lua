@@ -78,6 +78,7 @@ function WoW.reset()
     WoW.refusedEvents = {}       -- event names RegisterEvent should return false for
     WoW.timers      = {}
     WoW.mouseOver   = {}         -- [frame] = true; drives frame:IsMouseOver()
+    WoW.auraReads   = { byIndex = 0, byName = 0 }
     WoW.centers     = {}         -- [frame] = x; drives frame:GetCenter()
     WoW.screenWidth = 1920       -- what UIParent:GetWidth() reports
     WoW.instanceMapID = 0        -- GetInstanceInfo's 8th return; 0 outdoors
@@ -965,14 +966,19 @@ local function liveAuras(unit)
     return out
 end
 
+-- How many times the client was asked for an aura, by route. The cost of the
+-- aura path is not visible in any assertion about what the window SHOWS - it
+-- shows the same thing either way - so it is counted here instead (#6).
 C_UnitAuras = {
     GetAuraDataByIndex = function(unit, index, filter)
+        WoW.auraReads.byIndex = WoW.auraReads.byIndex + 1
         local list = liveAuras(unit)
         local aura = list and list[index] or nil
         if aura and WoW.aurasAreSecret then return WoW.SecretAura() end
         return aura
     end,
     GetBuffDataByIndex = function(unit, index)
+        WoW.auraReads.byIndex = WoW.auraReads.byIndex + 1
         local list = liveAuras(unit)
         local aura = list and list[index] or nil
         if aura and WoW.aurasAreSecret then return WoW.SecretAura() end
@@ -985,6 +991,7 @@ C_UnitAuras = {
         -- Set WoW.byNameBlind = true to simulate the by-name lookup failing to
         -- resolve a spell the player does not know, which is the reason
         -- API.ReadBuff never trusts a by-name miss.
+        WoW.auraReads.byName = WoW.auraReads.byName + 1
         if WoW.byNameBlind then return nil end
         -- Under secrecy this one returns nil rather than throwing.
         if WoW.auraReadsThrow then return nil end

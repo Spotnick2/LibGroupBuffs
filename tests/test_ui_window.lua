@@ -1379,5 +1379,125 @@ WoW.inCombat = false
 ui:ApplyAppearance()
 H.near(ui.main:GetScale(), 1.6, 0.001, "and lands on the next rebuild after it")
 host.ui_config.scale = nil
+-- What a refresh costs at raid scale (#6)
+--
+-- The measurement that opened the issue: a 40-man raid where everybody
+-- carries 21 auras, three buffs tracked, a refresh twice a second. Each
+-- member's auras were walked once PER BUFF to confirm three absences.
+--
+-- This asserts the shape of the cost, not a number: reads should grow with
+-- the roster, not with the roster times the buff list. It runs the real
+-- RefreshTimers, so it also catches a pass that is opened and then not
+-- reached by the reads.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "SPIRIT_SINGLE", "SHADOW_SINGLE" })
+WoW.inRaid = true
+WoW.groupMembers = 40
+for i = 1, 40 do
+    local nm = "Raider" .. i .. " Sur"
+    WoW.raidRoster[i] = { name = nm, subgroup = math.ceil(i / 5) }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "PRIEST" })
+    -- Everyone is carrying a load of somebody else's buffs and none of ours,
+    -- which is the expensive case: an absence is what costs a walk.
+    for a = 1, 21 do WoW.SetAura("raid" .. i, "Filler" .. a, 600, 300) end
+end
+local rh = H.PriestUI()
+rh.engine:RefreshSpells()
+-- The by-name lookup only resolves spells the player knows, so a walk is the
+-- ordinary path, not a corner: see API.ReadBuff.
+WoW.byNameBlind = true
+rh.ui:Update()
+
+WoW.auraReads.byIndex = 0
+rh.ui:RefreshTimers()
+local pooled = WoW.auraReads.byIndex
+
+-- The same refresh with the pass taken away, which is what this used to be.
+local realBegin = rh.engine.BeginAuraPass
+rh.engine.BeginAuraPass = function() end
+WoW.auraReads.byIndex = 0
+rh.ui:RefreshTimers()
+local perBuff = WoW.auraReads.byIndex
+rh.engine.BeginAuraPass = realBegin
+
+local defs = #rh.defs
+H.check(defs >= 3, "three buffs are being tracked, or this measures nothing")
+H.check(perBuff > pooled * 2,
+    "a refresh walks each member once, not once per buff: "
+    .. pooled .. " reads against " .. perBuff)
+
+-- And the window says exactly the same thing either way.
+rh.engine:BeginAuraPass()
+local before = {}
+for _, r in ipairs(rh.ui.rows) do
+    if r._active then
+        local st = rh.engine:GroupStat(r._members, r._def)
+        before[#before + 1] = r._def.id .. ":" .. st.nMiss .. "/" .. st.nTotal
+    end
+end
+rh.engine:EndAuraPass()
+local after = {}
+for _, r in ipairs(rh.ui.rows) do
+    if r._active then
+        local st = rh.engine:GroupStat(r._members, r._def)
+        after[#after + 1] = r._def.id .. ":" .. st.nMiss .. "/" .. st.nTotal
+    end
+end
+H.check(#before > 0, "there are rows to compare")
+H.eq(table.concat(after, " "), table.concat(before, " "),
+    "and every row counts the same members missing with the pass as without")
+WoW.byNameBlind = false
+
+------------------------------------------------------------
+-- A refresh that throws must not leave its aura pass behind
+--
+-- The pass belongs to one refresh. Host callbacks - onLayout, footerItems,
+-- the duration and visibility seams - are the ADDON's code running inside
+-- ours, and they can throw. A pass that outlived a failed refresh would still
+-- be answering at CLICK time, which is the read that has to be live: buff
+-- somebody after the snapshot and the button would still think they need it,
+-- or still think they do not.
+--
+-- Replacing the pass at the next refresh is not enough. The click comes
+-- first.
+------------------------------------------------------------
+
+setup()
+ui:Update()
+H.check(host.engine.auraPass == nil, "a refresh that finishes leaves no pass")
+
+host.throwFrom = "onLayout"
+local threw, why = pcall(function() ui:Update() end)
+host.throwFrom = nil
+H.check(not threw, "a host callback that throws is not swallowed")
+H.check(tostring(why):find("onLayout blew up", 1, true) ~= nil,
+    "and arrives as its own message, not as one from the library: " .. tostring(why))
+H.check(host.engine.auraPass == nil, "and the pass it was holding is gone")
+
+-- The read that would have been wrong. Inside the leaked pass party1 is
+-- buffed; live, they are not.
+local fortDef = host.def("fort")
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+ui:Update()
+H.eq(select(3, host.engine:BuffRem("party1", fortDef)), lib.Engine.STATES.HAS,
+    "party1 is buffed while the snapshot is taken")
+host.throwFrom = "onLayout"
+pcall(function() ui:Update() end)
+host.throwFrom = nil
+WoW.auras["party1"] = nil
+H.eq(select(3, host.engine:BuffRem("party1", fortDef)), lib.Engine.STATES.MISSING,
+    "and after the failed refresh the next read is live, not the snapshot")
+
+-- The same for RefreshTimers, whose bracket is a separate one.
+setup()
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1800)
+ui:Update()
+host.throwFrom = "learnDuration"
+threw = pcall(function() ui:RefreshTimers() end)
+host.throwFrom = nil
+H.check(not threw, "a throw inside RefreshTimers propagates too")
+H.check(host.engine.auraPass == nil, "and leaves no pass behind either")
 
 H.done("test_ui_window")
