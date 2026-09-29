@@ -76,6 +76,15 @@ Vanilla content, Retail codebase.
     throttles refreshes itself. Durations are stored by the addon, keyed by the spell name seen.
   - `AuraEventIsRelevant` keeps every payload touch inside one `pcall` and checks every def, not
     only visible ones.
+  - **Aura passes.** Confirming a member does NOT have a buff costs a walk of their auras, so
+    reading buff-by-buff walks each member once per buff. `BeginAuraPass()` / `EndAuraPass()`
+    bracket a refresh: inside one, each member is walked once and every buff reads the answer
+    out of it. `UI.lua` opens a pass around `RefreshTimers` and around `Update` (before
+    `ActiveDefs`, so a host's visibility rule joins it), and a host reading auras of its own
+    should go through `engine:ReadAura(unit, names)` rather than `API.ReadBuff` for the same
+    reason. The boundary is the caller's on purpose: a pass that expired on a timer would be a
+    cache going stale where nothing could observe it. **Do not widen a pass past one refresh** —
+    inside one, a changed roster is deliberately not seen.
 - `UI.lua` — `lib.UI.New(host)`: the buff window over an engine — main frame, one row per group
   per buff, the per-member popover, drag handle, close button, reagent footer and ticker. Host
   seams: `owner`, `title`, `version`, `appearance()` (icon and colour overrides — Wildly's orange

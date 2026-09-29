@@ -30,7 +30,7 @@
 
 -- Same MINOR as every runtime file; see Settings.lua for why the guard is two
 -- checks, and tests/test_versions.lua for the load orders.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.engineMinor == MINOR then return end
@@ -181,6 +181,16 @@ function Methods:RefreshSpells()
         d.hasSingle = API.KnowsSpell(d.snglID) and true or false
         d.hasGroup = (d.grpID and API.KnowsSpell(d.grpID)) and true or false
     end
+    -- Every name anybody is tracking, in one list. An aura pass walks a unit
+    -- once against this rather than once per buff, so it has to be rebuilt
+    -- wherever the names are - which is here, and nowhere else.
+    local all = {}
+    for _, d in ipairs(self.defs) do
+        for _, nm in ipairs(d.names) do
+            if nm then all[#all + 1] = nm end
+        end
+    end
+    self.allNames = all
 end
 
 -- What the addon is actually matching auras against, for a bug report. The
@@ -303,6 +313,44 @@ function Methods:PruneCache()
     end
 end
 
+-- ─── Aura passes ────────────────────────────────────────────────────────────
+--
+-- One refresh asks about every member and every buff, and confirming an
+-- absence costs a walk of that member's auras. Done buff-by-buff that is one
+-- walk per member per buff; a 40-man raid with three buffs measured ~1700
+-- aura reads per pass, several times a second (#6). Inside a pass each member
+-- is walked once and every buff reads the answer out of it.
+--
+-- The boundary is explicit on purpose. A pass that ended on a timer would be
+-- a cache that goes stale invisibly; this one is opened and closed by the
+-- caller, and a test can put a changed roster between two reads and get two
+-- answers.
+function Methods:BeginAuraPass()
+    -- No names yet means RefreshSpells has not run, and a pass whose union is
+    -- empty would match nothing and report every member unbuffed. Refusing to
+    -- open one costs the walk sharing and keeps the answer right.
+    local all = self.allNames
+    if not all or #all == 0 then self.auraPass = nil return end
+    self.auraPass = { names = all, units = {} }
+end
+
+-- Always safe to call, and always safe to skip: BeginAuraPass replaces
+-- whatever was there, so a pass leaked by a throw mid-refresh is discarded at
+-- the start of the next one rather than answering for it.
+function Methods:EndAuraPass()
+    self.auraPass = nil
+end
+
+-- A raw aura read, routed through whatever pass is open.
+--
+-- For a host that asks about auras outside the rows - a visibility rule, say -
+-- so that its reads join the pass instead of walking the same members again.
+-- Returns what API.ReadBuff returns: "HAS", "NONE" or "BLOCKED", then
+-- remaining, duration, expiration, matched name.
+function Methods:ReadAura(unit, names)
+    return lib.API.ReadBuff(unit, names, self.auraPass)
+end
+
 -- Returns remaining, duration, state, matchedSpellName, basis
 --
 -- `basis` says where the answer came from, which matters once auras go
@@ -317,7 +365,7 @@ function Methods:BuffRem(unit, def)
 
     -- Always attempt the live read, so the cache is never coasted on while
     -- real data is available.
-    local status, rem, dur, exp, matched = API.ReadBuff(unit, def.names)
+    local status, rem, dur, exp, matched = API.ReadBuff(unit, def.names, self.auraPass)
 
     if status == "HAS" then
         if rem == math.huge then rem = PERMANENT end

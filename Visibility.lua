@@ -44,7 +44,7 @@
 
 -- Same MINOR as Compat.lua; tests/test_versions.lua checks they agree. Compat
 -- claims the version, so this file only installs when that claim is ours.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.visibilityMinor == MINOR then return end

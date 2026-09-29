@@ -1326,4 +1326,76 @@ H.check(ui.main.hdrBg._colorTexture[1] > before,
 H.check(ui.main.hdrBg._colorTexture[4] < 1,
     "with the material deciding how solid it is, not the host")
 
+------------------------------------------------------------
+-- What a refresh costs at raid scale (#6)
+--
+-- The measurement that opened the issue: a 40-man raid where everybody
+-- carries 21 auras, three buffs tracked, a refresh twice a second. Each
+-- member's auras were walked once PER BUFF to confirm three absences.
+--
+-- This asserts the shape of the cost, not a number: reads should grow with
+-- the roster, not with the roster times the buff list. It runs the real
+-- RefreshTimers, so it also catches a pass that is opened and then not
+-- reached by the reads.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "SPIRIT_SINGLE", "SHADOW_SINGLE" })
+WoW.inRaid = true
+WoW.groupMembers = 40
+for i = 1, 40 do
+    local nm = "Raider" .. i .. " Sur"
+    WoW.raidRoster[i] = { name = nm, subgroup = math.ceil(i / 5) }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "PRIEST" })
+    -- Everyone is carrying a load of somebody else's buffs and none of ours,
+    -- which is the expensive case: an absence is what costs a walk.
+    for a = 1, 21 do WoW.SetAura("raid" .. i, "Filler" .. a, 600, 300) end
+end
+local rh = H.PriestUI()
+rh.engine:RefreshSpells()
+-- The by-name lookup only resolves spells the player knows, so a walk is the
+-- ordinary path, not a corner: see API.ReadBuff.
+WoW.byNameBlind = true
+rh.ui:Update()
+
+WoW.auraReads.byIndex = 0
+rh.ui:RefreshTimers()
+local pooled = WoW.auraReads.byIndex
+
+-- The same refresh with the pass taken away, which is what this used to be.
+local realBegin = rh.engine.BeginAuraPass
+rh.engine.BeginAuraPass = function() end
+WoW.auraReads.byIndex = 0
+rh.ui:RefreshTimers()
+local perBuff = WoW.auraReads.byIndex
+rh.engine.BeginAuraPass = realBegin
+
+local defs = #rh.defs
+H.check(defs >= 3, "three buffs are being tracked, or this measures nothing")
+H.check(perBuff > pooled * 2,
+    "a refresh walks each member once, not once per buff: "
+    .. pooled .. " reads against " .. perBuff)
+
+-- And the window says exactly the same thing either way.
+rh.engine:BeginAuraPass()
+local before = {}
+for _, r in ipairs(rh.ui.rows) do
+    if r._active then
+        local st = rh.engine:GroupStat(r._members, r._def)
+        before[#before + 1] = r._def.id .. ":" .. st.nMiss .. "/" .. st.nTotal
+    end
+end
+rh.engine:EndAuraPass()
+local after = {}
+for _, r in ipairs(rh.ui.rows) do
+    if r._active then
+        local st = rh.engine:GroupStat(r._members, r._def)
+        after[#after + 1] = r._def.id .. ":" .. st.nMiss .. "/" .. st.nTotal
+    end
+end
+H.check(#before > 0, "there are rows to compare")
+H.eq(table.concat(after, " "), table.concat(before, " "),
+    "and every row counts the same members missing with the pass as without")
+WoW.byNameBlind = false
+
 H.done("test_ui_window")

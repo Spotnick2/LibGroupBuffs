@@ -39,7 +39,7 @@
 -- ============================================================================
 
 -- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
 local lib, active = LibStub:GetLibrary(MAJOR, true)
 if not lib or active ~= MINOR then return end
 if lib.uiMinor == MINOR then return end
@@ -1007,6 +1007,10 @@ end
 -- it is what runs in combat. (It still reads auras through the engine, which
 -- updates the engine's cache and learned durations.)
 function Methods:RefreshTimers()
+    -- One aura pass for the whole refresh. Every row here is asking about the
+    -- same members at the same instant, and each member's auras are walked
+    -- once for all of them rather than once per buff (#6).
+    self.engine:BeginAuraPass()
     for _, r in ipairs(self.rows) do
         if r._active then
             self:ApplyRowVisuals(r, self.engine:GroupStat(r._members, r._def))
@@ -1017,6 +1021,7 @@ function Methods:RefreshTimers()
             if pr._active then self:ApplyPopRowVisuals(pr) end
         end
     end
+    self.engine:EndAuraPass()
     -- In combat the hint's list of who needs the buff is the only per-member
     -- view there is, and OnEnter does not fire again while the mouse rests on
     -- the row - so buff somebody and the tooltip would still call them
@@ -1895,8 +1900,18 @@ function Methods:Update()
 
     local groups, ord = engine:GatherGroups()
     if #ord == 0 then self:Close(); return end
+
+    -- As above, for the rebuild: the stats, the targets and the popover
+    -- re-drive at the bottom all describe one moment.
+    --
+    -- Opened BEFORE ActiveDefs, not after. A host's visibility rule can read
+    -- auras too - Priestly's "show Shadow Protection when somebody has it"
+    -- walks the whole roster looking for one - and it is asking about the same
+    -- members this refresh is about to ask about again (#6).
+    engine:BeginAuraPass()
+
     local defs = engine:ActiveDefs(groups, ord)
-    if #defs == 0 then self:Close(); return end
+    if #defs == 0 then engine:EndAuraPass(); self:Close(); return end
 
     self:ApplyAppearance()
 
@@ -2020,7 +2035,7 @@ function Methods:Update()
     end
 
     -- Every buff filtered down to nobody: there is nothing to show.
-    if rowIdx == 0 then self:Close(); return end
+    if rowIdx == 0 then engine:EndAuraPass(); self:Close(); return end
 
     y = y - 2
     y = self:LayoutFooter(y)
@@ -2063,6 +2078,7 @@ function Methods:Update()
             pop:Hide()    -- the row it belonged to is gone
         end
     end
+    engine:EndAuraPass()
 end
 
 -- ─── Is this copy usable? ───────────────────────────────────────────────────

@@ -17,7 +17,7 @@
 -- live in docs/FOREVER-NOTES.md.
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 24
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 25
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- a newer copy is already loaded
 
@@ -136,34 +136,43 @@ end
 --   "MISS"     - an aura is there, but not one of ours
 --   "EMPTY"    - no aura in that slot, so the walk can stop
 --   "BLOCKED"  - the client would not let us look
+--
+-- Declared ONCE at file scope rather than inside matchAura. A function
+-- expression is a fresh closure every time it is evaluated, and this is the
+-- hottest line in the addon: a 40-man raid with three buffs tripped it
+-- thousands of times a second, each allocating a closure and - because the
+-- results were packed with `{ pcall(...) }` - a table as well, for data read
+-- five values later and thrown away (#6). Everything it needs now arrives as
+-- an argument, and pcall's returns are taken as plain multiple returns.
+local function tryMatch(getter, names, ...)
+    local aura = getter(...)
+    if not aura then return "EMPTY" end
+
+    local nm = aura.name
+    local matched
+    for j = 1, #names do
+        if names[j] and nm == names[j] then
+            matched = names[j]
+            break
+        end
+    end
+    if not matched then return "MISS" end
+
+    local dur = aura.duration or 0
+    local exp = aura.expirationTime or 0
+    local remaining
+    if exp == 0 then
+        remaining = huge          -- permanent, not expired
+    else
+        remaining = max(0, exp - GetTime())
+    end
+    return "HIT", remaining, dur, exp, matched
+end
+
 local function matchAura(getter, names, ...)
-    local packed = { pcall(function(...)
-        local aura = getter(...)
-        if not aura then return "EMPTY" end
-
-        local nm = aura.name
-        local matched
-        for j = 1, #names do
-            if names[j] and nm == names[j] then
-                matched = names[j]
-                break
-            end
-        end
-        if not matched then return "MISS" end
-
-        local dur = aura.duration or 0
-        local exp = aura.expirationTime or 0
-        local remaining
-        if exp == 0 then
-            remaining = huge          -- permanent, not expired
-        else
-            remaining = max(0, exp - GetTime())
-        end
-        return "HIT", remaining, dur, exp, matched
-    end, ...) }
-
-    if not packed[1] then return "BLOCKED" end
-    return packed[2], packed[3], packed[4], packed[5], packed[6]
+    local ok, st, rem, dur, exp, matched = pcall(tryMatch, getter, names, ...)
+    if not ok then return "BLOCKED" end
+    return st, rem, dur, exp, matched
 end
 
 -- Returns status, remaining, duration, expirationTime.
@@ -181,7 +190,55 @@ end
 -- either way rather than refusing whenever ShouldAurasBeSecret() is true: if
 -- the restriction turns out not to cover party and raid helpful auras, we keep
 -- live data instead of coasting on a cache.
-function API.ReadBuff(unit, names)
+-- Walk one unit's helpful auras ONCE, matching every name in `names`.
+--
+-- Returns a record rather than a tuple, because a caller wants to ask it
+-- several questions later:
+--   { blocked = bool, sawAny = bool, found = { [name] = {rem,dur,exp} } }
+--
+-- `names` is the union of every name anybody is tracking, not one buff's pair.
+-- That is the whole point: confirming an absence is what costs a walk, and a
+-- priest tracking three buffs used to walk each member's auras three times per
+-- refresh pass to confirm three absences (#6). One walk answers all of them.
+function API.ScanAuras(unit, names)
+    local rec = { blocked = false, sawAny = false, found = {} }
+    if not C_UnitAuras then rec.blocked = true return rec end
+    local byIndex = C_UnitAuras.GetAuraDataByIndex or C_UnitAuras.GetBuffDataByIndex
+    if not byIndex then rec.blocked = true return rec end
+
+    -- The walk stops at the first empty slot, so it costs roughly "number of
+    -- buffs on that unit" iterations rather than 40.
+    for i = 1, 40 do
+        local st, rem, dur, exp, matched = matchAura(byIndex, names, unit, i, "HELPFUL")
+        if st == "BLOCKED" then
+            rec.blocked = true
+            break
+        end
+        if st == "EMPTY" then break end
+        rec.sawAny = true
+        -- Keep the FIRST of a duplicated name, which is the one the old
+        -- early-returning walk reported.
+        if st == "HIT" and not rec.found[matched] then
+            rec.found[matched] = { rem = rem, dur = dur, exp = exp }
+        end
+    end
+    return rec
+end
+
+-- `pass`, when given, is a table the caller keeps for one refresh pass:
+--
+--   { names = <every tracked name>, units = {} }
+--
+-- ReadBuff fills `pass.units[unit]` with that unit's scan the first time it
+-- has to walk, and every later buff on the same unit in the same pass reads
+-- the answer out of it. Without a pass the behaviour is exactly what it was:
+-- a fresh walk, scoped to this buff's names.
+--
+-- The caller owns the boundary deliberately. A pass that expired on a timer,
+-- or on some guess about what counts as "now", would be a cache that answers
+-- stale in a way nothing can see; an explicit begin and end is a thing a test
+-- can drive.
+function API.ReadBuff(unit, names, pass)
     if not unit or not UnitExists(unit) then return "NONE" end
     if not C_UnitAuras then return "BLOCKED" end
 
@@ -203,32 +260,34 @@ function API.ReadBuff(unit, names)
     -- only resolves spells the player knows on this client, and if the by-name
     -- aura lookup shares that resolution then a priest who has not learned
     -- Prayer of Fortitude would never see it on people another priest buffed.
-    -- So confirm an absence by walking. The walk stops at the first empty slot,
-    -- so it costs roughly "number of buffs on that unit" iterations.
-    local byIndex = C_UnitAuras.GetAuraDataByIndex or C_UnitAuras.GetBuffDataByIndex
-    if not byIndex then return "BLOCKED" end
-
-    local sawAny, walkBlocked = false, false
-    for i = 1, 40 do
-        local st, rem, dur, exp, matched = matchAura(byIndex, names, unit, i, "HELPFUL")
-        if st == "BLOCKED" then
-            walkBlocked = true
-            break
+    -- So confirm an absence by walking.
+    local scan
+    if pass then
+        scan = pass.units[unit]
+        if not scan then
+            scan = API.ScanAuras(unit, pass.names or names)
+            pass.units[unit] = scan
         end
-        if st == "EMPTY" then break end
-        sawAny = true
-        if st == "HIT" then return "HAS", rem, dur, exp, matched end
+    else
+        scan = API.ScanAuras(unit, names)
+    end
+
+    if not scan.blocked then
+        for i = 1, #names do
+            local hit = names[i] and scan.found[names[i]]
+            if hit then return "HAS", hit.rem, hit.dur, hit.exp, names[i] end
+        end
     end
 
     -- Only the WALK decides absence. A throw from the fast path says nothing
     -- about the unit if the walk then completed and proved the buff is not
     -- there - latching that flag would pin the member on "unknown" forever.
-    if walkBlocked then return "BLOCKED" end
-    if fastPathBlocked and not sawAny then return "BLOCKED" end
+    if scan.blocked then return "BLOCKED" end
+    if fastPathBlocked and not scan.sawAny then return "BLOCKED" end
     -- Secrecy may hide auras by handing back an empty list rather than
     -- throwing. Seeing nothing at all while it is active is not evidence of
     -- being unbuffed.
-    if not sawAny and API.AurasAreSecret() then return "BLOCKED" end
+    if not scan.sawAny and API.AurasAreSecret() then return "BLOCKED" end
     return "NONE"
 end
 
