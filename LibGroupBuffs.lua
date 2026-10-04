@@ -1862,30 +1862,37 @@ do -- UI ======================================================================
 --         getPos = function() return pos, whyNil end, setPos = function(pos) end,
 --         setVisible = function(visible) end,
 --         onLayout = function(ui) end, onVisibility = function(ui, visible) end,  -- optional
---         onCloseDeferred = function(ui) end,   -- optional: combat refused the hide
+--         onCloseDeferred = function(ui, manual) end,   -- optional: combat refused the hide
 --         onTick = function(ui, elapsed) end,   -- optional: every ~0.5s while visible
---         onAppearance = function(ui) end,      -- optional: the look was (re)applied
+--         onAppearance = function(ui) end,      -- optional: the look changed, no rebuild
 --     })
 --
 -- A companion pane - a second frame of the addon's own under the window, like
 -- Magely's cooldowns - lives on those hooks, and on four rules:
 --
---   * NON-SECURE only: plain frames, no secure templates, no attributes. Such
---     a frame anchored to the window is free in combat (measured on 70009,
---     Spotnick2/Magely#12): it can show, hide, resize and re-anchor during a
---     fight. Parent it to UIParent, not to the window: a child of a protected
---     frame is protected too.
---   * Anchored in onLayout, which runs at the end of an out-of-combat Update.
---     It does not run in combat; a pane that changes size during a fight
---     manages that itself.
+--   * NON-SECURE only: plain frames, no secure templates, no attributes,
+--     PARENTED TO UIParent and anchored to the window. That is the shape
+--     measured free in combat (build 70009, Spotnick2/Magely#12): it showed,
+--     hid, resized and re-anchored during a fight with nothing blocked. A
+--     child of the window was not measured - and would hide whenever the
+--     window does, and take its alpha.
+--   * Anchored, sized AND scaled in onLayout, which ends every out-of-combat
+--     rebuild: being UIParent's, the pane does not inherit the window's scale,
+--     so it copies it (pane:SetScale(main:GetScale())) or its width, measured
+--     in the window's units, comes out wrong on screen. onLayout does not run
+--     in combat; a pane that changes size during a fight manages that itself.
 --   * Visibility follows ui:IsVisible(), via onVisibility: when the window is
 --     closed in combat the pane hides AT ONCE, though the window's own frame
 --     stays up until the fight ends (the client refuses to hide it).
---   * onTick drives its countdowns: on the window's own half-second tick,
---     in and out of combat, only while the window is visible. `elapsed` is
---     the time since the previous tick. onAppearance re-reads ui:Appearance()
---     and ui:Alpha(): it runs whenever ApplyAppearance does, which the alpha
---     slider and a spec change call without an Update.
+--   * onTick(ui, elapsed) is a refresh cadence: on the window's half-second
+--     tick, in and out of combat, only while the window is visible. `elapsed`
+--     is the window's visible time since the previous tick, NOT wall time -
+--     nothing ticks while it is closed or the UI is hidden - so count
+--     cooldowns down from GetTime(), never by summing `elapsed`.
+--   * onAppearance(ui) runs when the look changes OUTSIDE a rebuild - the
+--     alpha or scale slider, a spec change - and only once the window has
+--     been laid out. A rebuild ends in onLayout instead, so the pane takes
+--     the look (ui:Appearance(), ui:Alpha(), the scale) there as well.
 --
 -- The addon keeps its events, slash commands, options panel and policy (who
 -- the window opens for, and when) and calls the methods below from them.
@@ -2164,6 +2171,9 @@ end
 local function Call(fn, ...)
     if fn then return fn(...) end
 end
+
+-- Defined with the appearance code below; Init, above it, applies the look.
+local ApplyLook
 
 -- ─── Construction ───────────────────────────────────────────────────────────
 
@@ -2745,7 +2755,7 @@ function Methods:Init()
     -- Colours and icon: the one place they are applied, so a new appearance
     -- key cannot be applied at build time and forgotten on a change, or the
     -- reverse.
-    self:ApplyAppearance()
+    ApplyLook(self)
     return true
 end
 
@@ -3012,7 +3022,9 @@ local function ReleaseTooltip()
     end
 end
 
-function Methods:ApplyAppearance()
+-- The look itself, with no host hook: what Init and a rebuild use, since a
+-- rebuild ends in onLayout, where a companion takes the look anyway.
+function ApplyLook(self)
     if not self.main then return end
     ApplyScale(self)
     local look = self:Appearance()
@@ -3033,8 +3045,16 @@ function Methods:ApplyAppearance()
     RimColour(pop, look.popBorder)
     local hdiv = self:PopDivider()
     if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
-    -- Last, so a companion reads the look the window now wears.
-    Call(self.host.onAppearance, self)
+end
+
+-- The look changed without a rebuild (the alpha or scale slider, a spec
+-- change): tell a companion, last, so it reads the look the window now
+-- wears - but only once onLayout has run, because that is where a companion
+-- builds its pane, and before it there is nothing to recolour.
+function Methods:ApplyAppearance()
+    if not self.main then return end
+    ApplyLook(self)
+    if self.laidOut then Call(self.host.onAppearance, self) end
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────
@@ -3626,21 +3646,6 @@ local function SetVisible(self, visible)
     if was ~= visible then Call(self.host.onVisibility, self, visible) end
 end
 
--- Close the window. `manual` means the player asked, which the addon saves.
--- Returns whether the frames are hidden NOW: in combat they cannot be, so the
--- window stops refreshing and goes when the fight ends.
---
--- When the window is still on screen, a deferred close calls the addon's
--- onCloseDeferred, so every way of closing - the X button, a slash command, a
--- keybind, AND the addon's own automatic closes - explains itself the same
--- way. An automatic close used to say nothing (#45): a player who unticked
--- "show when solo" mid-fight watched the window stay up, apparently ignored.
--- `manual` decides only whether the close is saved as the player's
--- preference, never whether it is explained. What matters is that a frame
--- is still visible, NOT whether the window was logically open: a close after
--- an automatic one during the same fight finds `visible` already false. Said
--- once per pending close, not once per click. The return value is there for
--- a caller that wants to handle it itself.
 -- A flat square has no affordance of its own - a Blizzard button announces
 -- itself by being gold - so it brightens under the cursor. A method rather
 -- than a closure, because the frame outlives the copy that installed it.
@@ -3653,6 +3658,26 @@ function Methods:CloseButtonHover(btn, over)
     end
 end
 
+-- Close the window. `manual` means the player asked, which the addon saves.
+-- Returns whether the frames are hidden NOW: in combat they cannot be, so the
+-- window stops refreshing and goes when the fight ends.
+--
+-- When the window is still on screen, a deferred close calls the addon's
+-- onCloseDeferred, so every way of closing - the X button, a slash command, a
+-- keybind, AND the addon's own automatic closes - explains itself the same
+-- way. An automatic close used to say nothing (#45): a player who unticked
+-- "show when solo" mid-fight watched the window stay up, apparently ignored.
+-- `manual` decides only whether the close is saved as the player's
+-- preference, never whether it is explained. What matters is that a frame
+-- is still visible, NOT whether the window was logically open: a close after
+-- an automatic one during the same fight finds `visible` already false.
+--
+-- Said once per pending close AND kind, not once per click: the host gets
+-- onCloseDeferred(ui, manual), so it can word "your group emptied" and "you
+-- clicked X" differently, and the player's own close after an automatic one
+-- in the same fight is answered too - it is a new thing to tell them. A
+-- manual explanation covers any later close in that fight. The return value
+-- is there for a caller that wants to handle it itself.
 function Methods:Close(manual)
     if InCombatLockdown() then
         self.closePending = true
@@ -3669,12 +3694,18 @@ function Methods:Close(manual)
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
     if self.closePending then
-        if not self.closeExplained and self.main and self.main:IsShown() then
-            self.closeExplained = true
-            Call(self.host.onCloseDeferred, self)
+        -- Once per pending close and kind: an automatic close explained
+        -- earlier in the fight does not answer the player's own click on X
+        -- later, which is a new thing to tell them.
+        local kind = manual and "manual" or "auto"
+        local told = self.closeExplained
+        if told == true then told = "manual" end   -- r26 latched manual closes only
+        if self.main and self.main:IsShown() and told ~= "manual" and told ~= kind then
+            self.closeExplained = kind
+            Call(self.host.onCloseDeferred, self, manual and true or false)
         end
     else
-        self.closeExplained = false
+        self.closeExplained = nil
     end
     return not self.closePending
 end
@@ -3765,7 +3796,7 @@ function Methods:OnCombatEnd()
     end
     if self.closePending then
         self.closePending = false
-        self.closeExplained = false
+        self.closeExplained = nil
         if self.main then self.main:Hide() end
         if self.pop then self.pop:Hide() end
     end
@@ -3859,7 +3890,7 @@ local function Rebuild(self)
     local defs = engine:ActiveDefs(groups, ord)
     if #defs == 0 then self:Close(); return end
 
-    self:ApplyAppearance()
+    ApplyLook(self)
 
     for _, r in ipairs(self.rows) do r._active = false; r:Hide() end
     for _, h in ipairs(self.headers) do h:Hide() end
@@ -4007,9 +4038,16 @@ local function Rebuild(self)
     end
 
     main:Show()
-    self.closeExplained = false
+    -- Shown for real, out of combat: a close recorded in combat is superseded
+    -- by this later request, and OnCombatEnd must not hide the window it
+    -- would leave logically open (and a companion following IsVisible up).
+    self.closePending = false
+    self.closeExplained = nil
+    -- A fresh tick: time left over from before a close is not this showing's.
+    if not self.visible then self.tick = 0 end
     SetVisible(self, true)
     Call(self.host.setVisible, true)
+    self.laidOut = true
     Call(self.host.onLayout, self)
 
     -- A rebuild rewires the rows but not an open popover, whose members and

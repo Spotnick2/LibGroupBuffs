@@ -427,8 +427,9 @@ H.check(not ui:IsVisible(), "a close after combat's end beats the rebuild it que
 
 -- The window can close ITSELF during a fight - the group empties - and the
 -- frame stays up because the client refuses to hide it. That close is
--- explained at once (#45), and the player clicking X on the window they can
--- still see is not told a second time in the same fight.
+-- explained at once (#45). The player clicking X on the window they can
+-- still see is answered as well: it is their own close, a new thing to tell
+-- them, and the host is told which kind each one was.
 setup()
 ui:Update()
 WoW.inCombat = true
@@ -436,11 +437,31 @@ host.deferredCloses = 0
 ui:Close()                                  -- the addon's own close: the group emptied
 H.check(ui.main:IsShown() and not ui:IsVisible(), "still on screen, logically closed")
 H.eq(host.deferredCloses, 1, "its own close is explained, since the window visibly stays")
+H.eq(host.deferredManual, false, "as an automatic close")
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "and the player clicking X is not told again in the same fight")
+H.eq(host.deferredCloses, 2, "and the player clicking X afterwards is answered too")
+H.eq(host.deferredManual, true, "as their own")
+H.runScript(ui.main.closeBtn, "OnClick")
+ui:Close()
+H.eq(host.deferredCloses, 2, "after which nothing more is said in that fight, of either kind")
 WoW.inCombat = false
 ui:OnCombatEnd()
 H.check(not ui.main:IsShown(), "and the fight's end hides it")
+WoW.flushTimers(1)
+
+-- A window an r26 copy left mid-fight carries that copy's latch, `true`,
+-- which r26 set only for the player's own close: it counts as manual.
+setup()
+ui:Update()
+WoW.inCombat = true
+ui:Close(true)
+ui.closeExplained = true                    -- as r26 left it
+host.deferredCloses = 0
+ui:Close(true)
+ui:Close()
+H.eq(host.deferredCloses, 0, "an r26 latch is read as a manual explanation already given")
+WoW.inCombat = false
+ui:OnCombatEnd()
 WoW.flushTimers(1)
 
 -- Once it is really hidden, closing again says nothing: there is no window.

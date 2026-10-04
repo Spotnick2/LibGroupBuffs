@@ -28,6 +28,27 @@ for _, key in ipairs({ "onTick", "onAppearance" }) do
         key .. " must be a function or nil: " .. tostring(err))
 end
 
+-- A window built but never laid out: its first rebuild found nobody to buff
+-- (solo, "show when solo" off), so Init made the frames and onLayout never
+-- ran - there is no pane yet. The alpha slider must not reach onAppearance.
+do
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    local early = H.PriestEngine()
+    early.config.showSolo = false
+    local paneless, heard = nil, 0
+    local eui = lib.UI.New({
+        engine = early.engine, owner = "Magely",
+        onLayout = function() paneless = paneless or CreateFrame("Frame", nil, UIParent) end,
+        onAppearance = function() heard = heard + 1; paneless:SetAlpha(1) end,
+    })
+    early.engine:RefreshSpells()
+    eui:Update()
+    H.check(eui.main ~= nil and paneless == nil, "built, but never laid out: no pane")
+    H.check(pcall(eui.ApplyAppearance, eui), "the slider moving then does not reach a pane that is not there")
+    H.eq(heard, 0, "onAppearance waits for the first onLayout")
+end
+
 ------------------------------------------------------------
 -- A Magely-shaped host with a companion pane
 ------------------------------------------------------------
@@ -46,15 +67,21 @@ local function Setup()
         getPos = function() return nil, "no saved pos" end,
         setPos = function() end,
         setVisible = function(v) host.saved.visible = v end,
-        onCloseDeferred = function() host.deferredCloses = (host.deferredCloses or 0) + 1 end,
+        onCloseDeferred = function(_, manual)
+            host.deferredCloses = (host.deferredCloses or 0) + 1
+            host.deferredManual = manual
+        end,
         -- The pane, built and anchored where the window lays itself out.
         onLayout = function(ui)
             local main = ui:MainFrame()
             if not host.pane then host.pane = CreateFrame("Frame", nil, UIParent) end
             host.pane:ClearAllPoints()
             host.pane:SetPoint("TOPLEFT", main, "BOTTOMLEFT", 0, -2)
+            -- UIParent's child: it does not inherit the window's scale.
+            host.pane:SetScale(main:GetScale())
             host.pane:SetWidth(main:GetWidth())
             host.pane:Show()
+            host.layouts = (host.layouts or 0) + 1
         end,
         -- Its visibility follows ui:IsVisible(), not the window's frame.
         onVisibility = function(_, visible)
@@ -62,12 +89,15 @@ local function Setup()
         end,
         onTick = function(ui, elapsed) host.ticks[#host.ticks + 1] = elapsed end,
         -- What the window itself now wears, not what the host asked for.
+        -- Touches the pane straight away, as a host would: onLayout made it.
         onAppearance = function(ui)
+            host.pane:SetScale(ui:MainFrame():GetScale())
             host.looks[#host.looks + 1] = ui.main.glass.tint._colorTexture[4]
         end,
+        scale = function() return host.config.scale end,
     })
     host.engine:RefreshSpells()
-    host.ui:Update()
+    host.ui:Update()                -- would throw if onAppearance ran before onLayout
     return host
 end
 
@@ -79,9 +109,12 @@ local point, relTo, relPoint = pane:GetPoint(1)
 H.eq(relTo, ui:MainFrame(), "anchored to the window")
 H.eq(point .. "/" .. relPoint, "TOPLEFT/BOTTOMLEFT", "under it")
 H.eq(pane:GetWidth(), ui:MainFrame():GetWidth(), "at its width")
--- Parented to UIParent, not to the window: a child of a frame that parents
--- secure buttons is protected itself, and could not hide in combat.
-H.eq(pane:GetParent(), UIParent, "and parented to UIParent, not to the protected window")
+H.eq(#host.looks, 0, "and onAppearance did not run inside the rebuild: onLayout covers it")
+ui:Update()
+H.eq(#host.looks, 0, "nor inside any later rebuild")
+-- Parented to UIParent: the shape measured free in combat (Magely#12). A
+-- child of the window would hide whenever it does, and take its alpha.
+H.eq(pane:GetParent(), UIParent, "and parented to UIParent, the shape measured in combat")
 
 ------------------------------------------------------------
 -- onTick: the window's own half-second clock
@@ -111,6 +144,28 @@ H.eq(#host.looks, 1, "ApplyAppearance tells the pane, once")
 H.near(host.looks[1], lib.glass.STYLE.tint[4] * 0.4, 0.0001,
     "after the window took the new look, so the pane matches what is on screen")
 
+-- The scale slider: ApplyAppearance rescales the window, and the pane, a
+-- child of UIParent, has to follow or its width is wrong on screen.
+host.config.scale = 1.3
+ui:ApplyAppearance()
+H.eq(ui:MainFrame():GetScale(), 1.3, "the window took the new scale")
+H.eq(pane:GetScale(), 1.3, "and the pane followed it in onAppearance")
+host.config.scale = nil
+ui:ApplyAppearance()
+
+------------------------------------------------------------
+-- A fresh clock on every show
+------------------------------------------------------------
+
+host.ticks = {}
+H.runScript(ui.main, "OnUpdate", 0.45)
+ui:Close(true)
+ui:Update()                     -- reopened later
+H.runScript(ui.main, "OnUpdate", 0.06)
+H.eq(#host.ticks, 0, "time left over from before a close does not tick the reopened window")
+H.runScript(ui.main, "OnUpdate", 0.45)
+H.eq(#host.ticks, 1, "half a second of THIS showing does")
+
 ------------------------------------------------------------
 -- A close in combat: the pane goes at once, the window when the fight ends
 ------------------------------------------------------------
@@ -121,13 +176,32 @@ host.deferredCloses = 0
 ui:Close(true)
 H.check(ui.main:IsShown(), "the window's frame stays up: the client refuses to hide it")
 H.check(not pane:IsShown(), "the pane hides AT ONCE, following ui:IsVisible()")
-H.eq(#WoW.blockedCalls, 0, "which the client allows, the pane being non-secure")
+H.eq(#WoW.blockedCalls, 0, "and the library made no call the client blocks")
 host.ticks = {}
 H.runScript(ui.main, "OnUpdate", 1.0)
 H.eq(#host.ticks, 0, "and onTick stops with the window")
 WoW.inCombat = false
 ui:OnCombatEnd()
 H.check(not ui.main:IsShown(), "the fight's end hides the window too")
+WoW.flushTimers(1)
+
+------------------------------------------------------------
+-- Reopened after a fight, before the fight's end was handled
+--
+-- A timer can rebuild the window out of combat before PLAYER_REGEN_ENABLED
+-- reaches OnCombatEnd. That later show wins over the close recorded in combat,
+-- or OnCombatEnd would hide a window that is logically open - and leave a
+-- pane that follows IsVisible on screen with nothing above it.
+------------------------------------------------------------
+
+ui:Update()
+WoW.inCombat = true
+ui:Close(true)
+WoW.inCombat = false
+ui:Update()                     -- shown again before the fight's end is handled
+ui:OnCombatEnd()
+H.check(ui:IsVisible() and ui.main:IsShown(), "the later show wins: open, and on screen")
+H.check(pane:IsShown(), "with the pane under it")
 WoW.flushTimers(1)
 
 ------------------------------------------------------------
@@ -156,6 +230,7 @@ host.config.showSolo = false
 vis:SoloToggled(false)
 H.check(not ui:IsVisible() and ui.main:IsShown(), "the window is closed but still on screen")
 H.eq(host.deferredCloses, 1, "and the addon is asked to explain, though it was not the player's close")
+H.eq(host.deferredManual, false, "told it was automatic, so it can word it as such")
 H.eq(host.saved.visible, nil, "while the player's preference is left alone")
 H.eq(host.preferenceWritten, nil, "on both sides")
 vis:SoloToggled(false)

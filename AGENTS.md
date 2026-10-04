@@ -143,7 +143,7 @@ and the like name those sections.
   seams: `owner`, `title`, `version`, `appearance()` (icon and colour overrides — Wildly's orange
   header, Magely's per-spec colours), `unknownClassIcon`, `footerItems()` (data, not frames), config
   accessors (`alpha`, `locked`, `popoverSide`, `showClickHints`), position/visibility storage
-  (`getPos` returning `pos, whyNil`, `setPos`, `setVisible`), `onCloseDeferred`, and `onLayout` /
+  (`getPos` returning `pos, whyNil`, `setPos`, `setVisible`), `onCloseDeferred(ui, manual)`, and `onLayout` /
   `onVisibility` / `onTick` / `onAppearance` for a companion pane such as Magely's cooldowns.
   Contracts:
   - **Frames are anonymous.** The library creates no globals; tests and addons reach frames
@@ -160,21 +160,38 @@ and the like name those sections.
     handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
     `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
     `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
-  - **A deferred close is always explained** (`onCloseDeferred`, once per pending close) while the
-    frame is still on screen, whoever asked for it: the X button, a slash command, or the addon's
-    own automatic close (the group emptied, "show when solo" unticked mid-fight). `manual` decides
-    only whether the close is saved as the player's preference (`setVisible(false)`). Until r27
-    automatic closes said nothing, and the window looked as if it ignored the player (#45).
+  - **A deferred close is always explained** while the frame is still on screen, whoever asked
+    for it: the X button, a slash command, or the addon's own automatic close (the group emptied,
+    "show when solo" unticked mid-fight). The host gets `onCloseDeferred(ui, manual)`, so it can
+    word the two kinds differently. It is said once per pending close **and kind**: the player's
+    X after an automatic close in the same fight is answered too, and a manual explanation covers
+    the rest of that fight. `manual` also decides whether the close is saved as the player's
+    preference (`setVisible(false)`). Until r27 automatic closes said nothing (#45). An r26
+    copy's latch, `true`, reads as manual. Known limit: an automatic close explained in a fight
+    can be reversed by a later event in that fight (the group refills), and then the window
+    stays.
+  - **A show out of combat supersedes a close recorded in combat:** `Rebuild` clears
+    `closePending` when it shows the window, so an `OnCombatEnd` handled late never hides a
+    window that is logically open.
   - **Companion panes (#24, r27).** An addon's own frame under the window, like Magely's
-    cooldowns, uses only the window's hooks and four rules (also in the UI section's header):
-    **non-secure only and parented to UIParent** (a plain frame anchored under the window is free
-    in combat, measured on 70009 in Spotnick2/Magely#12; a child of the window would be protected
-    with it); **anchored in `onLayout`**, which runs only at the end of an out-of-combat `Update`,
-    so a pane that resizes in a fight manages that itself; **visibility follows `ui:IsVisible()`**
-    through `onVisibility`, so a close in combat hides the pane at once while the window's frame
-    waits for the fight's end; **`onTick(ui, elapsed)`** on the window's half-second tick, in and
-    out of combat, only while it is visible, and **`onAppearance(ui)`** at the end of
-    `ApplyAppearance` (the alpha slider and a spec change call it without an `Update`).
+    cooldowns, uses only the window's hooks (rules also in the UI section's header):
+    - **non-secure, parented to UIParent, anchored to the window**. That is the shape measured
+      free in combat (70009, Spotnick2/Magely#12). A child of the window was not measured, and
+      would hide with it and take its alpha. (Protection spreads to a secure frame's
+      *ancestors*, not its children, so "a child would be protected" is not the reason.)
+    - **anchored, sized and scaled in `onLayout`**, which ends every out-of-combat rebuild. As
+      UIParent's child the pane copies `main:GetScale()`, or its width is wrong on screen.
+      `onLayout` does not run in combat.
+    - **visibility follows `ui:IsVisible()`** through `onVisibility`: a close in combat hides the
+      pane at once, while the window's frame waits for the fight's end.
+    - **`onTick(ui, elapsed)`** is a refresh cadence on the window's half-second tick, in and out
+      of combat, only while it is visible, restarting at 0 on every show. `elapsed` is visible
+      time, not wall time: count cooldowns from `GetTime()`.
+    - **`onAppearance(ui)`** runs when the look changes **outside** a rebuild (alpha or scale
+      slider, spec change) and only after the first `onLayout`. A rebuild calls `ApplyLook`
+      directly and ends in `onLayout`, where the pane takes the look too.
+    - Host callbacks are not wrapped in `pcall`: a throwing `onTick` is the host's script error,
+      every half second, and the library does not hide it.
     `tests/test_companion.lua` builds one and runs every hook.
   - **`Open` coalesces**, like `ScheduleRefresh`: the events that open a window arrive in pairs
     (`RAID_ROSTER_UPDATE` with `GROUP_ROSTER_UPDATE`, `PLAYER_TALENT_UPDATE` with
