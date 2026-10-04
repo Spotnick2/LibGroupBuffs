@@ -28,7 +28,11 @@ end
 local MINOR_PATTERN = 'local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)'
 
 ------------------------------------------------------------
--- Every runtime file declares the same MINOR
+-- One runtime file, one MINOR, one completion marker
+--
+-- Up to r25 the library was six files, each with its own guard and marker.
+-- Since r26 it is one. The released multi-file copies below stay exactly as
+-- they shipped, because they are what other addons still carry.
 ------------------------------------------------------------
 
 -- The current copy: every file the XML loads except the bundled LibStub.
@@ -38,15 +42,16 @@ for _, file in ipairs(H.xmlScripts()) do
         CURRENT_FILES[#CURRENT_FILES + 1] = { name = file, src = ReadFile(file) }
     end
 end
-H.check(#CURRENT_FILES >= 2, "the XML lists the library's files")
+H.eq(#CURRENT_FILES, 1, "the XML loads one runtime file besides LibStub")
+H.eq(CURRENT_FILES[1].name, "LibGroupBuffs.lua", "and it is LibGroupBuffs.lua")
 
-local CURRENT = tonumber(CURRENT_FILES[1].src:match(MINOR_PATTERN))
-H.check(CURRENT ~= nil, CURRENT_FILES[1].name .. " declares its MINOR")
-for _, file in ipairs(CURRENT_FILES) do
-    H.eq(tonumber(file.src:match(MINOR_PATTERN)), CURRENT,
-        file.name .. " declares the same MINOR - one that disagreed would never install, "
-        .. "or install over a newer copy")
-end
+local CURRENT_SRC = CURRENT_FILES[1].src:gsub("\r\n", "\n")
+local CURRENT = tonumber(CURRENT_SRC:match(MINOR_PATTERN))
+H.check(CURRENT ~= nil, "LibGroupBuffs.lua declares its MINOR")
+local _, declared = CURRENT_SRC:gsub(MINOR_PATTERN, "")
+H.eq(declared, 1, "exactly once: a second literal is a bump that can be forgotten")
+H.eq(CURRENT_SRC:match("([^\n]+)%s*$"), "lib.ready = MINOR",
+    "and the completion marker is its last line, so a copy that threw is not marked ready")
 
 -- A copy is a list of { name, src }, loaded in order like the XML.
 local function load(copy, label)
@@ -110,8 +115,12 @@ local R19, R20 = Fixtures(19, GLASS_FILES), Fixtures(20, GLASS_FILES)
 local R21, R22 = Fixtures(21, GLASS_FILES), Fixtures(22, GLASS_FILES)
 local R23 = Fixtures(23, GLASS_FILES)
 -- r24 added Visibility.lua, so its fixture is six files rather than five.
-local R24 = Fixtures(24, { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "UI.lua",
-                           "Visibility.lua" })
+local SIX_FILES = { "Compat.lua", "Glass.lua", "Settings.lua", "Engine.lua", "UI.lua",
+                    "Visibility.lua" }
+local R24 = Fixtures(24, SIX_FILES)
+-- r25 is the last multi-file release: what Priestly, Magely and Wildly ship
+-- until each moves to r26 in a release of its own.
+local R25 = Fixtures(25, SIX_FILES)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 local function freshLibStub()
@@ -151,9 +160,8 @@ H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its re
 
 -- Every runtime file marks itself complete with the active MINOR, which is
 -- what a consumer checks: a marker that merely exists can be an older copy's.
-for _, marker in ipairs({ "compatMinor", "settingsMinor", "engineMinor", "uiMinor" }) do
-    H.eq(lib[marker], CURRENT, marker .. " is the active MINOR")
-end
+H.eq(lib.ready, CURRENT, "lib.ready is the active MINOR")
+H.eq(lib.fileMinors.LibGroupBuffs, CURRENT, "and so is the record lib.Status reads")
 
 ------------------------------------------------------------
 -- An older copy after a newer one: it must return before touching anything.
@@ -180,7 +188,7 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 } }) do
+for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 }, { 25, R25 } }) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -210,7 +218,7 @@ H.check(LibStub("LibGroupBuffs-1.0") == lib, "newer-after-r3 upgrades the same l
 H.check(lib.API == api, "and the same API table, so references taken earlier stay valid")
 H.check(type(lib.Settings) == "table" and type(lib.Settings.New) == "function",
     "gaining Settings, which r3 lacked")
-H.eq(lib.settingsMinor, CURRENT, "installed by the claiming copy")
+H.eq(lib.ready, CURRENT, "installed by the claiming copy")
 H.check(lib.API.eventFailures == failures, "keeping r3's failure table")
 H.eq(lib.API.eventFailures.PROBE, "recorded by r3", "and what r3 recorded in it")
 H.eq((lib.API.eventFailuresByOwner.Priestly or {}).PROBE, "recorded for Priestly by r3",
@@ -234,12 +242,12 @@ local r4Settings = lib.Settings.New({
 local r4Meta = getmetatable(r4Settings)
 
 load(CURRENT_FILES, "current")
-H.eq(lib.settingsMinor, CURRENT, "newer-after-r4 installs the newer Settings")
+H.eq(lib.ready, CURRENT, "newer-after-r4 installs the newer copy")
 H.check(getmetatable(r4Settings) == r4Meta, "an object r4 created keeps its metatable")
 r4Settings:Set("lockFrame", true)
 H.eq(r4Store.lockFrame, true, "and still works")
 H.check(type(lib.Engine.New) == "function", "Engine arrives")
-H.eq(lib.engineMinor, CURRENT, "installed by the claiming copy")
+H.eq(lib.ready, CURRENT, "installed by the claiming copy")
 
 ------------------------------------------------------------
 -- A newer copy after r2: the upgrade Priestly v2.0.x players will meet.
@@ -287,7 +295,7 @@ H.eq(#r13Said, 1, "r13 announces a marker back on the same build - the relog fal
 
 load(CURRENT_FILES, "current")
 H.eq(activeMinor(), CURRENT, "newer-after-r13 claims the library")
-H.eq(lib.settingsMinor, CURRENT, "and installs its Settings")
+H.eq(lib.ready, CURRENT, "and installs itself")
 r13Said = {}
 r13Store.svLoadCheck = { stamp = "then", build = WoW.build }
 r13Settings:CheckLoad(true)
@@ -352,11 +360,11 @@ made:Set("lockFrame", true)
 local meta = getmetatable(made)
 
 local NEXT = withMinor(CURRENT_FILES, CURRENT + 1, {
-    ["Settings.lua"] = "LibStub('LibGroupBuffs-1.0').SettingsMethods.Probe = function() return 'next' end",
+    ["LibGroupBuffs.lua"] = "LibStub('LibGroupBuffs-1.0').SettingsMethods.Probe = function() return 'next' end",
 })
 load(NEXT, "next")
 H.eq(activeMinor(), CURRENT + 1, "the next copy claims the library")
-H.eq(lib.settingsMinor, CURRENT + 1, "and installs its Settings")
+H.eq(lib.ready, CURRENT + 1, "and installs itself")
 H.check(getmetatable(made) == meta, "the object keeps its metatable")
 H.eq(made.Probe and made:Probe(), "next", "and runs the newer copy's methods")
 H.eq(store.lockFrame, true, "without losing what it wrote")
@@ -372,9 +380,9 @@ eng.cache["GUID-x"] = { fort = { exp = 0, dur = 0, stamp = 1 } }
 local engMeta, cache, states = getmetatable(eng), eng.cache, lib.Engine.STATES
 
 load(withMinor(CURRENT_FILES, CURRENT + 1, {
-    ["Engine.lua"] = "LibStub('LibGroupBuffs-1.0').EngineMethods.Probe = function() return 'next' end",
+    ["LibGroupBuffs.lua"] = "LibStub('LibGroupBuffs-1.0').EngineMethods.Probe = function() return 'next' end",
 }), "next")
-H.eq(lib.engineMinor, CURRENT + 1, "the next copy installs its Engine")
+H.eq(lib.ready, CURRENT + 1, "the next copy installs itself")
 H.check(getmetatable(eng) == engMeta, "an existing engine keeps its metatable")
 H.eq(eng.Probe and eng:Probe(), "next", "and runs the newer copy's methods")
 H.check(eng.cache == cache and eng.cache["GUID-x"] ~= nil, "with its aura cache intact")
@@ -392,7 +400,7 @@ lib = LibStub("LibGroupBuffs-1.0")
 H.eq(lib.UI, nil, "r5 has no UI")
 local r5Engine = lib.Engine.New({ defs = { { id = "x", snglID = 1243 } }, bucketSize = 8 })
 load(CURRENT_FILES, "current")
-H.eq(lib.uiMinor, CURRENT, "newer-after-r5 installs UI")
+H.eq(lib.ready, CURRENT, "newer-after-r5 installs UI")
 H.check(pcall(lib.UI.New, { engine = r5Engine, owner = "Priestly" }),
     "and it accepts an engine the r5 copy created")
 
@@ -420,15 +428,14 @@ local appearance, border, icons = lib.UI.DEFAULT_APPEARANCE, lib.UI.DEFAULT_APPE
 w:Open(0.5)                                  -- queued before the upgrade
 
 load(withMinor(CURRENT_FILES, CURRENT + 1, {
-    ["UI.lua"] = [[
+    ["LibGroupBuffs.lua"] = [[
 local m = LibStub('LibGroupBuffs-1.0').UIMethods
 m.RowPreClick = function(self, r) r._probe = 'next' end
 local oldUpdate = m.Update
 m.Update = function(self) self._probeUpdate = 'next' return oldUpdate(self) end
 ]],
 }), "next")
-H.eq(lib.uiMinor, CURRENT + 1, "the next copy installs its UI")
-H.eq(lib.compatMinor, CURRENT + 1, "and every file marks the new MINOR complete")
+H.eq(lib.ready, CURRENT + 1, "the next copy installs itself and marks the new MINOR complete")
 H.check(lib.UI.DEFAULT_APPEARANCE == appearance and lib.UI.DEFAULT_APPEARANCE.border == border,
     "the public appearance table, and its colours, are the same tables after the upgrade")
 H.check(lib.UI.CLASS_ICONS == icons, "and so is the class icon map")
@@ -737,25 +744,41 @@ H.eq(lib.Status(CURRENT), "ok", "and putting them back makes it ok again")
 -- Incomplete beats too-old: a half-loaded ancient copy is broken, not merely
 -- behind, and the host should say so.
 do
-    local kept = lib.fileMinors.Engine
-    lib.fileMinors.Engine = nil
+    local kept = lib.fileMinors.LibGroupBuffs
+    lib.fileMinors.LibGroupBuffs = nil
     H.eq(lib.Status(CURRENT + 5), "incomplete", "a broken copy reports broken, not too-old")
-    lib.fileMinors.Engine = kept
+    lib.fileMinors.LibGroupBuffs = kept
 end
 
--- Status is installed by the LAST file, so its own absence is the answer for
--- a copy whose UI.lua threw. Proved by loading everything except that file.
+-- A copy that throws partway never reaches its last line. Whatever Status a
+-- host then finds - the thrower's own, if it got that far, or the previous
+-- copy's - must answer "incomplete", never "ok".
+local function Throwing(before)
+    local src = CURRENT_SRC:gsub(MINOR_PATTERN, 'local MAJOR, MINOR = "LibGroupBuffs-1.0", '
+        .. (CURRENT + 1), 1)
+    local at = src:find(before, 1, true)
+    H.check(at ~= nil, "the section marker '" .. before .. "' exists")
+    return { { name = "LibGroupBuffs.lua",
+               src = src:sub(1, at - 1) .. 'error("thrown mid-load")\n' .. src:sub(at) } }
+end
+for _, case in ipairs({
+    { before = "do -- UI ",         label = "before UI, so before its Status" },
+    { before = "do -- Visibility ", label = "after UI, so with its own Status" },
+}) do
+    freshLibStub()
+    load(R25, "r25")
+    local ok = pcall(load, Throwing(case.before), "throws " .. case.label)
+    H.check(not ok, "the throwing copy really threw (" .. case.label .. ")")
+    local half = LibStub("LibGroupBuffs-1.0")
+    H.eq(activeMinor(), CURRENT + 1, "NewLibrary already counted the thrower's MINOR")
+    H.eq(half.Status(25), "incomplete", "an r25 host is told incomplete (" .. case.label .. ")")
+    H.check(half.ready ~= CURRENT + 1, "and the thrower is not marked ready")
+end
 do
     freshLibStub()
-    local partial = {}
-    for _, file in ipairs(CURRENT_FILES) do
-        if file.name ~= "UI.lua" then partial[#partial + 1] = file end
-    end
-    load(partial, "no UI")
+    pcall(load, Throwing("do -- UI "), "fresh throw")
     local half = LibStub("LibGroupBuffs-1.0")
-    H.eq(half.Status, nil, "a copy whose last file threw has no Status to call")
-    H.eq(half.fileMinors.UI, nil, "and no record for it")
-    H.check(half.fileMinors.Engine == CURRENT, "though the files before it did finish")
+    H.eq(half.Status, nil, "a fresh copy that threw before UI has no Status: absence means incomplete")
 end
 
 -- An upgrade keeps the same tables, like everything else public here.
@@ -776,14 +799,17 @@ H.eq(lib.Status(CURRENT), "ok", "and every file re-recorded itself")
 
 local scripts = H.xmlScripts()
 H.eq(scripts[1], "LibStub/LibStub.lua", "LibStub loads first")
-H.eq(scripts[2], "Compat.lua", "Compat.lua claims the version before any other file checks it")
+H.eq(scripts[2], "LibGroupBuffs.lua", "then the library, in one file")
+H.eq(#scripts, 2, "and nothing else")
+-- Inside it, the sections keep the order the files had.
 local position = {}
-for i, file in ipairs(scripts) do position[file] = i end
-H.check((position["Engine.lua"] or 0) > (position["Compat.lua"] or 99), "Engine.lua loads after the API it calls")
-H.check((position["UI.lua"] or 0) > (position["Engine.lua"] or 99),
-    "UI.lua after the engine it draws")
-H.check((position["Visibility.lua"] or 0) > (position["UI.lua"] or 99),
-    "and Visibility.lua last, after the window whose opening it decides")
+for _, name in ipairs({ "Compat", "Glass", "Settings", "Engine", "UI", "Visibility" }) do
+    position[name] = CURRENT_SRC:find("\ndo %-%- " .. name .. " ") or 0
+    H.check(position[name] > 0, "the " .. name .. " section exists")
+end
+H.check(position.Engine > position.Compat, "Engine after the API it calls")
+H.check(position.UI > position.Engine, "UI after the engine it draws")
+H.check(position.Visibility > position.UI, "and Visibility last, after the window whose opening it decides")
 for _, file in ipairs(scripts) do
     local f = io.open(file, "rb")
     H.check(f ~= nil, "the XML lists " .. file .. ", which must exist")
@@ -862,5 +888,34 @@ report = freshEngine:SpellReport()
 H.eq(report[1].forms[1].from, "fallback", "a def this copy created is stamped from the start")
 H.eq(report.unresolved, 1, "so a name that never resolved is counted")
 nowLib.API.SpellName = realName
+
+------------------------------------------------------------
+-- A window r25 built, running under the single-file copy
+--
+-- r25 is what every consumer ships until it moves on, so this is the upgrade
+-- most players meet: one addon carries r25 and built the window, another
+-- carries the newer copy, which takes over the same frames mid-session.
+------------------------------------------------------------
+
+freshLibStub()
+load(R25, "r25")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local r25Host = H.PriestUI()
+r25Host.config.visible.shadow = false
+r25Host.engine:RefreshSpells()
+r25Host.ui:Update()
+H.check(r25Host.ui.main:IsShown(), "r25 built and opened the window")
+local r25Main, r25Row, r25Glass = r25Host.ui.main, r25Host.ui.rows[1], r25Host.ui.main.glass
+
+load(CURRENT_FILES, "current")
+H.eq(activeMinor(), CURRENT, "the single-file copy took over")
+H.eq(lib.Status(25), "ok", "and an r25 host asking on it is told ok")
+H.check(pcall(r25Host.ui.Update, r25Host.ui), "the r25 window rebuilds under the new code")
+H.check(r25Host.ui.main == r25Main and r25Host.ui.rows[1] == r25Row, "keeping its frames")
+H.check(r25Host.ui.main.glass == r25Glass, "and the glass r25 built: nothing is rebuilt")
+H.check(#H.ActiveRows(r25Host.ui) > 0, "with its rows still drawn")
 
 H.done("test_versions")

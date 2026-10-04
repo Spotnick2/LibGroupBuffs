@@ -100,13 +100,8 @@ local shipped = {}
 for _, file in ipairs(tracked) do
     if isMedia(file) then shipped[file:sub(7, -5)] = true end
 end
-local glassFile = assert(io.open("Glass.lua", "r"),
-    "Glass.lua must be readable from the repository root")
-local glassSrc = glassFile:read("*a")
-glassFile:close()
--- Every runtime file, not just Glass.lua: UI.lua draws bar_edge and bar_mask
--- directly for the icon tiles and the close button, and scanning only the
--- material's own file would have let a typo in either through.
+-- Every runtime script, not just the material's section: the window draws
+-- bar_edge and bar_mask directly for the icon tiles and the close button.
 local checked = 0
 for _, file in ipairs(scripts) do
     local fh = assert(io.open(file, "r"), file .. " must be readable from the repository root")
