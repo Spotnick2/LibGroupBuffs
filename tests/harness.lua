@@ -59,14 +59,67 @@ function H.xmlScripts(root)
     return files, xmls
 end
 
--- Load the library the way the client does, once. Every file must load: the
--- previous version skipped any that failed, which also hid syntax errors.
-function H.loadLibrary(root)
+-- The addon the tests pretend to be. The client passes every file an addon's
+-- XML loads that addon's name as `...`, and LibGlass builds its media path
+-- from it.
+H.HOST = "Priestly"
+
+-- LibGlass-1.0 is a dependency embedded SIDE BY SIDE by each consumer, so the
+-- library's tests load it from a checkout: $LIBGLASS, else ../LibGlass. No
+-- checkout fails the run loudly; a silently skipped dependency would test a
+-- window that cannot draw in game.
+function H.libGlassRoot()
+    local root = (os.getenv("LIBGLASS") or "../LibGlass"):gsub("\\", "/"):gsub("/$", "")
+    local f = io.open(root .. "/LibGlass-1.0.xml", "rb")
+    if not f then
+        error("LibGlass checkout not found at " .. root .. " (no LibGlass-1.0.xml): clone "
+              .. "github.com/Spotnick2/LibGlass there or set LIBGLASS", 0)
+    end
+    f:close()
+    return root
+end
+
+-- The Lua files LibGlass-1.0.xml loads, as paths, in order. A listed file that
+-- is missing fails here, the way it would in game.
+function H.libGlassScripts()
+    local root = H.libGlassRoot()
+    local f = assert(io.open(root .. "/LibGlass-1.0.xml", "rb"))
+    local xml = f:read("*a"):gsub("<!%-%-.-%-%->", "")   -- listed in a comment is not loaded
+    f:close()
+    local files = {}
+    for file in xml:gmatch('<Script%s+file="([^"]+)"') do
+        local path = root .. "/" .. file:gsub("\\", "/")
+        local src = io.open(path, "rb")
+        if not src then error("LibGlass checkout at " .. root .. " is missing " .. file, 0) end
+        src:close()
+        files[#files + 1] = path
+    end
+    if #files == 0 then error("LibGlass-1.0.xml at " .. root .. " lists no Script files", 0) end
+    return files
+end
+
+-- Load LibGlass as a consumer's TOC does, before this library.
+function H.loadLibGlass(host)
+    for _, path in ipairs(H.libGlassScripts()) do
+        local chunk, err = loadfile(path)
+        if not chunk then error("LibGlass: cannot load " .. path .. ": " .. tostring(err), 2) end
+        chunk(host or H.HOST, {})
+    end
+    return LibStub("LibGlass-1.0")
+end
+
+-- Load the library the way the client does, once: LibGlass first, as every
+-- consumer's TOC orders it, then every file this XML lists. Every file must
+-- load: the previous version skipped any that failed, which also hid syntax
+-- errors. `opts.noGlass` leaves LibGlass out, for the tests of its absence.
+function H.loadLibrary(root, opts)
     root = root or "."
+    opts = opts or {}
+    if not opts.noGlass then H.loadLibGlass(opts.host) end
     for _, file in ipairs(H.xmlScripts(root)) do
         local chunk, err = loadfile(root .. "/" .. file)
         if not chunk then error("LibGroupBuffs: cannot load " .. file .. ": " .. tostring(err), 2) end
-        chunk()
+        chunk(opts.host or H.HOST, {})
     end
     local lib = LibStub("LibGroupBuffs-1.0")
     return lib, lib.API

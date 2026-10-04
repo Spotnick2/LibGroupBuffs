@@ -1,9 +1,10 @@
 <#
     run.ps1 - Run all LibGroupBuffs unit tests.
 
-    The tests are plain Lua 5.1 scripts (no dependencies) that load the addon
-    files against tests/wow_stubs.lua. WoW uses Lua 5.1, so the tests do too -
-    not the newer Lua that may be first on PATH.
+    The tests are plain Lua 5.1 scripts that load the library against
+    tests/wow_stubs.lua, with LibGlass-1.0 from a checkout ($env:LIBGLASS, else
+    ..\LibGlass) loaded first, as every consumer's TOC does. WoW uses Lua 5.1,
+    so the tests do too - not the newer Lua that may be first on PATH.
 
     Usage:
         pwsh tests/run.ps1
@@ -27,6 +28,26 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $RepoRoot
 try {
     $failed = 0
+
+    # LibGlass-1.0 is a dependency consumers embed beside this library, so the
+    # tests load it from a checkout: $env:LIBGLASS, else ..\LibGlass. CI fetches
+    # the ref in tests/libglass-ref.txt; a local checkout elsewhere still runs,
+    # with a warning, because a LibGlass change is often tested before a bump.
+    $libGlass = if ($env:LIBGLASS) { $env:LIBGLASS } else { Join-Path (Split-Path -Parent $RepoRoot) "LibGlass" }
+    if (-not (Test-Path -LiteralPath (Join-Path $libGlass "LibGlass-1.0.xml"))) {
+        Write-Host "LibGlass checkout not found at $libGlass - clone github.com/Spotnick2/LibGlass there or set LIBGLASS" -ForegroundColor Red
+        exit 1
+    }
+    $env:LIBGLASS = $libGlass
+    $ref = (Get-Content (Join-Path $PSScriptRoot "libglass-ref.txt") -TotalCount 1).Trim()
+    $want = git -C $libGlass rev-parse --verify --quiet "$ref^{commit}" 2>$null
+    $head = git -C $libGlass rev-parse HEAD 2>$null
+    $dirty = git -C $libGlass status --porcelain 2>$null
+    if (-not $want -or $want -ne $head -or $dirty) {
+        Write-Host "WARNING: LibGlass at $libGlass is not $ref$(if ($dirty) { ', or has uncommitted changes' }); CI tests $ref" -ForegroundColor Yellow
+    } else {
+        Write-Host "LibGlass: $libGlass at $ref" -ForegroundColor DarkGray
+    }
 
     # Syntax-check the shipping files first: a parse error there would show up
     # as a confusing load failure inside every test.

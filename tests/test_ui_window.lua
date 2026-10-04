@@ -906,12 +906,16 @@ H.check(glass.rim and glass.rim._slice ~= nil, "and a sliced rim")
 H.check(glass.top and glass.top:GetFrameLevel() > ui.main:GetFrameLevel(),
     "with the rim's layer above the panel, so content cannot draw over it")
 
--- Every texture the material names must be a file that ships: a typo here is
--- a green suite and a missing texture in game.
-local media = lib.Glass.MEDIA
-H.check(type(media) == "string" and media:find("Media"), "media path: " .. tostring(media))
+-- The material is LibGlass-1.0's: one instance, created for the first window
+-- and kept on the library, drawing from LibGlass's own folder in the host.
+H.check(type(lib.glass) == "table" and lib.glass.Apply ~= nil, "the window draws through a LibGlass instance")
+local media = lib.glass.MEDIA
+H.eq(media, "Interface\\AddOns\\" .. H.HOST .. "\\Libs\\LibGlass-1.0\\Media\\",
+    "from LibGlass's folder, embedded beside this library")
 H.check(glass.shadow._texture:find(media, 1, true) == 1,
     "and the layers are loaded from it: " .. tostring(glass.shadow._texture))
+-- LibGlass's rim, not v1's: drawn at STYLE.rimAlpha (0.7) rather than opaque.
+H.eq(glass.rim._alpha, lib.glass.STYLE.rimAlpha, "the rim is drawn at LibGlass's rim alpha")
 
 -- A row's colour is a glass bar's colour now.
 local row = ui.rows[1]
@@ -993,7 +997,7 @@ ui:Update()
 host.ui_config.alpha = 0.2
 ui:ApplyAppearance()
 local tint = ui.main.glass.tint._colorTexture
-local base = lib.Glass.STYLE.tint[4]
+local base = lib.glass.STYLE.tint[4]
 H.near(tint[4], base * 0.2, 0.001, "the host's opacity scales the glass tint: " .. tostring(tint[4]))
 host.ui_config.alpha = 1
 ui:ApplyAppearance()

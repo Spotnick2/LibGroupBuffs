@@ -299,6 +299,9 @@ local function makeFrame(name, parent, template)
     f.GetAttribute = function(self, k) return self._attr[k] end
     f.Show = function(self) self._shown = true return self end
     f.Hide = function(self) self._shown = false return self end
+    -- Frame:SetShown and Texture:SetShown, both in the 70205 dump. LibGlass
+    -- builds the directional edge and shows each part only when it is lit.
+    f.SetShown = function(self, shown) self._shown = shown and true or false return self end
     f.IsShown = function(self) return self._shown end
     -- Predicates must be explicit: the catch-all __index below returns a
     -- function for any unknown method, and a function is truthy, so an

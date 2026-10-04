@@ -53,11 +53,12 @@ H.eq(declared, 1, "exactly once: a second literal is a bump that can be forgotte
 H.eq(CURRENT_SRC:match("([^\n]+)%s*$"), "lib.ready = MINOR",
     "and the completion marker is its last line, so a copy that threw is not marked ready")
 
--- A copy is a list of { name, src }, loaded in order like the XML.
-local function load(copy, label)
+-- A copy is a list of { name, src }, loaded in order like the XML, with the
+-- embedding addon's name as `...` the way the client passes it.
+local function load(copy, label, host)
     for _, file in ipairs(copy) do
         local chunk = assert(loadstring(file.src, "=" .. file.name .. " (" .. label .. ")"))
-        chunk()
+        chunk(host or H.HOST, {})
     end
 end
 
@@ -123,9 +124,12 @@ local R24 = Fixtures(24, SIX_FILES)
 local R25 = Fixtures(25, SIX_FILES)
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
-local function freshLibStub()
+-- A session starting: nothing registered but LibGlass-1.0, which every
+-- consumer's TOC loads before this library. `noGlass` leaves it out.
+local function freshLibStub(noGlass)
     LibStub = nil
     load({ { name = "LibStub.lua", src = ReadFile("LibStub/LibStub.lua") } }, "bundled")
+    if not noGlass then H.loadLibGlass() end
 end
 
 local function activeMinor()
@@ -917,5 +921,107 @@ H.check(pcall(r25Host.ui.Update, r25Host.ui), "the r25 window rebuilds under the
 H.check(r25Host.ui.main == r25Main and r25Host.ui.rows[1] == r25Row, "keeping its frames")
 H.check(r25Host.ui.main.glass == r25Glass, "and the glass r25 built: nothing is rebuilt")
 H.check(#H.ActiveRows(r25Host.ui) > 0, "with its rows still drawn")
+
+-- Its panels wear r25's own v1 glass, and the new code colours them through
+-- the same region fields LibGlass builds: g.tint and g.rim.
+r25Host.ui_config.alpha = 0.5
+r25Host.ui:ApplyAppearance()
+H.near(r25Glass.tint._colorTexture[4], lib.glass.STYLE.tint[4] * 0.5, 0.001,
+    "the host's opacity reaches the tint r25 built")
+r25Host.look = { mainBg = { 0.05, 0.05, 0.08 }, border = { 1.0, 0.5, 0.1, 0.85 },
+                 popBg = { 0.06, 0.06, 0.09 }, popBorder = { 0.1, 0.9, 0.9, 1 },
+                 header = { 0, 0, 0, 0.4 }, headerLine = { 1, 1, 1, 0.1 },
+                 footerLine = { 1, 1, 1, 0.1 }, groupText = { 0.8, 0.8, 0.8 },
+                 popDivider = { 1, 1, 1, 0.1 } }
+r25Host.ui:ApplyAppearance()
+H.near((r25Glass.rim:GetVertexColor()), 1.0, 0.001, "and the host's border colour the rim r25 built")
+-- Stated limitation, not a bug: a panel built by r25 keeps its v1 rim, drawn
+-- opaque, until /reload. Repainting it would overwrite what a host set itself.
+H.eq(r25Glass.rim._alpha, nil, "the r25 rim is not repainted to LibGlass's alpha")
+
+------------------------------------------------------------
+-- LibGlass-1.0 is a dependency every consumer embeds beside this library
+--
+-- Without it - or with a LibGlass copy that threw partway through loading -
+-- the window cannot draw, so the copy is not usable. That is what lib.Status
+-- answers, and it is asked of the ACTIVE copy: an r25 host (Magely, Wildly)
+-- asks it of another addon's newer copy, and must not be told "ok" by one
+-- that shipped without LibGlass.
+------------------------------------------------------------
+
+local GLASS_SRC = ReadFile(H.libGlassScripts()[#H.libGlassScripts()]):gsub("\r\n", "\n")
+local GLASS_MINOR_PATTERN = 'local MAJOR, MINOR = "LibGlass%-1%.0", (%d+)'
+local glassMinor = tonumber(GLASS_SRC:match(GLASS_MINOR_PATTERN))
+H.check(glassMinor ~= nil, "the LibGlass checkout declares its MINOR")
+-- A newer LibGlass that throws before its completion marker: registered under
+-- its MINOR, with the previous copy's marker and functions still in place.
+local GLASS_THROWS = GLASS_SRC:gsub(GLASS_MINOR_PATTERN,
+    'local MAJOR, MINOR = "LibGlass-1.0", ' .. (glassMinor + 1), 1)
+    :gsub("\nlib%.ready = MINOR%s*$", '\nerror("LibGlass thrown mid-load")\nlib.ready = MINOR\n')
+H.check(GLASS_THROWS:find("LibGlass thrown mid-load", 1, true) ~= nil, "the throwing LibGlass is built")
+
+for _, case in ipairs({
+    { glass = "absent",            window = false },
+    { glass = "absent",            window = true },
+    { glass = "thrown mid-load",   window = false },
+    { glass = "thrown mid-load",   window = true },
+}) do
+    local label = "LibGlass " .. case.glass .. (case.window and ", r25 window up" or ", no window")
+    freshLibStub(case.glass == "absent")
+    if case.glass == "thrown mid-load" then
+        H.check(not pcall(load, { { name = "LibGlass.lua", src = GLASS_THROWS } }, "throwing LibGlass"),
+            "the newer LibGlass threw (" .. label .. ")")
+    end
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    H.Party3()
+    local host
+    if case.window then
+        load(R25, "r25")
+        host = H.PriestUI()
+        host.engine:RefreshSpells()
+        host.ui:Update()
+    end
+    load(CURRENT_FILES, "current")
+    lib = LibStub("LibGroupBuffs-1.0")
+    H.eq(lib.Status(25), "incomplete", "an r25 host is told incomplete (" .. label .. ")")
+    H.eq(lib.Status(), "incomplete", "and so is anyone asking without a floor (" .. label .. ")")
+    if not host then
+        host = H.PriestUI()
+        host.engine:RefreshSpells()
+    end
+    local ok, err = pcall(host.ui.Update, host.ui)
+    H.check(not ok and tostring(err):find("needs LibGlass-1.0", 1, true) ~= nil,
+        "and drawing says what is missing rather than failing somewhere obscure ("
+        .. label .. "): " .. tostring(err))
+end
+
+-- The media path is LibGlass's business: it follows the addon whose LibGlass
+-- copy won, whichever addon's LibGroupBuffs copy did.
+freshLibStub(true)
+H.loadLibGlass("Wildly")
+load(CURRENT_FILES, "current", "Priestly")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local mixed = H.PriestUI()
+mixed.engine:RefreshSpells()
+mixed.ui:Update()
+H.eq(lib.Status(), "ok", "LibGlass from one addon and LibGroupBuffs from another is ok")
+H.eq(lib.glass.MEDIA, "Interface\\AddOns\\Wildly\\Libs\\LibGlass-1.0\\Media\\",
+    "and the textures come from the folder of the addon whose LibGlass loaded")
+
+-- One instance, kept across an upgrade of this library: a newer copy must not
+-- make a second one (LibGlass keeps a registry, and would migrate both).
+local glassInst = lib.glass
+local glassCount = 0
+for _ in pairs(LibStub("LibGlass-1.0").instances) do glassCount = glassCount + 1 end
+load(withMinor(CURRENT_FILES, CURRENT + 1, {}), "next")
+mixed.ui:Update()
+H.check(lib.glass == glassInst, "the LibGlass instance survives an upgrade of this library")
+local after = 0
+for _ in pairs(LibStub("LibGlass-1.0").instances) do after = after + 1 end
+H.eq(after, glassCount, "and no second one is made")
 
 H.done("test_versions")
