@@ -858,11 +858,6 @@ do -- Settings ================================================================
 -- replaced or cleared later is still the one written to.
 -- ============================================================================
 
--- Same MINOR as Compat.lua; tests/test_versions.lua checks they agree. Compat
--- claims the version, so this file only installs when that claim is ours:
--- older after newer, the active MINOR is not ours; equal after equal, it is
--- already installed and reinstalling would replace functions others hold.
-
 -- Reused across upgrades. Objects hold the shared metatable, and methods are
 -- assigned into the shared table, so an object made by an older copy runs the
 -- newer methods once one loads.
@@ -1153,9 +1148,6 @@ do -- Engine ==================================================================
 -- `engine:BuffRem(...)` - never a copy of `engine.BuffRem` - and a newer
 -- embedded copy's methods reach an engine an older copy created.
 -- ============================================================================
-
--- Same MINOR as every runtime file; see Settings.lua for why the guard is two
--- checks, and tests/test_versions.lua for the load orders.
 
 lib.Engine = lib.Engine or {}
 lib.EngineMethods = lib.EngineMethods or {}
@@ -1892,8 +1884,6 @@ do -- UI ======================================================================
 --     that copy of the library forever; a method lookup runs the newest one.
 -- ============================================================================
 
--- Same MINOR as every runtime file; see Settings.lua for the two-check guard.
-
 lib.UI = lib.UI or {}
 lib.UIMethods = lib.UIMethods or {}
 lib.UIMeta = lib.UIMeta or {}
@@ -1985,15 +1975,16 @@ local function IconTile(parent, size, point, relTo, relPoint, x, y)
     -- border in their outer few percent, and the rounding eats its corners;
     -- cropping the rest with SetTexCoord is NOT the way to remove it, because
     -- a mask is applied in the texture's untransformed space.
+    local media = GlassInst().MEDIA
     local mask = box:CreateMaskTexture()
-    mask:SetTexture(GlassInst().MEDIA .. "bar_mask",
+    mask:SetTexture(media .. "bar_mask",
                     "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     mask:SetAllPoints(box)
     tile:AddMaskTexture(mask)
 
     local edge = box:CreateTexture(nil, "OVERLAY")
     edge:SetAllPoints(box)
-    edge:SetTexture(GlassInst().MEDIA .. "bar_edge")
+    edge:SetTexture(media .. "bar_edge")
     edge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
     local modes = Enum and Enum.UITextureSliceMode
     edge:SetTextureSliceMode((modes and modes.Stretched) or 0)
@@ -2631,6 +2622,11 @@ end
 function Methods:Init()
     if self.main then return true end
     if InCombatLockdown() then return false end
+    -- Before anything is assigned to self: Init returns early once self.main
+    -- exists, so a window that threw halfway through building would stay
+    -- half-built, failing every later refresh on some missing part instead
+    -- of naming what is missing.
+    GlassInst()
     local nGroups, nRows, nPop = self:Capacity()
     self.capacity = { groups = nGroups, rows = nRows, popRows = nPop }
 
@@ -2950,10 +2946,17 @@ end
 -- The material's own tint alpha is what its author settled on for a panel at
 -- full opacity, so the host's alpha scales it rather than replacing it - at
 -- 100% it looks as the material intends, and below that it thins out.
+--
+-- A panel that is already built needs nothing from LibGlass to be recoloured,
+-- so a window an older copy built (with its own v1 glass) keeps refreshing even
+-- when another addon's newer copy arrived without LibGlass: the material's
+-- tint alpha is then the value v1 and LibGlass r1 share. Building still needs
+-- LibGlass, and says so.
+local BUILT_TINT = { 0.13, 0.16, 0.22, 0.24 }
 local function TintPanel(f, colour, alpha)
     local g = Panel(f)
     if not g or not g.tint then return end
-    local base = GlassInst().STYLE.tint
+    local base = GlassUsable() and GlassInst().STYLE.tint or BUILT_TINT
     g.tint:SetColorTexture(colour[1], colour[2], colour[3], base[4] * (alpha or 1))
 end
 
@@ -4095,9 +4098,6 @@ do -- Visibility ==============================================================
 -- it without passing through here.
 -- ============================================================================
 
--- Same MINOR as Compat.lua; tests/test_versions.lua checks they agree. Compat
--- claims the version, so this file only installs when that claim is ours.
-
 -- Reused across upgrades. Objects hold the shared metatable, and methods are
 -- assigned into the shared table, so an object an older copy made runs the
 -- newer methods once one loads - including one that has already observed a
@@ -4304,13 +4304,26 @@ lib.shared.MINOR = MINOR
 
 local impl = lib.impl
 
+-- A constructor's argument errors name the line that called it, at level 3
+-- from its Fail helper. Reached through an instance, level 3 is a library
+-- frame - in Lua 5.1 the marker a tail call leaves, which has no position at
+-- all - so the host's line was lost. Caught here without a position and
+-- raised again at the host's level: 1 is Construct, 2 impl, 3 the instance
+-- function, 4 the host. (Lua 5.1 counts a tail call as a level too, so the
+-- count holds whether or not those frames tail-call.)
+local function Construct(new, arg)
+    local ok, made = pcall(new, arg)
+    if not ok then error(made, 4) end
+    return made
+end
+
 function impl.Engine(_, host)
-    return lib.Engine.New(host)
+    return Construct(lib.Engine.New, host)
 end
 
 function impl.UI(inst, host)
     if type(host) == "table" and host.owner == nil then host.owner = inst.owner end
-    return lib.UI.New(host)
+    return Construct(lib.UI.New, host)
 end
 
 function impl.Settings(inst, spec)
@@ -4318,11 +4331,11 @@ function impl.Settings(inst, spec)
         if spec.owner == nil then spec.owner = inst.owner end
         if spec.report == nil then spec.report = inst.report end
     end
-    return lib.Settings.New(spec)
+    return Construct(lib.Settings.New, spec)
 end
 
 function impl.Visibility(_, spec)
-    return lib.Visibility.New(spec)
+    return Construct(lib.Visibility.New, spec)
 end
 
 -- One reporter for everything an instance has to say: rejected events arrive
@@ -4347,10 +4360,11 @@ local FUNCTIONS = { "Engine", "UI", "Settings", "Visibility", "RegisterEvents", 
 
 -- Give an instance every function it lacks. Never overwrites: a function an
 -- older copy bound already dispatches through lib.impl, and a host may have
--- wrapped one.
+-- wrapped one. rawget, because the instance reads lib.shared through its
+-- metatable, and a shared value must never stand in for a function.
 local function Migrate(inst)
     for _, name in ipairs(FUNCTIONS) do
-        if inst[name] == nil then
+        if rawget(inst, name) == nil then
             inst[name] = function(...) return lib.impl[name](inst, ...) end
         end
     end
@@ -4403,6 +4417,13 @@ end -- New
 -- Last, so a copy that threw partway through is not marked complete: Status
 -- and New compare this with the active MINOR, and after a newer copy threw,
 -- the older copy's marker is still here with the older number.
+--
+-- The named per-file markers are written too, all at once and all equal:
+-- hosts released before lib.Status (Priestly v2.0.5-v2.0.6, Wildly v1.0.0,
+-- pins r5-r11) decide whether the library loaded by reading them, and refuse
+-- to start when one is missing or older than the active MINOR.
 -- ============================================================================
+lib.compatMinor, lib.glassMinor, lib.settingsMinor = MINOR, MINOR, MINOR
+lib.engineMinor, lib.uiMinor, lib.visibilityMinor = MINOR, MINOR, MINOR
 lib.fileMinors.LibGroupBuffs = MINOR
 lib.ready = MINOR

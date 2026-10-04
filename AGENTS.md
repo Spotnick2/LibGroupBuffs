@@ -58,9 +58,10 @@ and the like name those sections.
   (a message for players, no file position) unless the active copy finished loading
   (`lib.ready`), LibGlass is usable and the active MINOR is at least `needs`; a dot call, a
   missing owner or reporter, or a second instance for the same owner are developer errors. The
-  instance is **dot-called**: `Engine`, `UI`, `Settings`, `Visibility` (owner and reporter filled in
-  when absent, never over the host's), `RegisterEvents` (rejections reach the same
-  `report(text, "events")`), `EventFailures`, `TimerColor`, `Pct`, `FmtTime`; and **data only**
+  instance is **dot-called**: `Engine`, `UI` (the owner filled in when the host gave none),
+  `Settings` (owner and reporter filled in when absent, never over the host's), `Visibility`,
+  `RegisterEvents` (rejections reach the same `report(text, "events")`), `EventFailures`,
+  `TimerColor`, `Pct`, `FmtTime`; and **data only**
   through `lib.shared`: `API`, `STATES`, `PET_GROUP`, `LOAD_CHECK_KEY`, `CLASS_ICONS`, `MINOR`.
   - Every instance function is `function(...) return lib.impl[name](inst, ...) end`, so an
     instance an older copy made runs the newest code. **Never** capture an impl function in
@@ -70,10 +71,17 @@ and the like name those sections.
     (`X = X or {}`). On load the newest copy migrates every instance by **adding** functions it
     lacks (`== nil`); it never replaces one, because a host may have wrapped it.
   - A new instance function: an `impl.X` plus an entry appended to `FUNCTIONS`. Never remove or
-    rename one: within `LibGroupBuffs-1.0` the API only grows.
+    rename one: within `LibGroupBuffs-1.0` the API only grows. Migration checks with `rawget`,
+    because the instance reads `lib.shared` through `__index`.
+  - Constructors go through `Construct`, which re-raises a constructor's argument error at the
+    host's level (4). Without it the host's file:line is lost: the constructors' `Fail` raises at
+    level 3, which through an instance is a library frame.
 - **The pre-r26 surface is frozen, not removed:** `lib.API`, `lib.Engine.New`, `lib.UI.New`,
-  `lib.Settings.New`, `lib.Visibility.New`, `lib.Status`, `lib.FILES`, `lib.fileMinors`. Hosts
-  pinned to r25 and earlier call them on whichever copy is newest.
+  `lib.Settings.New`, `lib.Visibility.New`, `lib.Status`, `lib.FILES`, `lib.fileMinors`, **and the
+  named markers** `lib.compatMinor`, `glassMinor`, `settingsMinor`, `engineMinor`, `uiMinor`,
+  `visibilityMinor`, all written as MINOR next to `lib.ready`. Hosts pinned to r25 and earlier
+  call them on whichever copy is newest, and those from before `Status` (Priestly v2.0.5-v2.0.6,
+  Wildly v1.0.0) refuse to start unless every named marker equals the active MINOR.
 - **`lib.Status(needsMinor)`** answers "is this copy usable?" for those older hosts: `"ok"`,
   `"incomplete"` (the copy did not finish, an older copy's record survives under a newer active
   MINOR, **or LibGlass is missing or half-loaded**) or `"too-old"` (complete, just behind - nothing
@@ -171,6 +179,11 @@ and the like name those sections.
   Colours passed to a glass bar's `SetStatusBarColor` must be plain (LibGlass's hook compares
   them). Panels an r25 copy built keep their v1 regions (opaque rim) until `/reload`: nothing
   repaints them, and `TintPanel` / `RimColour` only touch `g.tint` / `g.rim`, which both have.
+  **Only building needs LibGlass**: a window already built keeps refreshing without it
+  (`TintPanel` falls back to the tint alpha v1 and LibGlass r1 share), so one addon's packaging
+  mistake cannot stop another addon's working window. `Init` checks LibGlass **before** assigning
+  anything to `self`, because it returns early once `self.main` exists, and a window that threw
+  halfway through building would otherwise stay half-built.
   - **Geometry is adopted too, not only looks.** Frames are built ONCE - `Init` returns early when
     `self.main` exists - so a window an older copy built reaches newer code with the previous
     sizes, fonts and icons while every position the newer code computes is measured against metrics

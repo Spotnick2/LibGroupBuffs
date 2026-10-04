@@ -110,6 +110,18 @@ local vis = GB.Visibility({ ui = ui, isMyClass = function() return true end,
     setPreference = function() end })
 H.eq(getmetatable(vis), lib.VisibilityMeta, "GB.Visibility builds the visibility rules")
 
+-- A constructor's argument error names the HOST's line, as the direct
+-- lib.Settings.New call does - not a line inside the library, and not nothing.
+local okBad, errBad = pcall(function() GB.Settings({ scopes = "not a list" }) end)
+H.check(not okBad, "a bad spec through the instance is an error")
+H.check(tostring(errBad):find("test_new%.lua:%d+:") ~= nil,
+    "pointing at the line that called GB.Settings: " .. tostring(errBad))
+H.check(tostring(errBad):find("LibGroupBuffs Settings.New", 1, true) ~= nil,
+    "with the constructor's own message")
+local okEng, errEng = pcall(function() GB.UI({ engine = "not an engine" }) end)
+H.check(not okEng and tostring(errEng):find("test_new%.lua:%d+:") ~= nil,
+    "and the same for GB.UI: " .. tostring(errEng))
+
 ------------------------------------------------------------
 -- One reporter for everything an instance says
 ------------------------------------------------------------
@@ -150,5 +162,18 @@ H.check(MG.API == GB.API, "while the read-only data is shared")
 local magelyUI = { engine = engine }
 MG.UI(magelyUI)
 H.eq(magelyUI.owner, "Magely", "and each fills in its own owner")
+
+------------------------------------------------------------
+-- Migration reads the instance itself, never through the shared table
+------------------------------------------------------------
+
+-- A later copy could put a data key in lib.shared with the name of a later
+-- instance function. Read through __index, that value would look like the
+-- function already being there, and the function would never be installed.
+lib.shared.Engine = { "shared data, not a function" }
+local fresh = setmetatable({ owner = "Probe", report = report }, lib.instanceMT)
+lib._test.Migrate(fresh)
+H.eq(type(rawget(fresh, "Engine")), "function", "a shared value never stands in for a function")
+lib.shared.Engine = nil
 
 H.done("test_new")

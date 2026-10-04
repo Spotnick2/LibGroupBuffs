@@ -88,7 +88,8 @@ For development, check both repositories out next to your addon (`../LibGlass`,
 Then one call, once, at load:
 
 ```lua
-local lib = LibStub("LibGroupBuffs-1.0")
+local lib = LibStub("LibGroupBuffs-1.0", true)   -- silent: nil if the library is missing
+if not lib then print("MyAddon: LibGroupBuffs-1.0 is missing - reinstall the addon") return end
 local ok, GB = pcall(lib.New, lib, {
     owner  = "MyAddon",
     report = function(text, kind) print("MyAddon: " .. text) end,   -- the library never prints

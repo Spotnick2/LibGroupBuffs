@@ -166,6 +166,12 @@ H.eq(lib.API.eventFailures.PROBE, "recorded before the second load", "and its re
 -- what a consumer checks: a marker that merely exists can be an older copy's.
 H.eq(lib.ready, CURRENT, "lib.ready is the active MINOR")
 H.eq(lib.fileMinors.LibGroupBuffs, CURRENT, "and so is the record lib.Status reads")
+-- Hosts released before lib.Status read the per-file markers themselves.
+for _, marker in ipairs({ "compatMinor", "glassMinor", "settingsMinor", "engineMinor",
+                          "uiMinor", "visibilityMinor" }) do
+    H.eq(lib[marker], CURRENT, marker .. " is still written, for hosts that predate Status")
+end
+
 
 ------------------------------------------------------------
 -- An older copy after a newer one: it must return before touching anything.
@@ -991,9 +997,22 @@ for _, case in ipairs({
         host.engine:RefreshSpells()
     end
     local ok, err = pcall(host.ui.Update, host.ui)
-    H.check(not ok and tostring(err):find("needs LibGlass-1.0", 1, true) ~= nil,
-        "and drawing says what is missing rather than failing somewhere obscure ("
-        .. label .. "): " .. tostring(err))
+    if case.window then
+        -- Built by r25, with its own glass: it needs nothing from LibGlass to
+        -- refresh, so another addon's packaging mistake must not stop it.
+        H.check(ok, "a window that is already built keeps refreshing (" .. label .. "): "
+            .. tostring(err))
+        H.check(pcall(host.ui.ApplyAppearance, host.ui), "and recolouring (" .. label .. ")")
+    else
+        H.check(not ok and tostring(err):find("needs LibGlass-1.0", 1, true) ~= nil,
+            "building one says what is missing rather than failing somewhere obscure ("
+            .. label .. "): " .. tostring(err))
+        H.eq(host.ui.main, nil, "and leaves nothing half-built (" .. label .. ")")
+        local again, err2 = pcall(host.ui.Update, host.ui)
+        H.check(not again and tostring(err2):find("needs LibGlass-1.0", 1, true) ~= nil,
+            "so the next refresh says the same thing, not something unrelated (" .. label .. "): "
+            .. tostring(err2))
+    end
 end
 
 -- The media path is LibGlass's business: it follows the addon whose LibGlass
@@ -1105,5 +1124,24 @@ H.check(not okNew and tostring(errNew):find("did not finish loading", 1, true),
     "New refuses a copy that threw partway: " .. tostring(errNew))
 H.eq(lib.Status(), "incomplete", "and Status agrees")
 H.eq(GB.FmtTime(90), lib.UI.FmtTime(90), "an instance made earlier still answers")
+
+------------------------------------------------------------
+-- Hosts from before lib.Status
+------------------------------------------------------------
+
+-- Exactly what those hosts run, over the upgrade they meet: an r25 copy
+-- (whose markers say 25) taken over by this one.
+do
+    freshLibStub()
+    load(R25, "r25")
+    load(CURRENT_FILES, "current")
+    local l, minor = LibStub("LibGroupBuffs-1.0")
+    -- Priestly v2.0.6 (r10) and Wildly v1.0.0 (r11), PriestlyCompat/WildlyCompat:
+    H.check(l.compatMinor == minor and l.settingsMinor == minor
+        and l.engineMinor == minor and l.uiMinor == minor,
+        "a host from before Status (Priestly v2.0.6, Wildly v1.0.0) still starts on this copy")
+    -- Priestly v2.0.5 (r5):
+    H.check(l.settingsMinor ~= nil and l.engineMinor ~= nil, "and so does Priestly v2.0.5")
+end
 
 H.done("test_versions")

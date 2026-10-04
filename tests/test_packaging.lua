@@ -117,7 +117,7 @@ for _, file in ipairs(scripts) do
         local fh = assert(io.open(file, "r"), file .. " must be readable from the repository root")
         local src = fh:read("*a")
         fh:close()
-        for _, pattern in ipairs({ 'MEDIA %.%. "([%w_]+)"', 'Mask%([^,()]+, "([%w_]+)"' }) do
+        for _, pattern in ipairs({ '[Mm][Ee][Dd][Ii][Aa] %.%. "([%w_]+)"', 'Mask%([^,()]+, "([%w_]+)"' }) do
             for name in src:gmatch(pattern) do
                 checked = checked + 1
                 H.check(glassMedia[name], file .. " draws " .. name
