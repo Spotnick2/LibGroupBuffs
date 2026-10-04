@@ -1197,6 +1197,11 @@ if CURRENT > 26 then
     load(CURRENT_FILES, "current")
     H.runScript(r26Host.ui.main, "OnUpdate", 0.6)
     H.eq(r26Ticks, 1, "the window r26 built ticks the host once the newer copy runs it")
+    -- And hears the slider: r26 laid it out but never set laidOut.
+    local r26Looks = 0
+    r26Host.ui.host.onAppearance = function() r26Looks = r26Looks + 1 end
+    r26Host.ui:ApplyAppearance()
+    H.eq(r26Looks, 1, "an open window r26 laid out reaches onAppearance under the newer copy")
 end
 
 H.done("test_versions")

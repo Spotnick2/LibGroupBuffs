@@ -1883,7 +1883,9 @@ do -- UI ======================================================================
 --     in combat; a pane that changes size during a fight manages that itself.
 --   * Visibility follows ui:IsVisible(), via onVisibility: when the window is
 --     closed in combat the pane hides AT ONCE, though the window's own frame
---     stays up until the fight ends (the client refuses to hide it).
+--     stays up until the fight ends (the client refuses to hide it). On the
+--     FIRST show onVisibility(true) arrives just before the first onLayout,
+--     so it finds no pane yet: guard for that (onLayout shows the pane).
 --   * onTick(ui, elapsed) is a refresh cadence: on the window's half-second
 --     tick, in and out of combat, only while the window is visible. `elapsed`
 --     is the window's visible time since the previous tick, NOT wall time -
@@ -2260,8 +2262,8 @@ end
 --
 -- Refused in combat, like everything else that touches these frames: both
 -- parent secure buttons, and the client silently blocks a SetScale on one.
--- ApplyAppearance runs on every rebuild, so the next one out of combat
--- carries it.
+-- The look is applied on every rebuild (ApplyLook), so the next one out of
+-- combat carries it.
 local function ApplyScale(self)
     if InCombatLockdown() then return false end
     local want = self:Scale()
@@ -3054,7 +3056,9 @@ end
 function Methods:ApplyAppearance()
     if not self.main then return end
     ApplyLook(self)
-    if self.laidOut then Call(self.host.onAppearance, self) end
+    -- `visible` too: a window an older copy laid out never set laidOut, and
+    -- a window that is open has been through onLayout in every version.
+    if self.laidOut or self.visible then Call(self.host.onAppearance, self) end
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────
@@ -3176,23 +3180,25 @@ function Methods:MainTick(dt)
     if not self.visible then return end
     self.tick = self.tick + dt
     self.footerTick = self.footerTick + dt
+    local elapsed
     if self.tick >= 0.5 then
-        local elapsed = self.tick
+        elapsed = self.tick
         self.tick = 0
         self:RefreshTimers()
         -- On the half-second tick, not the footer's three: a placeholder
         -- under the cursor is what the player is looking at, and three
         -- seconds of "Loading..." is most of a hover.
         self:RefreshPendingTooltip()
-        -- The window's clock, for a companion's countdowns: one clock, and it
-        -- stops when the window is closed, which a pane's own OnUpdate would
-        -- have to track for itself.
-        Call(self.host.onTick, self, elapsed)
     end
     if self.footerTick >= 3.0 then
         self.footerTick = 0
         self:RefreshFooter()
     end
+    -- The window's clock, for a companion's countdowns: one clock, and it
+    -- stops when the window is closed, which a pane's own OnUpdate would have
+    -- to track for itself. Last, so a host error here (not pcall'd: errors
+    -- are never hidden) cannot skip the window's own work on this frame.
+    if elapsed then Call(self.host.onTick, self, elapsed) end
 end
 
 function Methods:PopoverTick(dt)
@@ -4043,8 +4049,9 @@ local function Rebuild(self)
     -- would leave logically open (and a companion following IsVisible up).
     self.closePending = false
     self.closeExplained = nil
-    -- A fresh tick: time left over from before a close is not this showing's.
-    if not self.visible then self.tick = 0 end
+    -- Fresh ticks: time left over from before a close is not this showing's
+    -- (and the rebuild has just laid the footer out).
+    if not self.visible then self.tick, self.footerTick = 0, 0 end
     SetVisible(self, true)
     Call(self.host.setVisible, true)
     self.laidOut = true
@@ -4070,6 +4077,10 @@ function Methods:Update()
             self:RefreshTimers()
         else
             self.pendingShow = true
+            -- The window is wanted again before the fight ends: whatever close
+            -- was explained is reversed, so a close after this one is new
+            -- news and gets its own explanation.
+            self.closeExplained = nil
         end
         return
     end

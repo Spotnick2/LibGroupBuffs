@@ -133,6 +133,23 @@ H.runScript(ui.main, "OnUpdate", 0.5)
 H.eq(#host.ticks, 1, "and it keeps ticking in combat, when the cooldowns matter most")
 WoW.inCombat = false
 
+-- A host's onTick that throws is the host's script error - not hidden -
+-- but it runs last, so the window's own refresh on that frame still happens.
+do
+    local footers = 0
+    local realFooter = lib.UIMethods.RefreshFooter
+    lib.UIMethods.RefreshFooter = function(self, ...) footers = footers + 1 return realFooter(self, ...) end
+    local realTick = ui.host.onTick
+    ui.host.onTick = function() error("the pane's own bug", 0) end
+    ui.tick, ui.footerTick = 0.49, 2.99
+    local ok, err = pcall(ui.main._scripts.OnUpdate, ui.main, 0.02)
+    H.check(not ok and tostring(err):find("the pane's own bug", 1, true),
+        "a throwing onTick surfaces: " .. tostring(err))
+    H.eq(footers, 1, "after the footer refresh due on the same frame")
+    lib.UIMethods.RefreshFooter = realFooter
+    ui.host.onTick = realTick
+end
+
 ------------------------------------------------------------
 -- onAppearance: the look reaches the pane without an Update
 ------------------------------------------------------------
@@ -163,6 +180,7 @@ ui:Close(true)
 ui:Update()                     -- reopened later
 H.runScript(ui.main, "OnUpdate", 0.06)
 H.eq(#host.ticks, 0, "time left over from before a close does not tick the reopened window")
+H.eq(ui.footerTick, 0.06, "and the footer's clock restarted with it")
 H.runScript(ui.main, "OnUpdate", 0.45)
 H.eq(#host.ticks, 1, "half a second of THIS showing does")
 
@@ -235,6 +253,15 @@ H.eq(host.saved.visible, nil, "while the player's preference is left alone")
 H.eq(host.preferenceWritten, nil, "on both sides")
 vis:SoloToggled(false)
 H.eq(host.deferredCloses, 1, "once per fight, not once per call")
+-- Re-ticked in the same fight: the window is wanted again, so the close just
+-- explained is reversed, and untick once more is a new close to explain.
+host.config.showSolo = true
+vis:SoloToggled(true)
+WoW.flushTimers(1)                          -- the show it queued, refused in combat
+H.check(ui.pendingShow, "the show is recorded for the fight's end")
+host.config.showSolo = false
+vis:SoloToggled(false)
+H.eq(host.deferredCloses, 2, "and a close after it is explained again, not swallowed by the latch")
 WoW.inCombat = false
 ui:OnCombatEnd()
 WoW.flushTimers(1)

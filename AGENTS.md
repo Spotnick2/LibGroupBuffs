@@ -167,9 +167,13 @@ and the like name those sections.
     X after an automatic close in the same fight is answered too, and a manual explanation covers
     the rest of that fight. `manual` also decides whether the close is saved as the player's
     preference (`setVisible(false)`). Until r27 automatic closes said nothing (#45). An r26
-    copy's latch, `true`, reads as manual. Known limit: an automatic close explained in a fight
-    can be reversed by a later event in that fight (the group refills), and then the window
-    stays.
+    copy's latch, `true`, reads as manual. **A host should word the two kinds differently**: one
+    that prints the same line for both prints it twice when the player clicks X after an
+    automatic close in the same fight. That is deliberate: the click is answered, as it was
+    before r27, and staying silent was the round-1 defect on #53. A show queued in combat (the
+    window wanted again) clears the latch, so a close after it is explained again. Known limit:
+    the explanation for an automatic close can be overtaken by such a show in the same fight,
+    and then the window stays after combat.
   - **A show out of combat supersedes a close recorded in combat:** `Rebuild` clears
     `closePending` when it shows the window, so an `OnCombatEnd` handled late never hides a
     window that is logically open.
@@ -183,12 +187,16 @@ and the like name those sections.
       UIParent's child the pane copies `main:GetScale()`, or its width is wrong on screen.
       `onLayout` does not run in combat.
     - **visibility follows `ui:IsVisible()`** through `onVisibility`: a close in combat hides the
-      pane at once, while the window's frame waits for the fight's end.
+      pane at once, while the window's frame waits for the fight's end. On the **first** show,
+      `onVisibility(true)` arrives just before the first `onLayout`, so it finds no pane: guard
+      for that.
     - **`onTick(ui, elapsed)`** is a refresh cadence on the window's half-second tick, in and out
-      of combat, only while it is visible, restarting at 0 on every show. `elapsed` is visible
-      time, not wall time: count cooldowns from `GetTime()`.
+      of combat, only while it is visible, restarting at 0 on every show (the footer's clock
+      too). It runs **last** in the tick, so a host error cannot skip the window's own refresh.
+      `elapsed` is visible time, not wall time: count cooldowns from `GetTime()`.
     - **`onAppearance(ui)`** runs when the look changes **outside** a rebuild (alpha or scale
-      slider, spec change) and only after the first `onLayout`. A rebuild calls `ApplyLook`
+      slider, spec change) and only after the first `onLayout`, or on a window already open (an
+      older copy laid it out without setting `laidOut`). A rebuild calls `ApplyLook`
       directly and ends in `onLayout`, where the pane takes the look too.
     - Host callbacks are not wrapped in `pcall`: a throwing `onTick` is the host's script error,
       every half second, and the library does not hide it.
