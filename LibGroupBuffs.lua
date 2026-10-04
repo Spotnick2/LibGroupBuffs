@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 26
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 27
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -1863,7 +1863,29 @@ do -- UI ======================================================================
 --         setVisible = function(visible) end,
 --         onLayout = function(ui) end, onVisibility = function(ui, visible) end,  -- optional
 --         onCloseDeferred = function(ui) end,   -- optional: combat refused the hide
+--         onTick = function(ui, elapsed) end,   -- optional: every ~0.5s while visible
+--         onAppearance = function(ui) end,      -- optional: the look was (re)applied
 --     })
+--
+-- A companion pane - a second frame of the addon's own under the window, like
+-- Magely's cooldowns - lives on those hooks, and on four rules:
+--
+--   * NON-SECURE only: plain frames, no secure templates, no attributes. Such
+--     a frame anchored to the window is free in combat (measured on 70009,
+--     Spotnick2/Magely#12): it can show, hide, resize and re-anchor during a
+--     fight. Parent it to UIParent, not to the window: a child of a protected
+--     frame is protected too.
+--   * Anchored in onLayout, which runs at the end of an out-of-combat Update.
+--     It does not run in combat; a pane that changes size during a fight
+--     manages that itself.
+--   * Visibility follows ui:IsVisible(), via onVisibility: when the window is
+--     closed in combat the pane hides AT ONCE, though the window's own frame
+--     stays up until the fight ends (the client refuses to hide it).
+--   * onTick drives its countdowns: on the window's own half-second tick,
+--     in and out of combat, only while the window is visible. `elapsed` is
+--     the time since the previous tick. onAppearance re-reads ui:Appearance()
+--     and ui:Alpha(): it runs whenever ApplyAppearance does, which the alpha
+--     slider and a spec change call without an Update.
 --
 -- The addon keeps its events, slash commands, options panel and policy (who
 -- the window opens for, and when) and calls the methods below from them.
@@ -2150,6 +2172,7 @@ local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 local OPTIONAL_FUNCTIONS = {
     "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
+    "onTick", "onAppearance",
 }
 
 function UI.New(host)
@@ -3010,6 +3033,8 @@ function Methods:ApplyAppearance()
     RimColour(pop, look.popBorder)
     local hdiv = self:PopDivider()
     if hdiv then hdiv:SetColorTexture(unpack(look.popDivider)) end
+    -- Last, so a companion reads the look the window now wears.
+    Call(self.host.onAppearance, self)
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────
@@ -3132,12 +3157,17 @@ function Methods:MainTick(dt)
     self.tick = self.tick + dt
     self.footerTick = self.footerTick + dt
     if self.tick >= 0.5 then
+        local elapsed = self.tick
         self.tick = 0
         self:RefreshTimers()
         -- On the half-second tick, not the footer's three: a placeholder
         -- under the cursor is what the player is looking at, and three
         -- seconds of "Loading..." is most of a hover.
         self:RefreshPendingTooltip()
+        -- The window's clock, for a companion's countdowns: one clock, and it
+        -- stops when the window is closed, which a pane's own OnUpdate would
+        -- have to track for itself.
+        Call(self.host.onTick, self, elapsed)
     end
     if self.footerTick >= 3.0 then
         self.footerTick = 0
@@ -3600,14 +3630,17 @@ end
 -- Returns whether the frames are hidden NOW: in combat they cannot be, so the
 -- window stops refreshing and goes when the fight ends.
 --
--- When the player asked and the window is still on screen, a deferred close
--- also calls the addon's onCloseDeferred, so every way of closing - the X
--- button, a slash command, a keybind - can explain itself the same way. What
--- matters is that a frame the player just tried to close is still visible,
--- NOT whether the window was logically open: an automatic close during the
--- same fight (the group emptied) leaves it shown while `visible` is already
--- false. Said once per pending close, not once per click. The return value is
--- there for a caller that wants to handle it itself.
+-- When the window is still on screen, a deferred close calls the addon's
+-- onCloseDeferred, so every way of closing - the X button, a slash command, a
+-- keybind, AND the addon's own automatic closes - explains itself the same
+-- way. An automatic close used to say nothing (#45): a player who unticked
+-- "show when solo" mid-fight watched the window stay up, apparently ignored.
+-- `manual` decides only whether the close is saved as the player's
+-- preference, never whether it is explained. What matters is that a frame
+-- is still visible, NOT whether the window was logically open: a close after
+-- an automatic one during the same fight finds `visible` already false. Said
+-- once per pending close, not once per click. The return value is there for
+-- a caller that wants to handle it itself.
 -- A flat square has no affordance of its own - a Blizzard button announces
 -- itself by being gold - so it brightens under the cursor. A method rather
 -- than a closure, because the frame outlives the copy that installed it.
@@ -3636,8 +3669,7 @@ function Methods:Close(manual)
     self.showGen = self.showGen + 1
     if manual then Call(self.host.setVisible, false) end
     if self.closePending then
-        if manual and not self.closeExplained
-            and self.main and self.main:IsShown() then
+        if not self.closeExplained and self.main and self.main:IsShown() then
             self.closeExplained = true
             Call(self.host.onCloseDeferred, self)
         end

@@ -143,8 +143,9 @@ and the like name those sections.
   seams: `owner`, `title`, `version`, `appearance()` (icon and colour overrides — Wildly's orange
   header, Magely's per-spec colours), `unknownClassIcon`, `footerItems()` (data, not frames), config
   accessors (`alpha`, `locked`, `popoverSide`, `showClickHints`), position/visibility storage
-  (`getPos` returning `pos, whyNil`, `setPos`, `setVisible`) and `onLayout` / `onVisibility` for a
-  companion pane such as Magely's cooldowns. Contracts:
+  (`getPos` returning `pos, whyNil`, `setPos`, `setVisible`), `onCloseDeferred`, and `onLayout` /
+  `onVisibility` / `onTick` / `onAppearance` for a companion pane such as Magely's cooldowns.
+  Contracts:
   - **Frames are anonymous.** The library creates no globals; tests and addons reach frames
     through the ui object.
   - **Every installed handler and delayed callback dispatches through the ui object**
@@ -159,6 +160,22 @@ and the like name those sections.
     handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
     `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
     `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
+  - **A deferred close is always explained** (`onCloseDeferred`, once per pending close) while the
+    frame is still on screen, whoever asked for it: the X button, a slash command, or the addon's
+    own automatic close (the group emptied, "show when solo" unticked mid-fight). `manual` decides
+    only whether the close is saved as the player's preference (`setVisible(false)`). Until r27
+    automatic closes said nothing, and the window looked as if it ignored the player (#45).
+  - **Companion panes (#24, r27).** An addon's own frame under the window, like Magely's
+    cooldowns, uses only the window's hooks and four rules (also in the UI section's header):
+    **non-secure only and parented to UIParent** (a plain frame anchored under the window is free
+    in combat, measured on 70009 in Spotnick2/Magely#12; a child of the window would be protected
+    with it); **anchored in `onLayout`**, which runs only at the end of an out-of-combat `Update`,
+    so a pane that resizes in a fight manages that itself; **visibility follows `ui:IsVisible()`**
+    through `onVisibility`, so a close in combat hides the pane at once while the window's frame
+    waits for the fight's end; **`onTick(ui, elapsed)`** on the window's half-second tick, in and
+    out of combat, only while it is visible, and **`onAppearance(ui)`** at the end of
+    `ApplyAppearance` (the alpha slider and a spec change call it without an `Update`).
+    `tests/test_companion.lua` builds one and runs every hook.
   - **`Open` coalesces**, like `ScheduleRefresh`: the events that open a window arrive in pairs
     (`RAID_ROSTER_UPDATE` with `GROUP_ROSTER_UPDATE`, `PLAYER_TALENT_UPDATE` with
     `SPELLS_CHANGED`) and each queued `Update` is a full rebuild. The earliest pending deadline
