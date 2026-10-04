@@ -1024,4 +1024,86 @@ local after = 0
 for _ in pairs(LibStub("LibGlass-1.0").instances) do after = after + 1 end
 H.eq(after, glassCount, "and no second one is made")
 
+------------------------------------------------------------
+-- lib:New instances across an upgrade
+--
+-- An instance is handed to a host once, at login, and its functions are held
+-- for the session - sometimes as locals. When another addon's newer copy
+-- loads, every one of them must run the NEWER code, exactly once, and the
+-- instance must gain what the newer copy added without losing what the host
+-- put on it.
+------------------------------------------------------------
+
+-- The current source as a newer copy, with exact substitutions: a new
+-- instance function, and every impl wrapped in a call counter.
+local function NextCopy(minor, subs)
+    local src = CURRENT_SRC:gsub(MINOR_PATTERN, 'local MAJOR, MINOR = "LibGroupBuffs-1.0", ' .. minor, 1)
+    for _, sub in ipairs(subs or {}) do
+        local at = src:find(sub[1], 1, true)
+        H.check(at ~= nil, "the synthetic copy finds '" .. sub[1] .. "'")
+        if at then src = src:sub(1, at - 1) .. sub[2] .. src:sub(at + #sub[1]) end
+    end
+    return { { name = "LibGroupBuffs.lua", src = src } }
+end
+local COUNTED = [[
+
+local L = LibStub("LibGroupBuffs-1.0")
+L._calls = {}
+for name, f in pairs(L.impl) do
+    L.impl[name] = function(...) L._calls[name] = (L._calls[name] or 0) + 1 return f(...) end
+end
+]]
+
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+local said = {}
+local GB = lib:New({ owner = "Priestly", report = function(text, kind) said[#said + 1] = kind end })
+local heldFmt, heldEngine = GB.FmtTime, GB.Engine        -- held as locals, as hosts do
+local hostPct = function(rem, dur) return "the host's own" end
+GB.Pct = hostPct                                         -- a host's override
+local impl, instances, shared, mt = lib.impl, lib.instances, lib.shared, lib.instanceMT
+
+load(NextCopy(CURRENT + 1, {
+    { '"TimerColor", "Pct", "FmtTime" }', '"TimerColor", "Pct", "FmtTime", "Probe" }' },
+    { 'function impl.TimerColor(', 'function impl.Probe(inst) return "next:" .. inst.owner end\n\nfunction impl.TimerColor(' },
+    { '\nlib.ready = MINOR', COUNTED .. '\nlib.ready = MINOR' },
+}), "next")
+H.eq(activeMinor(), CURRENT + 1, "the next copy took over")
+H.check(lib.impl == impl and lib.instances == instances and lib.shared == shared and lib.instanceMT == mt,
+    "keeping the impl, instance, shared and metatable tables a host's instance points into")
+H.eq(lib.instances.Priestly, GB, "and the instance itself")
+H.eq(GB.MINOR, CURRENT + 1, "which now reads the newer MINOR through")
+
+H.eq(type(GB.Probe), "function", "an instance made by the older copy gains the newer copy's function")
+H.eq(GB.Probe and GB.Probe(), "next:Priestly", "bound to that instance")
+H.eq(heldFmt(90), lib.UI.FmtTime(90), "a function held across the upgrade still answers")
+H.eq(lib._calls.FmtTime, 1, "running the newer copy's code, exactly once")
+local builtEngine = heldEngine({ defs = { { id = "fort", snglID = 1243 } }, bucketSize = 5 })
+H.eq(getmetatable(builtEngine), lib.EngineMeta, "and so does a held constructor")
+H.eq(lib._calls.Engine, 1, "once")
+H.eq(GB.Pct, hostPct, "the host's own override survives: a newer copy only adds")
+
+-- An older copy loading second is a no-op.
+local counting = lib.impl.FmtTime
+load(CURRENT_FILES, "current after next")
+H.eq(activeMinor(), CURRENT + 1, "the older copy loading second changes nothing")
+H.eq(lib.impl.FmtTime, counting, "it does not put its own code back")
+H.eq(type(lib.impl.Probe), "function", "or remove what the newer copy added")
+
+-- A newer copy that throws before its completion marker: New refuses, and
+-- Status says incomplete, while instances made earlier keep working.
+freshLibStub()
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+GB = lib:New({ owner = "Priestly", report = function() end })
+H.check(not pcall(load, NextCopy(CURRENT + 1, {
+    { "\ndo -- New ", '\nerror("thrown mid-load")\ndo -- New ' },
+}), "next, throwing"), "the newer copy threw")
+local okNew, errNew = pcall(lib.New, lib, { owner = "Magely", report = function() end })
+H.check(not okNew and tostring(errNew):find("did not finish loading", 1, true),
+    "New refuses a copy that threw partway: " .. tostring(errNew))
+H.eq(lib.Status(), "incomplete", "and Status agrees")
+H.eq(GB.FmtTime(90), lib.UI.FmtTime(90), "an instance made earlier still answers")
+
 H.done("test_versions")

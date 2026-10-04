@@ -21,7 +21,7 @@ if not lib then return end          -- an equal or newer copy is already loaded
 
 -- Private to this copy and shared by its sections: assigned in the Glass
 -- section, read by the window and by lib.Status / lib:New.
-local GlassUsable, GlassInst
+local GlassUsable, GlassInst, GLASS_MISSING
 
 do -- Compat ==================================================================
 
@@ -805,7 +805,7 @@ do -- Glass ===================================================================
 -- one. LibGlass migrates its own instances when a newer LibGlass loads.
 
 local GLASS = "LibGlass-1.0"
-local GLASS_MISSING = MAJOR .. " needs " .. GLASS .. ", which is missing or did not finish "
+GLASS_MISSING = MAJOR .. " needs " .. GLASS .. ", which is missing or did not finish "
     .. "loading: embed it at Libs\\" .. GLASS .. " and load its XML before " .. MAJOR .. "'s"
 
 -- Usable means registered AND complete: LibGlass marks itself ready on its
@@ -4251,6 +4251,153 @@ function Methods:ContentChanged()
 end
 
 end -- Visibility
+
+do -- New =====================================================================
+
+-- lib:New(opts): the per-addon entry point. LibGlass-1.0's shape, so one rule
+-- covers both libraries.
+--
+--     local GB = LibStub("LibGroupBuffs-1.0"):New({
+--         owner  = "Priestly",                 -- required, unique per session
+--         report = function(text, kind) end,   -- required: the library never prints
+--         needs  = 26,                         -- optional floor: the MINOR this build needs
+--     })
+--     local engine = GB.Engine(host)            -- dot calls, like LibGlass's
+--     local ui     = GB.UI(host)                -- host.owner filled in if absent
+--     local cfg    = GB.Settings(spec)          -- spec.owner / spec.report filled in if absent
+--     local vis    = GB.Visibility(spec)
+--     GB.RegisterEvents(frame, "PLAYER_LOGIN", ...)   -- rejections reach report(text, "events")
+--     GB.EventFailures()                       -- { [event] = why } for this owner, or nil
+--     GB.TimerColor(pct), GB.Pct(rem, dur), GB.FmtTime(s)
+--     GB.API, GB.STATES, GB.PET_GROUP, GB.LOAD_CHECK_KEY, GB.CLASS_ICONS, GB.MINOR
+--
+-- New does the version check a host used to carry in its own bridge: it
+-- errors unless the active copy finished loading, LibGlass-1.0 is usable and
+-- the active MINOR is at least `needs`. A host pcalls it and prints the error
+-- with its own prefix.
+--
+-- Upgrade rules (EMBEDDED-LIBRARIES.md §5): every instance function looks up
+-- lib.impl.<name> WHEN IT RUNS, so an instance an older copy made runs the
+-- newest copy's code; lib.impl, lib.instances and lib.shared keep their
+-- identity and are filled in place; a newer copy only ADDS functions an older
+-- instance lacks, it never replaces one. Shared values are data only - a
+-- function reached through lib.shared and held by a host would be the copy
+-- that put it there, forever.
+--
+-- The older entry points (lib.Engine.New, lib.UI.New, lib.Settings.New,
+-- lib.Visibility.New, lib.API, lib.Status) stay exactly as they are: hosts
+-- built against r25 and earlier call them.
+
+lib.impl = lib.impl or {}
+lib.instances = lib.instances or {}
+lib.shared = lib.shared or {}
+lib.instanceMT = lib.instanceMT or {}
+lib.instanceMT.__index = lib.shared
+
+-- Read-only data, the active copy's.
+lib.shared.API = lib.API
+lib.shared.STATES = lib.Engine.STATES
+lib.shared.PET_GROUP = lib.Engine.PET_GROUP
+lib.shared.LOAD_CHECK_KEY = lib.Settings.LOAD_CHECK_KEY
+lib.shared.CLASS_ICONS = lib.UI.CLASS_ICONS
+lib.shared.MINOR = MINOR
+
+local impl = lib.impl
+
+function impl.Engine(_, host)
+    return lib.Engine.New(host)
+end
+
+function impl.UI(inst, host)
+    if type(host) == "table" and host.owner == nil then host.owner = inst.owner end
+    return lib.UI.New(host)
+end
+
+function impl.Settings(inst, spec)
+    if type(spec) == "table" then
+        if spec.owner == nil then spec.owner = inst.owner end
+        if spec.report == nil then spec.report = inst.report end
+    end
+    return lib.Settings.New(spec)
+end
+
+function impl.Visibility(_, spec)
+    return lib.Visibility.New(spec)
+end
+
+-- One reporter for everything an instance has to say: rejected events arrive
+-- as text, like the settings checks' messages, with kind "events".
+function impl.RegisterEvents(inst, frame, ...)
+    return lib.API.RegisterEventsReported(frame, inst.owner, function(failed)
+        inst.report("unsupported events skipped: " .. table.concat(failed, ", "), "events")
+    end, ...)
+end
+
+function impl.EventFailures(inst)
+    return lib.API.eventFailuresByOwner[inst.owner]
+end
+
+function impl.TimerColor(_, pct) return lib.UI.TimerColor(pct) end
+function impl.Pct(_, rem, dur) return lib.UI.Pct(rem, dur) end
+function impl.FmtTime(_, s) return lib.UI.FmtTime(s) end
+
+-- The functions an instance carries. A newer copy appends; it never removes.
+local FUNCTIONS = { "Engine", "UI", "Settings", "Visibility", "RegisterEvents", "EventFailures",
+                    "TimerColor", "Pct", "FmtTime" }
+
+-- Give an instance every function it lacks. Never overwrites: a function an
+-- older copy bound already dispatches through lib.impl, and a host may have
+-- wrapped one.
+local function Migrate(inst)
+    for _, name in ipairs(FUNCTIONS) do
+        if inst[name] == nil then
+            inst[name] = function(...) return lib.impl[name](inst, ...) end
+        end
+    end
+end
+
+function lib:New(opts)
+    if self ~= lib then
+        error(MAJOR .. ": call New with a colon - LibStub(\"" .. MAJOR .. "\"):New(opts)", 2)
+    end
+    if type(opts) ~= "table" then error(MAJOR .. ": New needs an options table", 2) end
+    local owner, report, needs = opts.owner, opts.report, opts.needs
+    if type(owner) ~= "string" or owner == "" then
+        error(MAJOR .. ": New needs opts.owner, the addon's name", 2)
+    end
+    if type(report) ~= "function" then
+        error(MAJOR .. ": New needs opts.report(text, kind) - the library never prints", 2)
+    end
+    if needs ~= nil and type(needs) ~= "number" then
+        error(MAJOR .. ": opts.needs must be a MINOR number", 2)
+    end
+    if lib.instances[owner] ~= nil then
+        error(MAJOR .. ": " .. owner .. " already has an instance - New is called once per addon", 2)
+    end
+    -- The state checks are for players, not developers: no file position.
+    local _, active = LibStub:GetLibrary(MAJOR, true)
+    if lib.ready ~= active then
+        error(MAJOR .. " r" .. tostring(active) .. " did not finish loading - another addon's copy "
+            .. "failed; the first error this session names it", 0)
+    end
+    if not GlassUsable() then error(GLASS_MISSING, 0) end
+    if needs and active < needs then
+        error(owner .. " needs " .. MAJOR .. " r" .. needs .. " or newer, and the newest copy "
+            .. "loaded is r" .. active .. " - nothing is broken, an addon is out of date", 0)
+    end
+    local inst = setmetatable({ owner = owner, report = report, needs = needs }, lib.instanceMT)
+    Migrate(inst)
+    lib.instances[owner] = inst
+    return inst
+end
+
+-- An upgrade reaches the instances an older copy made.
+for _, inst in pairs(lib.instances) do Migrate(inst) end
+
+-- Internals for the tests only.
+lib._test = { Migrate = Migrate, FUNCTIONS = FUNCTIONS }
+
+end -- New
 
 -- ============================================================================
 -- Last, so a copy that threw partway through is not marked complete: Status
