@@ -122,6 +122,16 @@ local R24 = Fixtures(24, SIX_FILES)
 -- r25 is the last multi-file release: what Priestly, Magely and Wildly ship
 -- until each moves to r26 in a release of its own.
 local R25 = Fixtures(25, SIX_FILES)
+-- r26 is the first single-file release: from here on, one fixture per tag.
+local R26 = Fixtures(26, { "LibGroupBuffs.lua" })
+
+-- While the source still says 26 it must BE r26: a behaviour change merged
+-- without raising MINOR would ship as a second, different "r26", and an
+-- addon carrying the first would never be upgraded to it.
+if CURRENT == 26 then
+    H.eq((R26[1].src:gsub("\r\n", "\n")), CURRENT_SRC,
+        "the source is still exactly the released r26 - raise MINOR for any change to it")
+end
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
 -- A session starting: nothing registered but LibGlass-1.0, which every
@@ -198,7 +208,10 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
-for _, older in ipairs({ { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 }, { 25, R25 } }) do
+local OLDER = { { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 }, { 25, R25 } }
+-- r26 is older only once MINOR has moved past it; until then it is this copy.
+if CURRENT > 26 then OLDER[#OLDER + 1] = { 26, R26 } end
+for _, older in ipairs(OLDER) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
         "r" .. older[1] .. "-after-newer leaves UI alone, though it has a UI.lua of its own")
@@ -1142,6 +1155,29 @@ do
         "a host from before Status (Priestly v2.0.6, Wildly v1.0.0) still starts on this copy")
     -- Priestly v2.0.5 (r5):
     H.check(l.settingsMinor ~= nil and l.engineMinor ~= nil, "and so does Priestly v2.0.5")
+end
+
+------------------------------------------------------------
+-- Instances r26 made, under a newer copy
+--
+-- r26 is the release that handed hosts lib:New instances, and the first one a
+-- newer copy will meet in a player's session. Runs once MINOR is past 26.
+------------------------------------------------------------
+
+if CURRENT > 26 then
+    freshLibStub()
+    load(R26, "r26")
+    lib = LibStub("LibGroupBuffs-1.0")
+    local r26GB = lib:New({ owner = "Priestly", report = function() end })
+    local r26Fmt = r26GB.FmtTime
+    load(CURRENT_FILES, "current")
+    H.eq(activeMinor(), CURRENT, "the current copy takes over from r26")
+    H.eq(lib.instances.Priestly, r26GB, "keeping the instance r26 made")
+    for _, name in ipairs(lib._test.FUNCTIONS) do
+        H.eq(type(r26GB[name]), "function", "which has " .. name .. " after the upgrade")
+    end
+    H.eq(r26Fmt(90), lib.UI.FmtTime(90), "and a function held from r26 still answers")
+    H.eq(lib.Status(26), "ok", "and an r26 host asking is told ok")
 end
 
 H.done("test_versions")
