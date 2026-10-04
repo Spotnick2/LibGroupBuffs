@@ -195,8 +195,11 @@ and the like name those sections.
       too). It runs **last** in the tick, so a host error cannot skip the window's own refresh.
       `elapsed` is visible time, not wall time: count cooldowns from `GetTime()`.
     - **`onAppearance(ui)`** runs when the look changes **outside** a rebuild (alpha or scale
-      slider, spec change) and only after the first `onLayout`, or on a window already open (an
-      older copy laid it out without setting `laidOut`). A rebuild calls `ApplyLook`
+      slider, spec change) and only after the first `onLayout`. A window this copy built starts
+      at `laidOut = false`; only a window an older copy built (`laidOut == nil`) counts as laid
+      out by being open. `visible` alone must never stand in: on the first show
+      `onVisibility(true)` precedes `onLayout`, and a host may call `ApplyAppearance` from it.
+      A rebuild calls `ApplyLook`
       directly and ends in `onLayout`, where the pane takes the look too.
     - Host callbacks are not wrapped in `pcall`: a throwing `onTick` is the host's script error,
       every half second, and the library does not hide it.

@@ -49,6 +49,38 @@ do
     H.eq(heard, 0, "onAppearance waits for the first onLayout")
 end
 
+-- The first show runs onVisibility(true) BEFORE the first onLayout. A host
+-- syncing its look from there (ApplyAppearance) must not reach onAppearance
+-- yet: the pane onLayout builds does not exist (Codex review of #53).
+do
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    H.Party3()
+    local first = H.PriestEngine()
+    local order, firstPane = {}, nil
+    local fui = lib.UI.New({
+        engine = first.engine, owner = "Magely",
+        onVisibility = function(u, visible)
+            order[#order + 1] = "visibility:" .. tostring(visible)
+            if visible then u:ApplyAppearance() end
+        end,
+        onLayout = function()
+            order[#order + 1] = "layout"
+            firstPane = firstPane or CreateFrame("Frame", nil, UIParent)
+        end,
+        onAppearance = function()
+            order[#order + 1] = "appearance"
+            firstPane:SetAlpha(1)
+        end,
+    })
+    first.engine:RefreshSpells()
+    H.check(pcall(fui.Update, fui), "the first show completes")
+    H.eq(table.concat(order, ","), "visibility:true,layout",
+        "and onAppearance waits for the first onLayout, even when asked from onVisibility")
+    fui:ApplyAppearance()
+    H.eq(order[#order], "appearance", "after which the slider reaches it")
+end
+
 ------------------------------------------------------------
 -- A Magely-shaped host with a companion pane
 ------------------------------------------------------------

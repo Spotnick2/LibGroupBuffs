@@ -2212,6 +2212,9 @@ function UI.New(host)
         restoreLog = "the window has not been built yet",
         restoreSkips = 0,
         tick = 0, footerTick = 0,
+        -- false, not nil: this copy built the window, and nil is how a window
+        -- an older copy built says it predates the field (ApplyAppearance).
+        laidOut = false,
         rows = {}, popRows = {}, headers = {}, footerBtns = {},
         footerItems = {},
     }, lib.UIMeta)
@@ -3056,9 +3059,15 @@ end
 function Methods:ApplyAppearance()
     if not self.main then return end
     ApplyLook(self)
-    -- `visible` too: a window an older copy laid out never set laidOut, and
-    -- a window that is open has been through onLayout in every version.
-    if self.laidOut or self.visible then Call(self.host.onAppearance, self) end
+    -- A window an older copy built has no laidOut at all (nil); if it is
+    -- open, that copy took it through onLayout. A window this copy built
+    -- starts at false, so `visible` alone never stands in for it: on the
+    -- first show onVisibility(true) runs BEFORE the first onLayout, and a
+    -- host calling ApplyAppearance from there must not reach a pane that
+    -- onLayout has not built yet.
+    local laidOut = self.laidOut
+    if laidOut == nil then laidOut = self.visible end
+    if laidOut then Call(self.host.onAppearance, self) end
 end
 
 -- ─── Footer ─────────────────────────────────────────────────────────────────
