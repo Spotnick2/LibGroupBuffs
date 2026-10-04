@@ -19,10 +19,5 @@
         list so the suite fails the same way the client would.
     -->
     <Script file="LibStub\LibStub.lua"/>
-    <Script file="Compat.lua"/>
-    <Script file="Glass.lua"/>
-    <Script file="Settings.lua"/>
-    <Script file="Engine.lua"/>
-    <Script file="UI.lua"/>
-    <Script file="Visibility.lua"/>
+    <Script file="LibGroupBuffs.lua"/>
 </Ui>

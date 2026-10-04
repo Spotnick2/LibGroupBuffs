@@ -75,53 +75,59 @@ if git then
 end
 H.check(#tracked > 0, "git ls-files lists the repository (run the tests from a git checkout)")
 
--- Textures are the exception the rule needs: the client loads them by PATH,
--- at draw time, so no XML names them and the check above cannot see them.
--- They must ship, or the window draws untextured in every consuming addon.
-local function isMedia(path)
-    return path:sub(1, 6) == "Media/" and path:sub(-4) == ".tga"
-end
-
-local media = 0
+-- No textures of our own since r26: the material is LibGlass-1.0, which every
+-- consumer embeds beside this library and which ships its own Media/. A
+-- texture tracked here again would be a second copy drifting from LibGlass's.
 for _, file in ipairs(tracked) do
-    if isMedia(file) then
-        media = media + 1
-        H.check(not isIgnored(file), file .. " is drawn by Glass.lua, so it must ship")
-    elseif not runtime[file] and file ~= "LICENSE" then
+    H.check(file:sub(1, 6) ~= "Media/", file .. ": textures belong to LibGlass, not this library")
+    if not runtime[file] and file ~= "LICENSE" then
         H.check(isIgnored(file), file .. " does not run in game, so .pkgmeta must ignore it")
     end
 end
-H.check(media > 0, "the glass textures are tracked - Glass.lua draws nothing without them")
 
--- Every texture the material names must be one that ships. A typo in a layer
--- name is a file the client silently fails to find, and a window with a hole
--- in it; nothing else in the suite compares the two lists.
-local shipped = {}
-for _, file in ipairs(tracked) do
-    if isMedia(file) then shipped[file:sub(7, -5)] = true end
+-- Side by side, never nested: LibGlass derives its media path from its own
+-- embed folder, so a copy loaded from inside this one would draw blank.
+for _, file in ipairs(xmls) do
+    local fh = assert(io.open(file, "rb"))
+    local xml = fh:read("*a"):gsub("<!%-%-.-%-%->", "")
+    fh:close()
+    H.check(not xml:find("LibGlass", 1, true), file .. " does not load LibGlass: consumers do")
 end
-local glassFile = assert(io.open("Glass.lua", "r"),
-    "Glass.lua must be readable from the repository root")
-local glassSrc = glassFile:read("*a")
-glassFile:close()
--- Every runtime file, not just Glass.lua: UI.lua draws bar_edge and bar_mask
--- directly for the icon tiles and the close button, and scanning only the
--- material's own file would have let a typo in either through.
+
+-- Every texture the window names must be one LibGlass ships. A typo in a name
+-- is a file the client silently fails to find, and a window with a hole in
+-- it; nothing else in the suite compares the two lists.
+local glassMedia = {}
+-- io.popen runs cmd.exe on Windows and sh elsewhere: list with what each has.
+local mediaDir = H.libGlassRoot() .. "/Media"
+local listing = io.popen(package.config:sub(1, 1) == "\\"
+    and ('dir /b "' .. mediaDir:gsub("/", "\\") .. '"')
+    or ('ls "' .. mediaDir .. '"'))
+if listing then
+    for line in listing:lines() do
+        local name = line:match("^([%w_]+)%.tga$")
+        if name then glassMedia[name] = true end
+    end
+    listing:close()
+end
+H.check(next(glassMedia) ~= nil, "the LibGlass checkout's Media/ lists its textures")
 local checked = 0
 for _, file in ipairs(scripts) do
-    local fh = assert(io.open(file, "r"), file .. " must be readable from the repository root")
-    local src = fh:read("*a")
-    fh:close()
-    for name in src:gmatch('MEDIA %.%. "([%w_]+)"') do
-        checked = checked + 1
-        H.check(shipped[name], file .. " draws " .. name .. ", so Media/" .. name .. ".tga must exist")
-    end
-    for name in src:gmatch('= "([%w_]+)", [%w]*[Mm]argin') do
-        checked = checked + 1
-        H.check(shipped[name], file .. " names " .. name .. ", so Media/" .. name .. ".tga must exist")
+    if file ~= "LibStub/LibStub.lua" then
+        local fh = assert(io.open(file, "r"), file .. " must be readable from the repository root")
+        local src = fh:read("*a")
+        fh:close()
+        for _, pattern in ipairs({ '[Mm][Ee][Dd][Ii][Aa] %.%. "([%w_]+)"', 'Mask%([^,()]+, "([%w_]+)"' }) do
+            for name in src:gmatch(pattern) do
+                checked = checked + 1
+                H.check(glassMedia[name], file .. " draws " .. name
+                    .. ", so LibGlass's Media/" .. name .. ".tga must exist")
+            end
+        end
     end
 end
-H.check(checked >= 14, "and the scan found the textures rather than nothing: " .. checked)
+-- bar_mask through Mask() and as a path, bar_edge three times, gloss twice.
+H.check(checked >= 7, "and the scan found the textures rather than nothing: " .. checked)
 
 -- The development files named explicitly as well, so the intent survives even
 -- if one of them is ever untracked.

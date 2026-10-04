@@ -19,17 +19,22 @@ Repository-specific additions:
   `C:/Projects/References/forever-api-<version>.<build>.md`. Runtime measurements live in
   `C:\Projects\Priestly\docs\FOREVER-PROBE.md`.
 - A change here ships in every consumer. Review it as a change to Priestly, Wildly and Magely at
-  once: check the version guard, table identity across an upgrade, and that nothing assumes one
-  particular consumer.
+  once: check the version guard, table identity across an upgrade, that instance functions
+  dispatch through `lib.impl` at call time, and that nothing assumes one particular consumer.
+- `C:\Projects\References\EMBEDDED-LIBRARIES.md` is the shared rulebook for embedded libraries
+  (packaging, pinning, upgrade rules, tests); LibGlass-1.0 (`C:\Projects\LibGlass`) is the worked
+  example this library now follows.
 
 ## What This Repository Is
 
 `LibGroupBuffs-1.0` is the shared engine behind three WoW: Forever addons — Priestly, Wildly and
 Magely — which are the same PallyPower-style group buff manager with different `DEFS` tables.
-Priestly is the only consumer today; Wildly and Magely are still TBC addons and will be ported onto
-the library later. Changes land in Priestly first, so keep them class-agnostic from the start.
+All three consume it. Changes are validated through Priestly first (the pilot), so keep them
+class-agnostic from the start.
 
 It is a **LibStub library**, embedded into each addon at package time through `.pkgmeta` externals.
+It **depends on LibGlass-1.0**, which each consumer embeds *beside* it (`Libs\LibGlass-1.0`,
+loaded first), never inside it.
 There is no build system and no package manager; validation is a Lua 5.1 test suite plus in-game
 testing through a consuming addon.
 
@@ -38,17 +43,57 @@ Vanilla content, Retail codebase.
 
 ## Layout
 
-- **`lib.Status(needsMinor)`** answers "is this copy usable?", so a consumer stops carrying the
-  library's internals: `"ok"`, `"incomplete"` (a file did not finish, or an older copy's record
-  survives under a newer active MINOR) or `"too-old"` (complete, just behind - nothing crashed, and
-  a host must not say otherwise), plus the active MINOR for the host's message. `Compat.lua`
-  declares `lib.FILES`, the list this copy consists of, and the LAST file the XML loads installs
-  `Status`, so its own absence answers for a copy whose last file threw. **A new runtime file must
-  be added to `lib.FILES`** - and then no consumer needs editing.
-- `Compat.lua` — `lib.API`, every removed or moved API. **Nothing outside this file may call a
+**One runtime file, `LibGroupBuffs.lua`** (since r26; r25 and earlier were six). One
+`MAJOR, MINOR` literal and one `NewLibrary` guard at the top; `lib.ready = MINOR` (with
+`lib.fileMinors.LibGroupBuffs`) on the **last line**. The former files are **sections**, each
+wrapped in its own `do ... end` (`do -- Compat ===`, `Glass`, `Settings`, `Engine`, `UI`,
+`Visibility`, `New`) so one section's private locals (`Methods`, `Fail`, `Call`...) can never be
+captured by another, and so the main chunk stays far under Lua 5.1's 200-local limit. **A new
+local belongs inside its section.** The only file-level locals shared between sections are
+`GlassUsable`, `GlassInst` and `GLASS_MISSING`, assigned in the Glass section. Below, "Compat.lua"
+and the like name those sections.
+
+- **`lib:New(opts)`** — the per-addon entry point (the `New` section), shaped like LibGlass's:
+  `LibStub("LibGroupBuffs-1.0"):New({ owner, report = function(text, kind), needs })`. It errors
+  (a message for players, no file position) unless the active copy finished loading
+  (`lib.ready`), LibGlass is usable and the active MINOR is at least `needs`; a dot call, a
+  missing owner or reporter, or a second instance for the same owner are developer errors. The
+  instance is **dot-called**: `Engine`, `UI` (the owner filled in when the host gave none),
+  `Settings` (owner and reporter filled in when absent, never over the host's), `Visibility`,
+  `RegisterEvents` (rejections reach the same `report(text, "events")`), `EventFailures`,
+  `TimerColor`, `Pct`, `FmtTime`; and **data only**
+  through `lib.shared`: `API`, `STATES`, `PET_GROUP`, `LOAD_CHECK_KEY`, `CLASS_ICONS`, `MINOR`.
+  - Every instance function is `function(...) return lib.impl[name](inst, ...) end`, so an
+    instance an older copy made runs the newest code. **Never** capture an impl function in
+    anything that outlives the load, and never put a function in `lib.shared`: a host holding it
+    would keep the copy that put it there.
+  - `lib.impl`, `lib.instances`, `lib.shared`, `lib.instanceMT` keep their identity
+    (`X = X or {}`). On load the newest copy migrates every instance by **adding** functions it
+    lacks (`== nil`); it never replaces one, because a host may have wrapped it.
+  - A new instance function: an `impl.X` plus an entry appended to `FUNCTIONS`. Never remove or
+    rename one: within `LibGroupBuffs-1.0` the API only grows. Migration checks with `rawget`,
+    because the instance reads `lib.shared` through `__index`.
+  - Constructors go through `Construct`, which re-raises a constructor's argument error at the
+    host's level (4). Without it the host's file:line is lost: the constructors' `Fail` raises at
+    level 3, which through an instance is a library frame.
+- **The pre-r26 surface is frozen, not removed:** `lib.API`, `lib.Engine.New`, `lib.UI.New`,
+  `lib.Settings.New`, `lib.Visibility.New`, `lib.Status`, `lib.FILES`, `lib.fileMinors`, **and the
+  named markers** `lib.compatMinor`, `glassMinor`, `settingsMinor`, `engineMinor`, `uiMinor`,
+  `visibilityMinor`, all written as MINOR next to `lib.ready`. Hosts pinned to r25 and earlier
+  call them on whichever copy is newest, and those from before `Status` (Priestly v2.0.5-v2.0.6,
+  Wildly v1.0.0) refuse to start unless every named marker equals the active MINOR.
+- **`lib.Status(needsMinor)`** answers "is this copy usable?" for those older hosts: `"ok"`,
+  `"incomplete"` (the copy did not finish, an older copy's record survives under a newer active
+  MINOR, **or LibGlass is missing or half-loaded**) or `"too-old"` (complete, just behind - nothing
+  crashed, and a host must not say otherwise), plus the active MINOR. `lib.FILES` is now
+  `{ "LibGroupBuffs" }`; an upgrade over r25 replaces the six-file list, so the old records stop
+  counting. If a newer copy throws before the UI section, the previous copy's `Status` is still on
+  the table and answers "incomplete", because the new `lib.FILES` has no record yet.
+- `Compat.lua` — `lib.API`, every removed or moved API. **Nothing outside this section may call a
   moved API directly.**
-- `LibGroupBuffs-1.0.xml` — load order; the entry point a consuming addon references. It lists
-  **only files that exist**: a missing one is a load error in every embedding addon.
+- `LibGroupBuffs-1.0.xml` — the entry point a consuming addon references: `LibStub\LibStub.lua`,
+  then `LibGroupBuffs.lua`. It lists **only files that exist**, and **never LibGlass**: consumers
+  load it beside this library (`tests/test_packaging.lua` checks).
   `tests/harness.lua` loads exactly this list, so the suite fails the same way the client would.
 - `Settings.lua` — `lib.Settings.New(spec)`: one write path for an addon's saved table
   (`Set`, `SetIn`, `Changed`), the SavedVariables-fix detector and the build watch
@@ -120,11 +165,25 @@ Vanilla content, Retail codebase.
     wins, so a sooner request supersedes a later one rather than being dropped. A host cannot do
     this for itself: it would have to call `Update` directly and lose the generation check.
   - **The addon keeps policy:** events, slash commands, who the window opens for, and when.
-- `Glass.lua` — the material, and a **verbatim copy** of GlassUnitFrames' file apart from its
-  header: layered textures (shadow, tint, grain, masked wash, rim) and rounded 9-slice masks, with
-  `Glass.MEDIA` pointing at the `Media/` folder the packager copies into the host. Keep it
-  verbatim. A local improvement here is a local divergence from the addon the material is defined
-  by, and the next sync silently reverts it; fix it there and copy the file down.
+- `Glass.lua` (the Glass section) — **the material is LibGlass-1.0**
+  (github.com/Spotnick2/LibGlass, contract in its `CLAUDE.md`). Up to r25 this was a v1 copy
+  with 14 textures of its own; there is no `Media/` here any more. **A material change is a
+  LibGlass PR**, never a local patch. The window reaches it only through `GlassInst()`, at call
+  time: one LibGlass instance per session, created on first use and kept on `lib.glass` across
+  upgrades of this library (LibGlass migrates its own instances). `GlassUsable()` (LibGlass
+  registered AND its `ready` equal to its active MINOR) gates `GlassInst`, `lib.Status` and
+  `lib:New`, so a copy shipped without LibGlass, or one whose LibGlass threw mid-load, says so
+  instead of failing somewhere obscure. The window uses `Apply`, `Mask`, `MEDIA`, `STYLE` and the
+  regions `g.tint` / `g.rim` / `g.mask` / `g.shadow` / `g.top`, all in LibGlass's contract.
+  `MEDIA` is LibGlass's, derived from the host addon that loaded the winning LibGlass copy.
+  Colours passed to a glass bar's `SetStatusBarColor` must be plain (LibGlass's hook compares
+  them). Panels an r25 copy built keep their v1 regions (opaque rim) until `/reload`: nothing
+  repaints them, and `TintPanel` / `RimColour` only touch `g.tint` / `g.rim`, which both have.
+  **Only building needs LibGlass**: a window already built keeps refreshing without it
+  (`TintPanel` falls back to the tint alpha v1 and LibGlass r1 share), so one addon's packaging
+  mistake cannot stop another addon's working window. `Init` checks LibGlass **before** assigning
+  anything to `self`, because it returns early once `self.main` exists, and a window that threw
+  halfway through building would otherwise stay half-built.
   - **Geometry is adopted too, not only looks.** Frames are built ONCE - `Init` returns early when
     `self.main` exists - so a window an older copy built reaches newer code with the previous
     sizes, fonts and icons while every position the newer code computes is measured against metrics
@@ -233,7 +292,10 @@ Vanilla content, Retail codebase.
   packager copies into each consuming addon's `Libs/LibGroupBuffs-1.0`. Only runtime files and
   `LICENSE` ship. `tests/test_packaging.lua` checks nothing the XML loads (following `<Include>`) is
   ignored, and that every file `git ls-files` lists is either loaded, `LICENSE`, or ignored — so a
-  new file that is not runtime code fails the suite until it gets an entry here.
+  new file that is not runtime code fails the suite until it gets an entry here. **CurseForge's
+  packager does not apply this list** (Priestly #53), so each consumer repeats the non-dot entries
+  under `Libs/LibGroupBuffs-1.0/` in its own `.pkgmeta`. It also checks that every texture the code
+  names exists in the LibGlass checkout's `Media/`, and that no texture is tracked here again.
 
 ## Library Rules
 
@@ -248,30 +310,27 @@ Vanilla content, Retail codebase.
   changes capability detection for every other addon on the machine.
 - **No addon-specific behaviour.** Anything that differs between Priestly, Wildly and Magely
   belongs in the addon or behind a host callback, not in a branch here.
-- **Version bumps:** raise `MINOR` in **every runtime file** (they must agree;
-  `tests/test_versions.lua` checks) whenever behaviour changes, so an older embedded
-  copy loses to a newer one, and tag the merge `r<MINOR>` for consumers to pin. `LibStub:NewLibrary`
-  returns nil when a newer copy already loaded.
+- **Version bumps:** raise the one `MINOR` in `LibGroupBuffs.lua` whenever behaviour changes, in
+  the same PR, so an older embedded copy loses to a newer one, and tag the merge `r<MINOR>` for
+  consumers to pin. `LibStub:NewLibrary` returns nil when an equal or newer copy already loaded.
+  `tests/test_versions.lua` checks the literal appears exactly once and `lib.ready = MINOR` is the
+  last line.
 - **An upgrade reuses the existing tables.** A newer copy loading after an older one gets the same
   `lib` and `lib.API`, so write `X = X or {}` for anything holding state (see `eventFailures`), and
   never replace a table other code may have taken a reference to. `tests/test_versions.lua` checks
-  equal-after-equal, older-after-newer and newer-after-older, loading every runtime file, against
-  the real released source in `tests/fixtures/` (r2, the copy Priestly v2.0.x ships, and r3). When a
-  new tag goes out and consumers move to it, add that tag's runtime files as fixtures too; never
-  synthesise the older copy from the current source, since it would already contain what the
-  upgrade must add. Objects handed to consumers (settings objects) hold a shared metatable whose
-  methods table is assigned in place, so an upgrade reaches objects an older copy created.
-- **More than one file needs a shared guard.** Returning early from `Compat.lua` does not stop the
-  XML from running the next file, and calling `NewLibrary` again with the same version in a second
-  file makes that file reject itself. So `Compat.lua` claims the version, and every later file
-  checks `LibStub:GetLibrary(MAJOR)` reports its own `MINOR` (else an older copy is loading after a
-  newer one) and that it has not installed already (`lib.settingsMinor == MINOR`: equal after
-  equal, where reinstalling would replace functions consumers hold). It records that marker as its
-  **last** line, so a file that threw partway is not marked installed, and records itself in
-  `lib.fileMinors` beside that marker, which is what `lib.Status` reads. `Compat.lua` does the same
-  with `compatMinor`. **A consumer checks every marker EQUALS the active MINOR** (the second value
-  `LibStub("LibGroupBuffs-1.0", true)` returns), never merely that it is set: when a newer copy
-  throws partway, the older copy's markers and functions are still on the shared table.
+  equal-after-equal, older-after-newer and newer-after-older against the real released source in
+  `tests/fixtures/`: `<File>-rN.lua` per file up to r25 (the last multi-file release), and from
+  r26 on **one fixture per release**, `LibGroupBuffs-rN.lua`. When a tag goes out, freeze it there
+  for the next MINOR's upgrade test; never synthesise the older copy from the current source,
+  since it would already contain what the upgrade must add. (A synthetic NEWER copy - the current
+  source with MINOR+1 - is right for testing what an upgrade does to this copy's objects.) Objects
+  handed to consumers hold a shared metatable whose methods table is assigned in place, so an
+  upgrade reaches objects an older copy created.
+- **A copy that throws partway leaves `NewLibrary` already counting its MINOR**, with the older
+  copy's functions and marker still on the shared table. So `lib.ready` is the last line, and every
+  entry point compares it with the active MINOR - **equal**, never merely set. Released r2-r25
+  copies keep their own per-file guards (`lib.<file>Minor`, `lib.fileMinors.<File>`), which still
+  reject them correctly when they load after a newer copy.
 
 ## Client Rules (measured, not inferred)
 
@@ -319,6 +378,11 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
 pwsh tests/run.ps1
 ```
 
+**LibGlass comes from a checkout:** `$env:LIBGLASS`, else `..\LibGlass`. `tests/run.ps1` warns
+when it is not at the ref in `tests/libglass-ref.txt`, which is what CI fetches; the harness passes
+`(host, ns)` to every chunk as the client does (`H.HOST`, "Priestly"). Tests of LibGlass being
+absent or half-loaded load it themselves (`freshLibStub(true)` in `test_versions.lua`).
+
 `tests/wow_stubs.lua` is an **allowlist**: it fails the run on the read of any global it does not
 define. That only works if it also models the client's absences and shapes honestly — a stub more
 forgiving than the client lets broken code pass a green suite, which is how a call to the removed
@@ -343,9 +407,13 @@ members a Blizzard template would have created (`Left`, `Text`, `Low`, `High`) r
 reason — `Tools/PriestlyProbe` decides whether a template applied by asking whether `frame.Left` is
 nil, and the catch-all answered yes every time.
 
-`tests/harness.lua` loads exactly what `LibGroupBuffs-1.0.xml` lists, in order, and fails on
-anything missing — the same way the client would. `tests/test_versions.lua` loads the library in
-three orders to check an upgrade keeps table identity and state.
+`tests/harness.lua` loads LibGlass, then exactly what `LibGroupBuffs-1.0.xml` lists, in order,
+and fails on anything missing — the same way the client would. `tests/test_versions.lua` loads the
+library in three orders to check an upgrade keeps table identity and state, and covers `lib:New`
+instances across an upgrade (held functions run the newer code exactly once, a newer copy only
+adds, a copy throwing mid-load is refused). `tests/test_new.lua` covers the entry point itself.
+Mutation-test changes to either: capture an impl function, share a per-owner registry, replace
+`lib.shared` or `lib.impl`, drop the `ready` or LibGlass check - each must turn a test red.
 
 `tests/test_ui_clicks.lua` and `test_ui_window.lua` cover the window: every handler it installs is
 executed and its effect asserted (the stub records text, textures, anchors, tooltips, and every
@@ -385,12 +453,22 @@ for the WoW code-review method and verdict.
 
 ## Releasing
 
-Consumers pin a tag, so nothing reaches them until one exists:
+Consumers pin a tag, so nothing reaches them until one exists. The checklist is
+`EMBEDDED-LIBRARIES.md` §9:
 
-1. Raise `MINOR` in every runtime file for any behaviour change, in the same PR.
-2. After merge, tag the merge commit `r<MINOR>` and push the tag: `git tag r3 && git push origin r3`.
-   The tag and `MINOR` must match; a consumer reading the tag assumes it knows the version.
-3. In each consumer, bump `tag:` in `.pkgmeta` in its own PR. Its CI checks out exactly that tag and
-   checks the release zip carries the library, so a bad tag fails there, not in players' hands.
+1. Raise `MINOR` for any behaviour change, in the same PR. The PR's tests are green, and so are
+   the pilot consumer's (Priestly) against the merged commit: `pwsh ..\Priestly\tests\run.ps1`.
+2. After merge, the pilot validates **that exact commit** in game, pinned by `commit:` in a
+   Priestly PR.
+3. Tag the merge commit `r<MINOR>` and push the tag: `git tag r26 && git push origin r26`. The tag
+   and `MINOR` must match. The pilot switches its pin to `tag: r<MINOR>` and reruns its CI before
+   it releases.
+4. Freeze the release as `tests/fixtures/LibGroupBuffs-r<MINOR>.lua` for the next MINOR's upgrade
+   test.
+5. **The other consumers bump their pin in their next release, not now.** No fan-out of PRs:
+   players get the fix as soon as any one of their addons ships it, because LibStub runs the
+   newest copy loaded.
 
-Never move or reuse a tag once pushed: a consumer's release is pinned to it.
+Never move or reuse a tag once pushed: a consumer's release is pinned to it. The same goes for
+LibGlass: this library's tests pin it in `tests/libglass-ref.txt`, and a consumer pins it in its
+own `.pkgmeta`.
