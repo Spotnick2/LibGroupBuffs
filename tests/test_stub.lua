@@ -52,9 +52,11 @@ WoW.reset()
 -- and the stub must not follow it there - every test file runs under this
 -- default, and it should show them what a player sees.
 WoW.reset()
-H.eq(WoW.build, "70009", "the stub models the installed client build")
-H.eq(select(2, GetBuildInfo()), "70009", "which is what GetBuildInfo reports")
-H.eq(select(3, GetBuildInfo()), "Sep 23 2026", "with the date that build reports")
+H.eq(WoW.build, "70205", "the stub models the installed client build")
+H.eq(select(2, GetBuildInfo()), "70205", "which is what GetBuildInfo reports")
+-- C's __DATE__, as the client exe embeds it: a single-digit day is padded with
+-- a space, not a zero.
+H.eq(select(3, GetBuildInfo()), "Oct  2 2026", "with the date that build reports")
 H.eq(select("#", GetInstanceInfo()), 11, "and GetInstanceInfo returns this client's tuple")
 
 -- The eighth is the instance's own id - `instanceID` in the 70009
