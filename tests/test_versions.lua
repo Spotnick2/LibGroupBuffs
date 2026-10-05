@@ -122,15 +122,34 @@ local R24 = Fixtures(24, SIX_FILES)
 -- r25 is the last multi-file release: what Priestly, Magely and Wildly ship
 -- until each moves to r26 in a release of its own.
 local R25 = Fixtures(25, SIX_FILES)
--- r26 is the first single-file release: from here on, one fixture per tag.
-local R26 = Fixtures(26, { "LibGroupBuffs.lua" })
+-- r26 is the first single-file release: from there on, one fixture per tag,
+-- tests/fixtures/LibGroupBuffs-rN.lua. Found by counting up from 26 until one
+-- is missing, so freezing a release is adding its file and nothing else.
+local SINGLE = {}
+do
+    local n = 26
+    while true do
+        local f = io.open("tests/fixtures/LibGroupBuffs-r" .. n .. ".lua", "rb")
+        if not f then break end
+        f:close()
+        SINGLE[#SINGLE + 1] = { n, Fixtures(n, { "LibGroupBuffs.lua" }) }
+        n = n + 1
+    end
+end
+H.check(#SINGLE >= 1, "the single-file releases are frozen, from r26 on")
+local R26 = SINGLE[1][2]
+local NEWEST = SINGLE[#SINGLE]
+H.check(CURRENT >= NEWEST[1], "the source is never older than the newest frozen release: r"
+    .. NEWEST[1] .. " vs " .. CURRENT)
 
--- While the source still says 26 it must BE r26: a behaviour change merged
--- without raising MINOR would ship as a second, different "r26", and an
--- addon carrying the first would never be upgraded to it.
-if CURRENT == 26 then
-    H.eq((R26[1].src:gsub("\r\n", "\n")), CURRENT_SRC,
-        "the source is still exactly the released r26 - raise MINOR for any change to it")
+-- While the source still declares the newest released MINOR it must BE that
+-- release: a behaviour change merged without raising MINOR would ship as a
+-- second, different rN, and an addon carrying the first would never be
+-- upgraded to it.
+if CURRENT == NEWEST[1] then
+    H.eq((NEWEST[2][1].src:gsub("\r\n", "\n")), CURRENT_SRC,
+        "the source is still exactly the released r" .. NEWEST[1]
+        .. " - raise MINOR for any change to it")
 end
 H.check(CURRENT > 10, "the current MINOR is newer than every fixture")
 
@@ -209,8 +228,11 @@ H.check(lib.UI.New == uiNew, "and UI, which r5 lacks")
 -- Every released copy, oldest to newest: each must return before touching
 -- anything. A fixture that is never loaded proves nothing.
 local OLDER = { { 6, R6 }, { 7, R7 }, { 8, R8 }, { 9, R9 }, { 10, R10 }, { 11, R11 }, { 12, R12 }, { 13, R13 }, { 14, R14 }, { 15, R15 }, { 16, R16 }, { 17, R17 }, { 18, R18 }, { 19, R19 }, { 20, R20 }, { 21, R21 }, { 22, R22 }, { 23, R23 }, { 24, R24 }, { 25, R25 } }
--- r26 is older only once MINOR has moved past it; until then it is this copy.
-if CURRENT > 26 then OLDER[#OLDER + 1] = { 26, R26 } end
+-- A single-file release is older only once MINOR has moved past it; until
+-- then it is this copy.
+for _, release in ipairs(SINGLE) do
+    if CURRENT > release[1] then OLDER[#OLDER + 1] = release end
+end
 for _, older in ipairs(OLDER) do
     load(older[2], "r" .. older[1])
     H.check(lib.UI.New == uiNew and lib.UIMethods.Update == uiUpdate,
