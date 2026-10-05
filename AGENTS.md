@@ -372,8 +372,9 @@ and the like name those sections.
   equal-after-equal, older-after-newer and newer-after-older against the real released source in
   `tests/fixtures/`: `<File>-rN.lua` per file up to r25 (the last multi-file release), and from
   r26 on **one fixture per release**, `LibGroupBuffs-rN.lua`. When a tag goes out, freeze it there
-  for the next MINOR's upgrade test (`git show rN:LibGroupBuffs.lua`). While the source still
-  declares that MINOR, `test_versions` requires it to equal the fixture, so a behaviour change
+  for the next MINOR's upgrade test (`git show rN:LibGroupBuffs.lua`); `test_versions` finds the
+  single-file fixtures itself, counting up from r26. While the source still declares the newest
+  one's MINOR, `test_versions` requires it to equal the fixture, so a behaviour change
   merged without a bump fails rather than shipping as a second, different `rN`; never synthesise the older copy from the current source,
   since it would already contain what the upgrade must add. (A synthetic NEWER copy - the current
   source with MINOR+1 - is right for testing what an upgrade does to this copy's objects.) Objects
