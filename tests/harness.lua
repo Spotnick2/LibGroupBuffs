@@ -231,7 +231,10 @@ function H.PriestUI(opts)
             if host.throwFrom == "onLayout" then error("onLayout blew up", 0) end
         end,
         onVisibility = function(_, v) host.visibility[#host.visibility + 1] = v end,
-        onCloseDeferred = function() host.deferredCloses = (host.deferredCloses or 0) + 1 end,
+        onCloseDeferred = function(_, manual)
+            host.deferredCloses = (host.deferredCloses or 0) + 1
+            host.deferredManual = manual
+        end,
     })
     return host
 end

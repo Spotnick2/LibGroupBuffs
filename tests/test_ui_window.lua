@@ -386,13 +386,17 @@ H.eq(#WoW.combatWrites, 0, "nor by a refresh that fires in combat")
 WoW.blockedCalls = {}
 host.deferredCloses = 0
 H.eq(ui:Close(), false, "closing in combat cannot hide the window, and says so")
-H.eq(host.deferredCloses, 0, "a close the addon made itself tells nobody")
+-- #45: an automatic close the client refuses is explained too. The player
+-- can see the window not closing either way, and "manual" decides only
+-- whether the close is saved as their preference.
+H.eq(host.deferredCloses, 1, "a close the addon made itself is explained as well")
 H.check(ui:IsVisible() == false, "though it is logically closed")
 ui:Update(); WoW.inCombat = false; ui:Update(); WoW.inCombat = true
+host.deferredCloses = 0
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "but the X button in combat asks the addon to explain")
+H.eq(host.deferredCloses, 1, "and the X button in combat asks the addon to explain")
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "and asks once per pending close, not once per click")
+H.eq(host.deferredCloses, 1, "once per pending close, not once per click")
 H.eq(#WoW.blockedCalls, 0, "without attempting a call the client blocks")
 H.check(ui.main:IsShown(), "the frame is still up - it parents secure buttons")
 H.check(not ui:IsVisible(), "but the window is logically closed")
@@ -422,23 +426,42 @@ WoW.flushTimers(1)
 H.check(not ui:IsVisible(), "a close after combat's end beats the rebuild it queued")
 
 -- The window can close ITSELF during a fight - the group empties - and the
--- frame stays up because the client refuses to hide it. The player clicking X
--- on a window they can still see has to be answered, even though it is
--- already logically closed.
+-- frame stays up because the client refuses to hide it. That close is
+-- explained at once (#45). The player clicking X on the window they can
+-- still see is answered as well: it is their own close, a new thing to tell
+-- them, and the host is told which kind each one was.
 setup()
 ui:Update()
 WoW.inCombat = true
 host.deferredCloses = 0
 ui:Close()                                  -- the addon's own close: the group emptied
 H.check(ui.main:IsShown() and not ui:IsVisible(), "still on screen, logically closed")
-H.eq(host.deferredCloses, 0, "its own close explains nothing")
+H.eq(host.deferredCloses, 1, "its own close is explained, since the window visibly stays")
+H.eq(host.deferredManual, false, "as an automatic close")
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "but the player clicking X on the visible window is answered")
+H.eq(host.deferredCloses, 2, "and the player clicking X afterwards is answered too")
+H.eq(host.deferredManual, true, "as their own")
 H.runScript(ui.main.closeBtn, "OnClick")
-H.eq(host.deferredCloses, 1, "once")
+ui:Close()
+H.eq(host.deferredCloses, 2, "after which nothing more is said in that fight, of either kind")
 WoW.inCombat = false
 ui:OnCombatEnd()
 H.check(not ui.main:IsShown(), "and the fight's end hides it")
+WoW.flushTimers(1)
+
+-- A window an r26 copy left mid-fight carries that copy's latch, `true`,
+-- which r26 set only for the player's own close: it counts as manual.
+setup()
+ui:Update()
+WoW.inCombat = true
+ui:Close(true)
+ui.closeExplained = true                    -- as r26 left it
+host.deferredCloses = 0
+ui:Close(true)
+ui:Close()
+H.eq(host.deferredCloses, 0, "an r26 latch is read as a manual explanation already given")
+WoW.inCombat = false
+ui:OnCombatEnd()
 WoW.flushTimers(1)
 
 -- Once it is really hidden, closing again says nothing: there is no window.

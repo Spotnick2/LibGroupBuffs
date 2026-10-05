@@ -1178,6 +1178,30 @@ if CURRENT > 26 then
     end
     H.eq(r26Fmt(90), lib.UI.FmtTime(90), "and a function held from r26 still answers")
     H.eq(lib.Status(26), "ok", "and an r26 host asking is told ok")
+
+    -- A window r26 built reaches r27's hooks (#24): r26 never called onTick,
+    -- and the ticker it installed dispatches through the window's methods.
+    freshLibStub()
+    load(R26, "r26")
+    lib = LibStub("LibGroupBuffs-1.0")
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    H.Party3()
+    local r26Host = H.PriestUI()
+    r26Host.engine:RefreshSpells()
+    r26Host.ui:Update()
+    local r26Ticks = 0
+    r26Host.ui.host.onTick = function() r26Ticks = r26Ticks + 1 end
+    H.runScript(r26Host.ui.main, "OnUpdate", 0.6)
+    H.eq(r26Ticks, 0, "r26 itself has no onTick")
+    load(CURRENT_FILES, "current")
+    H.runScript(r26Host.ui.main, "OnUpdate", 0.6)
+    H.eq(r26Ticks, 1, "the window r26 built ticks the host once the newer copy runs it")
+    -- And hears the slider: r26 laid it out but never set laidOut.
+    local r26Looks = 0
+    r26Host.ui.host.onAppearance = function() r26Looks = r26Looks + 1 end
+    r26Host.ui:ApplyAppearance()
+    H.eq(r26Looks, 1, "an open window r26 laid out reaches onAppearance under the newer copy")
 end
 
 H.done("test_versions")
