@@ -174,7 +174,9 @@ and the like name those sections.
     word the two kinds differently**: one that prints the same line for both prints it twice when
     the player clicks X after an automatic close in the same fight. That is deliberate: the click
     is answered, as it was before r27, and staying silent was the round-1 defect on #53. A host
-    that ignores `manual == false` keeps r26's behaviour exactly. A show queued in combat (the
+    that ignores `manual == false` gets r26's behaviour, with one difference: if the window is
+    wanted again mid-fight (a show queued in combat) and then closed again, the player's X is
+    answered again in that fight, where r26 stayed silent. A show queued in combat (the
     window wanted again) clears the latch, so a close after it is explained again. Known limit:
     the explanation for an automatic close can be overtaken by such a show in the same fight,
     and then the window stays after combat.
