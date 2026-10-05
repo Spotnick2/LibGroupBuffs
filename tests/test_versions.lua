@@ -1158,6 +1158,9 @@ local okNew, errNew = pcall(lib.New, lib, { owner = "Magely", report = function(
 H.check(not okNew and tostring(errNew):find("did not finish loading", 1, true),
     "New refuses a copy that threw partway: " .. tostring(errNew))
 H.eq(lib.Status(), "incomplete", "and Status agrees")
+local why = lib:Refusal()
+H.eq(why and why.code, "incomplete", "and lib:Refusal gives the reason a host switches on")
+H.eq(why and why.active, CURRENT + 1, "naming the MINOR that did not finish")
 H.eq(GB.FmtTime(90), lib.UI.FmtTime(90), "an instance made earlier still answers")
 
 ------------------------------------------------------------
