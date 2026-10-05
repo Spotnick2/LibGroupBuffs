@@ -15,13 +15,13 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 27
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 28
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
 -- Private to this copy and shared by its sections: assigned in the Glass
--- section, read by the window and by lib.Status / lib:New.
-local GlassUsable, GlassInst, GLASS_MISSING
+-- section, read by the window, lib.Status and lib:Refusal.
+local GlassState, GlassUsable, GlassInst, GLASS_MISSING
 
 do -- Compat ==================================================================
 
@@ -808,12 +808,20 @@ local GLASS = "LibGlass-1.0"
 GLASS_MISSING = MAJOR .. " needs " .. GLASS .. ", which is missing or did not finish "
     .. "loading: embed it at Libs\\" .. GLASS .. " and load its XML before " .. MAJOR .. "'s"
 
--- Usable means registered AND complete: LibGlass marks itself ready on its
--- last line, so a newer LibGlass copy that threw partway is registered under
--- its MINOR with the older copy's marker still in place.
+-- THE LibGlass rule, the only copy: usable means registered AND complete.
+-- LibGlass marks itself ready on its last line, so a newer LibGlass copy that
+-- threw partway is registered under its MINOR with the older copy's marker
+-- still in place. Returns nil when usable, else why - "glass-missing" or
+-- "glass-incomplete" - and LibGlass's active MINOR when it is registered.
+GlassState = function()
+    local glass, glassMinor = LibStub:GetLibrary(GLASS, true)
+    if type(glass) ~= "table" or glassMinor == nil then return "glass-missing", nil end
+    if glass.ready ~= glassMinor then return "glass-incomplete", glassMinor end
+    return nil, glassMinor
+end
+
 GlassUsable = function()
-    local glass, active = LibStub:GetLibrary(GLASS, true)
-    return type(glass) == "table" and active ~= nil and glass.ready == active
+    return GlassState() == nil
 end
 
 -- Checked on every use, not only at creation: a LibGlass upgrade that threw
@@ -4361,10 +4369,30 @@ do -- New =====================================================================
 --     GB.TimerColor(pct), GB.Pct(rem, dur), GB.FmtTime(s)
 --     GB.API, GB.STATES, GB.PET_GROUP, GB.LOAD_CHECK_KEY, GB.CLASS_ICONS, GB.MINOR
 --
--- New does the version check a host used to carry in its own bridge: it
--- errors unless the active copy finished loading, LibGlass-1.0 is usable and
--- the active MINOR is at least `needs`. A host pcalls it and prints the error
--- with its own prefix.
+-- New does the version check a host used to carry in its own bridge. When it
+-- refuses it raises a plain STRING - a table would break a host that joins
+-- it with `..`, and the client's own error handler, which formats errors
+-- with string.format("%s") (Lua 5.1 ignores __tostring there) - and the
+-- reason is asked for separately, from the same rule New used (#54):
+--
+--     local ok, GB = pcall(lib.New, lib, opts)
+--     if not ok then
+--         -- Refusal is new in r28, and the active copy may be older (or an r28
+--         -- that threw before installing it), so check it, and fall back to GB.
+--         local why = type(lib.Refusal) == "function" and lib:Refusal(opts.needs) or nil
+--         -- why == nil: not a refusal, or no Refusal to ask - print tostring(GB)
+--         -- why.code: "incomplete"        the active copy did not finish loading
+--         --           "glass-missing"     LibGlass-1.0 is not loaded at all
+--         --           "glass-incomplete"  LibGlass-1.0 did not finish loading
+--         --           "too-old"           the active MINOR is below needs
+--         -- why.text (a sentence for players), why.active, why.needs, why.glassMinor
+--     end
+--
+-- Checked in that order. The codes are part of the contract: never renamed
+-- or removed, but new ones may be added, so a host treats a code it does not
+-- know as a generic failure. Mistakes in the host's own call (a dot call,
+-- owner, report, needs, a second New for the same owner) are strings at the
+-- caller's line: they are the developer's, not the player's.
 --
 -- Upgrade rules (EMBEDDED-LIBRARIES.md §5): every instance function looks up
 -- lib.impl.<name> WHEN IT RUNS, so an instance an older copy made runs the
@@ -4393,6 +4421,46 @@ lib.shared.CLASS_ICONS = lib.UI.CLASS_ICONS
 lib.shared.MINOR = MINOR
 
 local impl = lib.impl
+
+-- Why New would refuse, or nil if it would not: { code, text, active,
+-- needs, glassMinor }, every field filled whenever it is known. New decides
+-- with this very function, so a host asking after a refusal gets the reason
+-- New had - and asking needs no pcall: it reads markers, it never throws.
+-- The texts are for players; a host is free to word each code its own way.
+local SEE_WHICH = " - one addon's copy failed. With /console scriptErrors 1 and /reload, "
+    .. "the first error names it; updating or disabling that addon should fix this"
+
+function lib:Refusal(needs)
+    if self ~= lib then
+        error(MAJOR .. ": call Refusal with a colon - lib:Refusal(needs)", 2)
+    end
+    local _, active = LibStub:GetLibrary(MAJOR, true)
+    local glassWhy, glassMinor = GlassState()
+    local function Refusal(code, text)
+        return { code = code, text = text, active = active, needs = needs, glassMinor = glassMinor }
+    end
+    if lib.ready ~= active then
+        return Refusal("incomplete", MAJOR .. " r" .. tostring(active) .. " did not finish loading"
+            .. SEE_WHICH)
+    end
+    if glassWhy == "glass-missing" then
+        return Refusal(glassWhy, "the LibGlass-1.0 library is missing - reinstalling the addon "
+            .. "should fix it")
+    end
+    if glassWhy == "glass-incomplete" then
+        return Refusal(glassWhy, "the LibGlass-1.0 library (r" .. tostring(glassMinor)
+            .. ") did not finish loading" .. SEE_WHICH)
+    end
+    if type(needs) == "number" and active < needs then
+        -- LibStub runs the NEWEST copy loaded, so an active copy below the
+        -- host's floor means the host's own copy is stale or did not register:
+        -- its own reinstall is the fix, not other addons'.
+        return Refusal("too-old", "this addon needs " .. MAJOR .. " r" .. needs
+            .. " or newer, and the newest copy loaded is r" .. tostring(active)
+            .. " - reinstalling the addon should fix it")
+    end
+    return nil
+end
 
 -- A constructor's argument errors name the line that called it, at level 3
 -- from its Fail helper. Reached through an instance, level 3 is a library
@@ -4478,17 +4546,10 @@ function lib:New(opts)
     if lib.instances[owner] ~= nil then
         error(MAJOR .. ": " .. owner .. " already has an instance - New is called once per addon", 2)
     end
-    -- The state checks are for players, not developers: no file position.
-    local _, active = LibStub:GetLibrary(MAJOR, true)
-    if lib.ready ~= active then
-        error(MAJOR .. " r" .. tostring(active) .. " did not finish loading - another addon's copy "
-            .. "failed; the first error this session names it", 0)
-    end
-    if not GlassUsable() then error(GLASS_MISSING, 0) end
-    if needs and active < needs then
-        error(owner .. " needs " .. MAJOR .. " r" .. needs .. " or newer, and the newest copy "
-            .. "loaded is r" .. active .. " - nothing is broken, an addon is out of date", 0)
-    end
+    -- The state checks are for players, not developers: no file position, and
+    -- lib:Refusal(needs) gives the same reason with a code.
+    local why = lib:Refusal(needs)
+    if why then error(why.text, 0) end
     local inst = setmetatable({ owner = owner, report = report, needs = needs }, lib.instanceMT)
     Migrate(inst)
     lib.instances[owner] = inst

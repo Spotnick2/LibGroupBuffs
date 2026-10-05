@@ -40,25 +40,69 @@ H.eq(next(lib.instances), nil, "and a refused call registers nothing")
 -- The version check a host used to carry itself
 ------------------------------------------------------------
 
-ok, err = pcall(lib.New, lib, { owner = "Priestly", report = report, needs = MINOR + 1 })
-H.check(not ok and tostring(err):find("out of date", 1, true),
-    "a copy older than the host needs is too old, and says nothing crashed: " .. tostring(err))
-H.check(not tostring(err):find("lua:", 1, true), "a message for players, with no file position")
+-- New refuses with a plain STRING, as it always has: a table would break a
+-- host joining it with `..`, and the client's error handler (string.format
+-- "%s" ignores __tostring in Lua 5.1). The reason, with a code, comes from
+-- lib:Refusal(needs) - the very function New decides with (#54).
+local function Refused(opts, label)
+    local ok, err = pcall(lib.New, lib, opts)
+    H.check(not ok, label .. " is refused")
+    H.eq(type(err), "string", label .. ": with a string, safe to `..` and to format")
+    H.check(not tostring(err):find("lua:%d+:"), label .. ": a message for players, no file position")
+    local why = lib:Refusal(opts.needs)
+    H.check(type(why) == "table", label .. ": lib:Refusal gives the reason")
+    why = why or {}
+    H.eq(err, why.text, label .. ": and New's message is that reason's text")
+    return why
+end
+local GLASS_MINOR = select(2, LibStub:GetLibrary("LibGlass-1.0"))
+local libs, minors = LibStub.libs["LibGlass-1.0"], LibStub.minors["LibGlass-1.0"]
+local function DropGlass() LibStub.libs["LibGlass-1.0"], LibStub.minors["LibGlass-1.0"] = nil, nil end
+local function RestoreGlass() LibStub.libs["LibGlass-1.0"], LibStub.minors["LibGlass-1.0"] = libs, minors end
+local glassLib = LibStub("LibGlass-1.0")
+local glassReady, ready = glassLib.ready, lib.ready
 
-local ready = lib.ready
+H.eq(lib:Refusal(), nil, "nothing wrong: lib:Refusal answers nil")
+H.eq(lib:Refusal(MINOR), nil, "and nil at the active MINOR")
+local okDot, errDot = pcall(lib.Refusal, MINOR)
+H.check(not okDot and tostring(errDot):find("colon", 1, true), "a dot call errors: " .. tostring(errDot))
+
+local r = Refused({ owner = "Priestly", report = report, needs = MINOR + 1 }, "a copy older than needs")
+H.eq(r.code, "too-old", "with code too-old")
+H.eq(r.active, MINOR, "the active MINOR")
+H.eq(r.needs, MINOR + 1, "what the host needs")
+H.eq(r.glassMinor, GLASS_MINOR, "and LibGlass's MINOR")
+H.check(r.text:find("reinstalling the addon", 1, true),
+    "telling the player to reinstall THIS addon: the newest copy runs, so its own is stale: " .. r.text)
+
 lib.ready = MINOR - 1
-ok, err = pcall(lib.New, lib, { owner = "Priestly", report = report })
-H.check(not ok and tostring(err):find("did not finish loading", 1, true),
-    "a copy that did not finish is refused: " .. tostring(err))
+r = Refused({ owner = "Priestly", report = report, needs = MINOR + 1 }, "an incomplete copy")
+H.eq(r.code, "incomplete", "with code incomplete - before too-old")
+H.eq(r.glassMinor, GLASS_MINOR, "every field filled: LibGlass's MINOR too")
+H.check(r.text:find("scriptErrors", 1, true), "telling the player how to see which addon: " .. r.text)
+DropGlass()
+r = lib:Refusal()
+H.eq(r and r.code, "incomplete", "incomplete comes before a missing LibGlass as well")
+RestoreGlass()
 lib.ready = ready
 
-local glassLib = LibStub("LibGlass-1.0")
-local glassReady = glassLib.ready
 glassLib.ready = nil
-ok, err = pcall(lib.New, lib, { owner = "Priestly", report = report })
-H.check(not ok and tostring(err):find("needs LibGlass-1.0", 1, true),
-    "and so is one whose LibGlass is not usable: " .. tostring(err))
+r = Refused({ owner = "Priestly", report = report, needs = MINOR + 1 }, "a half-loaded LibGlass")
+H.eq(r.code, "glass-incomplete", "with code glass-incomplete - before too-old")
+H.eq(r.glassMinor, GLASS_MINOR, "naming the LibGlass MINOR that did not finish")
 glassLib.ready = glassReady
+
+DropGlass()
+r = Refused({ owner = "Priestly", report = report, needs = MINOR + 1 }, "no LibGlass at all")
+H.eq(r.code, "glass-missing", "with code glass-missing - before too-old")
+H.eq(r.glassMinor, nil, "and no LibGlass MINOR to name")
+RestoreGlass()
+
+-- The host's own mistakes are strings at the host's line.
+local okDev, errDev = pcall(function() lib:New({ owner = "Priestly" }) end)
+H.check(not okDev and errDev:find("test_new%.lua:%d+:") ~= nil,
+    "a host's own mistake points at the host's line: " .. tostring(errDev))
+H.eq(lib:Refusal(), nil, "and is not a refusal")
 H.eq(next(lib.instances), nil, "none of which registers anything")
 
 ------------------------------------------------------------

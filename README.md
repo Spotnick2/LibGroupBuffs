@@ -93,13 +93,32 @@ if not lib then print("MyAddon: LibGroupBuffs-1.0 is missing - reinstall the add
 local ok, GB = pcall(lib.New, lib, {
     owner  = "MyAddon",
     report = function(text, kind) print("MyAddon: " .. text) end,   -- the library never prints
-    needs  = 26,                                                    -- the MINOR you pinned
+    needs  = 28,                                                    -- the MINOR you pinned
 })
-if not ok then print("MyAddon: " .. GB) return end
+if not ok then
+    -- New's error is a plain string. Why it refused, with a code to word each case
+    -- for your players, comes from lib:Refusal (r28); nil means it was not a refusal
+    -- (a bug, or a mistake in the call itself). The ACTIVE copy may predate r28 -
+    -- another addon's older copy, or an r28 that failed before installing Refusal,
+    -- which is exactly when New refuses - so check it exists, and fall back to GB,
+    -- the string New raised.
+    local why = type(lib.Refusal) == "function" and lib:Refusal(28) or nil
+    local code = why and why.code
+    if code == "glass-missing" or code == "too-old" then
+        print("MyAddon: cannot start - its download is incomplete or outdated; reinstall MyAddon")
+    else
+        print("MyAddon: cannot start - " .. (why and why.text or GB))
+    end
+    return
+end
 ```
 
-`New` errors, with a message meant for the player, when another addon's copy did not finish
-loading, when LibGlass is missing, or when the newest copy loaded is older than `needs`. What it
+`New` refuses, with a plain string meant for the player, when another addon's copy did not
+finish loading (`"incomplete"`), when LibGlass is missing (`"glass-missing"`) or did not finish
+loading (`"glass-incomplete"`), or when the newest copy loaded is older than `needs`
+(`"too-old"`, meaning your own copy is stale). `lib:Refusal(needs)` returns that reason as
+`{ code, text, active, needs, glassMinor }`, or nil. New codes may be added, so treat one you
+don't know as a generic failure. What `New`
 returns is dot-called: each function finds the newest copy's code when it runs, so hold them as
 locals if you like.
 

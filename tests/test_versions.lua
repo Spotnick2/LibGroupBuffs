@@ -1158,6 +1158,9 @@ local okNew, errNew = pcall(lib.New, lib, { owner = "Magely", report = function(
 H.check(not okNew and tostring(errNew):find("did not finish loading", 1, true),
     "New refuses a copy that threw partway: " .. tostring(errNew))
 H.eq(lib.Status(), "incomplete", "and Status agrees")
+local why = lib:Refusal()
+H.eq(why and why.code, "incomplete", "and lib:Refusal gives the reason a host switches on")
+H.eq(why and why.active, CURRENT + 1, "naming the MINOR that did not finish")
 H.eq(GB.FmtTime(90), lib.UI.FmtTime(90), "an instance made earlier still answers")
 
 ------------------------------------------------------------
@@ -1225,5 +1228,64 @@ if CURRENT > 26 then
     r26Host.ui:ApplyAppearance()
     H.eq(r26Looks, 1, "an open window r26 laid out reaches onAppearance under the newer copy")
 end
+
+------------------------------------------------------------
+-- The README's own host example, run against every active copy it can meet
+--
+-- lib:Refusal is new in r28, and a refusal is exactly when the active copy
+-- may predate it: another addon's complete r27, or an r28 that threw before
+-- its New section and left r27's New on the shared table. The example must
+-- still print a reason, never throw (Codex review of #57). Run from the
+-- README itself, so the documentation cannot drift from what is tested.
+------------------------------------------------------------
+
+local function ReadmeHostBlock()
+    local readme = ReadFile("README.md"):gsub("\r\n", "\n")
+    for block in readme:gmatch("```lua\n(.-)\n```") do
+        if block:find("lib.New, lib,", 1, true) then return block end
+    end
+end
+local HOST_BLOCK = ReadmeHostBlock()
+H.check(HOST_BLOCK ~= nil and HOST_BLOCK:find("lib.Refusal", 1, true) ~= nil,
+    "the README has a host example that asks lib:Refusal")
+local function RunReadmeHost(label)
+    local printed = {}
+    local chunk = assert(loadstring(HOST_BLOCK, "=README host example"))
+    setfenv(chunk, setmetatable({ print = function(s) printed[#printed + 1] = s end },
+        { __index = _G }))
+    local ok, err = pcall(chunk)
+    H.check(ok, "the README example does not throw (" .. label .. "): " .. tostring(err))
+    H.eq(#printed, 1, "it prints one line (" .. label .. ")")
+    return printed[1] or ""
+end
+
+local R27 = SINGLE[2] and SINGLE[2][1] == 27 and SINGLE[2][2]
+H.check(R27, "the r27 fixture is frozen")
+if R27 then
+    -- Another addon's complete r27 is the active copy: no Refusal at all.
+    freshLibStub()
+    load(R27, "r27")
+    H.eq(LibStub("LibGroupBuffs-1.0").Refusal, nil, "r27 has no lib:Refusal")
+    local line = RunReadmeHost("complete r27")
+    H.check(line:find("r28 or newer", 1, true) ~= nil,
+        "and falls back to New's own sentence: " .. line)
+
+    -- r27, then an r28 that threw before its New section.
+    freshLibStub()
+    load(R27, "r27")
+    H.check(not pcall(load, NextCopy(28, { { "\ndo -- New ", '\nerror("r28 thrown mid-load")\ndo -- New ' } }),
+        "r28 throwing"), "the r28 copy threw before installing Refusal")
+    H.eq(LibStub("LibGroupBuffs-1.0").Refusal, nil, "leaving no lib:Refusal on the table")
+    line = RunReadmeHost("r27 under a failed r28")
+    H.check(line:find("did not finish loading", 1, true) ~= nil,
+        "and the example prints r27 New's refusal: " .. line)
+end
+
+-- And on this copy, where Refusal answers: no LibGlass at all.
+freshLibStub(true)
+load(CURRENT_FILES, "current")
+local line = RunReadmeHost("current, LibGlass missing")
+H.check(line:find("reinstall MyAddon", 1, true) ~= nil,
+    "on a copy with Refusal it words the code its own way: " .. line)
 
 H.done("test_versions")
