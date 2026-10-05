@@ -95,11 +95,26 @@ local ok, GB = pcall(lib.New, lib, {
     report = function(text, kind) print("MyAddon: " .. text) end,   -- the library never prints
     needs  = 26,                                                    -- the MINOR you pinned
 })
-if not ok then print("MyAddon: " .. GB) return end
+if not ok then
+    -- A refusal is a table with a code, so you can word each case for your players
+    -- (r28). Anything else is a string: a bug, or a mistake in the call itself.
+    local code = type(GB) == "table" and GB.code
+    if code == "glass-missing" then
+        print("MyAddon: LibGlass is missing from MyAddon's Libs folder - reinstall MyAddon")
+    elseif code == "too-old" then
+        print("MyAddon: an addon carries an older LibGroupBuffs (r" .. GB.active .. ") - update it")
+    else
+        print("MyAddon: cannot start - " .. tostring(GB))   -- incomplete, glass-incomplete, or new codes
+    end
+    return
+end
 ```
 
-`New` errors, with a message meant for the player, when another addon's copy did not finish
-loading, when LibGlass is missing, or when the newest copy loaded is older than `needs`. What it
+`New` refuses when another addon's copy did not finish loading (`"incomplete"`), when LibGlass is
+missing (`"glass-missing"`) or did not finish loading (`"glass-incomplete"`), or when the newest
+copy loaded is older than `needs` (`"too-old"`). The refusal is a table:
+`{ code, text, active, needs, glassMinor }`, where `tostring` gives `text`, a sentence for players.
+New codes may be added, so treat one you don't know as a generic failure. What it
 returns is dot-called: each function finds the newest copy's code when it runs, so hold them as
 locals if you like.
 

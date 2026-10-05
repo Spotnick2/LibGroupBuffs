@@ -54,10 +54,18 @@ local belongs inside its section.** The only file-level locals shared between se
 and the like name those sections.
 
 - **`lib:New(opts)`** — the per-addon entry point (the `New` section), shaped like LibGlass's:
-  `LibStub("LibGroupBuffs-1.0"):New({ owner, report = function(text, kind), needs })`. It errors
-  (a message for players, no file position) unless the active copy finished loading
-  (`lib.ready`), LibGlass is usable and the active MINOR is at least `needs`; a dot call, a
-  missing owner or reporter, or a second instance for the same owner are developer errors. The
+  `LibStub("LibGroupBuffs-1.0"):New({ owner, report = function(text, kind), needs })`. It
+  **refuses with a table** (#54, r28) unless the active copy finished loading (`lib.ready`),
+  LibGlass is usable and the active MINOR is at least `needs`, checked in that order:
+  `{ code, text, active, needs, glassMinor }`, `code` one of `"incomplete"`, `"glass-missing"`,
+  `"glass-incomplete"`, `"too-old"`. A host switches on `code` and words each case for its own
+  players, instead of re-reading the markers itself (Priestly's `WhyRefused` did, before r28).
+  **The codes are contract:** never renamed or removed; new ones may be added, so a host treats
+  an unknown code as a generic failure. `tostring(refusal)` is `text` (`lib.refusalMT`, filled in
+  place), so a host written for r26/r27 that does `tostring(err)` reads the same sentence. The
+  LibGlass rule is `GlassUsable`'s, split into missing and half-loaded. A dot call, a missing
+  owner or reporter, or a second instance for the same owner are developer errors: plain
+  strings at the caller's line. The
   instance is **dot-called**: `Engine`, `UI` (the owner filled in when the host gave none),
   `Settings` (owner and reporter filled in when absent, never over the host's), `Visibility`,
   `RegisterEvents` (rejections reach the same `report(text, "events")`), `EventFailures`,

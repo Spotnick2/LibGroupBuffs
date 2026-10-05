@@ -15,13 +15,14 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 27
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 28
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
 -- Private to this copy and shared by its sections: assigned in the Glass
 -- section, read by the window and by lib.Status / lib:New.
 local GlassUsable, GlassInst, GLASS_MISSING
+local GLASS = "LibGlass-1.0"
 
 do -- Compat ==================================================================
 
@@ -804,7 +805,6 @@ do -- Glass ===================================================================
 -- upgrades of this library (lib.glass), so a newer copy never makes a second
 -- one. LibGlass migrates its own instances when a newer LibGlass loads.
 
-local GLASS = "LibGlass-1.0"
 GLASS_MISSING = MAJOR .. " needs " .. GLASS .. ", which is missing or did not finish "
     .. "loading: embed it at Libs\\" .. GLASS .. " and load its XML before " .. MAJOR .. "'s"
 
@@ -4361,10 +4361,30 @@ do -- New =====================================================================
 --     GB.TimerColor(pct), GB.Pct(rem, dur), GB.FmtTime(s)
 --     GB.API, GB.STATES, GB.PET_GROUP, GB.LOAD_CHECK_KEY, GB.CLASS_ICONS, GB.MINOR
 --
--- New does the version check a host used to carry in its own bridge: it
--- errors unless the active copy finished loading, LibGlass-1.0 is usable and
--- the active MINOR is at least `needs`. A host pcalls it and prints the error
--- with its own prefix.
+-- New does the version check a host used to carry in its own bridge, and
+-- when it refuses it says WHY in a form a host can switch on (#54), so no
+-- host has to re-read the library's markers to find out:
+--
+--     local ok, GB = pcall(lib.New, lib, opts)
+--     if not ok then
+--         if type(GB) == "table" then      -- a refusal: GB.code says which
+--             -- "incomplete"        the active LibGroupBuffs copy did not finish loading
+--             -- "glass-missing"     LibGlass-1.0 is not loaded at all
+--             -- "glass-incomplete"  LibGlass-1.0 is registered but did not finish loading
+--             -- "too-old"           the active MINOR is below opts.needs
+--             -- fields: code, text (a player-facing sentence), active (the active
+--             -- MINOR), needs, glassMinor (when LibGlass is registered)
+--         else                             -- a string: a bug, or the host's own mistake
+--         end
+--     end
+--
+-- Checked in that order. The codes are part of the contract: never renamed
+-- or removed, but new ones may be added, so a host treats a code it does not
+-- know as a generic failure. tostring() of a refusal is its text, so a host
+-- written before refusals were tables reads the same sentence it always did.
+-- Mistakes in the host's own call (a dot call, owner, report, needs, a second
+-- New for the same owner) stay strings at the caller's line: they are the
+-- developer's, not the player's.
 --
 -- Upgrade rules (EMBEDDED-LIBRARIES.md §5): every instance function looks up
 -- lib.impl.<name> WHEN IT RUNS, so an instance an older copy made runs the
@@ -4393,6 +4413,14 @@ lib.shared.CLASS_ICONS = lib.UI.CLASS_ICONS
 lib.shared.MINOR = MINOR
 
 local impl = lib.impl
+
+-- A refusal is a table, raised as the error value. Its metatable is shared
+-- and filled in place, so tostring() is the text whichever copy refused.
+lib.refusalMT = lib.refusalMT or {}
+lib.refusalMT.__tostring = function(refusal) return refusal.text end
+local function Refuse(refusal)
+    error(setmetatable(refusal, lib.refusalMT), 0)
+end
 
 -- A constructor's argument errors name the line that called it, at level 3
 -- from its Fail helper. Reached through an instance, level 3 is a library
@@ -4478,16 +4506,29 @@ function lib:New(opts)
     if lib.instances[owner] ~= nil then
         error(MAJOR .. ": " .. owner .. " already has an instance - New is called once per addon", 2)
     end
-    -- The state checks are for players, not developers: no file position.
+    -- The state checks are for players, not developers: refusals, with a code.
+    -- Same order, and the same rule for LibGlass, as GlassUsable.
     local _, active = LibStub:GetLibrary(MAJOR, true)
     if lib.ready ~= active then
-        error(MAJOR .. " r" .. tostring(active) .. " did not finish loading - another addon's copy "
-            .. "failed; the first error this session names it", 0)
+        Refuse({ code = "incomplete", active = active, needs = needs,
+            text = MAJOR .. " r" .. tostring(active) .. " did not finish loading - another "
+                .. "addon's copy failed; the first error this session names it" })
     end
-    if not GlassUsable() then error(GLASS_MISSING, 0) end
+    local glass, glassMinor = LibStub:GetLibrary(GLASS, true)
+    if type(glass) ~= "table" or glassMinor == nil then
+        Refuse({ code = "glass-missing", active = active, needs = needs,
+            text = MAJOR .. " needs " .. GLASS .. ", which is not loaded: embed it at Libs\\"
+                .. GLASS .. " and load its XML before " .. MAJOR .. "'s" })
+    end
+    if glass.ready ~= glassMinor then
+        Refuse({ code = "glass-incomplete", active = active, needs = needs, glassMinor = glassMinor,
+            text = GLASS .. " r" .. tostring(glassMinor) .. " did not finish loading - another "
+                .. "addon's copy failed; the first error this session names it" })
+    end
     if needs and active < needs then
-        error(owner .. " needs " .. MAJOR .. " r" .. needs .. " or newer, and the newest copy "
-            .. "loaded is r" .. active .. " - nothing is broken, an addon is out of date", 0)
+        Refuse({ code = "too-old", active = active, needs = needs, glassMinor = glassMinor,
+            text = owner .. " needs " .. MAJOR .. " r" .. needs .. " or newer, and the newest copy "
+                .. "loaded is r" .. active .. " - nothing is broken, an addon is out of date" })
     end
     local inst = setmetatable({ owner = owner, report = report, needs = needs }, lib.instanceMT)
     Migrate(inst)
