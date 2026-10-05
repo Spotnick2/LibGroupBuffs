@@ -98,8 +98,11 @@ local ok, GB = pcall(lib.New, lib, {
 if not ok then
     -- New's error is a plain string. Why it refused, with a code to word each case
     -- for your players, comes from lib:Refusal (r28); nil means it was not a refusal
-    -- (a bug, or a mistake in the call itself).
-    local why = lib:Refusal(28)
+    -- (a bug, or a mistake in the call itself). The ACTIVE copy may predate r28 -
+    -- another addon's older copy, or an r28 that failed before installing Refusal,
+    -- which is exactly when New refuses - so check it exists, and fall back to GB,
+    -- the string New raised.
+    local why = type(lib.Refusal) == "function" and lib:Refusal(28) or nil
     local code = why and why.code
     if code == "glass-missing" or code == "too-old" then
         print("MyAddon: cannot start - its download is incomplete or outdated; reinstall MyAddon")
@@ -115,7 +118,7 @@ finish loading (`"incomplete"`), when LibGlass is missing (`"glass-missing"`) or
 loading (`"glass-incomplete"`), or when the newest copy loaded is older than `needs`
 (`"too-old"`, meaning your own copy is stale). `lib:Refusal(needs)` returns that reason as
 `{ code, text, active, needs, glassMinor }`, or nil. New codes may be added, so treat one you
-don't know as a generic failure. What it
+don't know as a generic failure. What `New`
 returns is dot-called: each function finds the newest copy's code when it runs, so hold them as
 locals if you like.
 

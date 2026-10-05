@@ -4377,7 +4377,10 @@ do -- New =====================================================================
 --
 --     local ok, GB = pcall(lib.New, lib, opts)
 --     if not ok then
---         local why = lib:Refusal(opts.needs)   -- nil: not a refusal - a bug, or the call
+--         -- Refusal is new in r28, and the active copy may be older (or an r28
+--         -- that threw before installing it), so check it, and fall back to GB.
+--         local why = type(lib.Refusal) == "function" and lib:Refusal(opts.needs) or nil
+--         -- why == nil: not a refusal, or no Refusal to ask - print tostring(GB)
 --         -- why.code: "incomplete"        the active copy did not finish loading
 --         --           "glass-missing"     LibGlass-1.0 is not loaded at all
 --         --           "glass-incomplete"  LibGlass-1.0 did not finish loading
