@@ -160,17 +160,21 @@ and the like name those sections.
     handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
     `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
     `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
-  - **A deferred close is always explained** while the frame is still on screen, whoever asked
+  - **A deferred close is always reported** while the frame is still on screen, whoever asked
     for it: the X button, a slash command, or the addon's own automatic close (the group emptied,
-    "show when solo" unticked mid-fight). The host gets `onCloseDeferred(ui, manual)`, so it can
-    word the two kinds differently. It is said once per pending close **and kind**: the player's
+    "show when solo" unticked mid-fight). The host gets `onCloseDeferred(ui, manual)`, and **what
+    it says is the host's choice**. The library reports; the addon decides whether the player
+    hears it. Staying silent when `manual` is false is a legitimate choice: a window that stays
+    up through the fight is what a buffer wants (it shows who needs a rebuff), and it goes once
+    combat ends. Answering the player's own X (`manual` true) is the case worth a line. It is said once per pending close **and kind**: the player's
     X after an automatic close in the same fight is answered too, and a manual explanation covers
     the rest of that fight. `manual` also decides whether the close is saved as the player's
     preference (`setVisible(false)`). Until r27 automatic closes said nothing (#45). An r26
-    copy's latch, `true`, reads as manual. **A host should word the two kinds differently**: one
-    that prints the same line for both prints it twice when the player clicks X after an
-    automatic close in the same fight. That is deliberate: the click is answered, as it was
-    before r27, and staying silent was the round-1 defect on #53. A show queued in combat (the
+    copy's latch, `true`, reads as manual. **A host that does speak for automatic closes should
+    word the two kinds differently**: one that prints the same line for both prints it twice when
+    the player clicks X after an automatic close in the same fight. That is deliberate: the click
+    is answered, as it was before r27, and staying silent was the round-1 defect on #53. A host
+    that ignores `manual == false` keeps r26's behaviour exactly. A show queued in combat (the
     window wanted again) clears the latch, so a close after it is explained again. Known limit:
     the explanation for an automatic close can be overtaken by such a show in the same fight,
     and then the window stays after combat.
