@@ -98,6 +98,21 @@ H.eq(r.code, "glass-missing", "with code glass-missing - before too-old")
 H.eq(r.glassMinor, nil, "and no LibGlass MINOR to name")
 RestoreGlass()
 
+-- The clean preset exists from LibGlass r6: an older one ignores the option, so
+-- with no instance yet the window cannot be built to look right (r29). One
+-- already made, by an older copy, keeps working on whatever is loaded.
+local savedGlass = lib.glass
+LibStub.minors["LibGlass-1.0"], glassLib.ready = 5, 5
+lib.glass = nil
+r = Refused({ owner = "Priestly", report = report }, "a LibGlass below r6 with no instance")
+H.eq(r.code, "glass-too-old", "with code glass-too-old")
+H.eq(r.glassMinor, 5, "naming the LibGlass MINOR that is too old")
+lib.glass = {}
+H.eq(lib:Refusal(), nil, "but not once an instance exists: built windows keep refreshing")
+lib.glass = savedGlass
+LibStub.minors["LibGlass-1.0"], glassLib.ready = minors, glassReady
+H.eq(lib:Refusal(), nil, "and a current LibGlass is fine again")
+
 -- The host's own mistakes are strings at the host's line.
 local okDev, errDev = pcall(function() lib:New({ owner = "Priestly" }) end)
 H.check(not okDev and errDev:find("test_new%.lua:%d+:") ~= nil,

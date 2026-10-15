@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: LibGroupBuffsProbe
+## Notes: Throwaway probe for LibGroupBuffs-1.0: the buff window over a synthetic host, no consuming addon. A ForeverProbe module: /fp gb
+## Author: Spotnick
+## Version: dev
+## Dependencies: ForeverProbe
+## SavedVariables: LibGroupBuffsProbeDB
+
+Libs\LibGlass-1.0\LibGlass-1.0.xml
+Libs\LibGroupBuffs-1.0\LibGroupBuffs-1.0.xml
+LibGroupBuffsProbe.lua

@@ -980,6 +980,30 @@ H.near((r25Glass.rim:GetVertexColor()), 1.0, 0.001, "and the host's border colou
 -- opaque, until /reload. Repainting it would overwrite what a host set itself.
 H.eq(r25Glass.rim._alpha, nil, "the r25 rim is not repainted to LibGlass's alpha")
 
+-- The same window under a complete LibGlass below the clean preset's floor
+-- (r6): nothing is being built, so it keeps refreshing, and no instance is made.
+freshLibStub()
+load(R25, "r25")
+lib = LibStub("LibGroupBuffs-1.0")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local oldHost = H.PriestUI()
+oldHost.config.visible.shadow = false
+oldHost.engine:RefreshSpells()
+oldHost.ui:Update()
+local oldGlass = oldHost.ui.main.glass
+local oldGlassLib = LibStub("LibGlass-1.0")
+LibStub.minors["LibGlass-1.0"], oldGlassLib.ready = 5, 5
+load(CURRENT_FILES, "current")
+lib = LibStub("LibGroupBuffs-1.0")
+H.eq(lib.glass, nil, "r25 made no LibGlass instance")
+H.check(pcall(oldHost.ui.Update, oldHost.ui), "an r25 window refreshes under a complete LibGlass r5")
+oldHost.ui_config.alpha = 0.5
+H.check(pcall(oldHost.ui.ApplyAppearance, oldHost.ui), "and takes a new opacity")
+H.near(oldGlass.tint._colorTexture[4], 0.24 * 0.5, 0.001, "from the built tint")
+H.eq(lib.glass, nil, "without making a LibGlass instance")
+
 ------------------------------------------------------------
 -- LibGlass-1.0 is a dependency every consumer embeds beside this library
 --

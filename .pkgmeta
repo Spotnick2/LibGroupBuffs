@@ -20,3 +20,4 @@ ignore:
   - AGENTS.md
   - CLAUDE.md
   - README.md
+  - Tools

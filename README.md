@@ -50,7 +50,8 @@ folder, and a nested copy would draw blank.
 externals:
   Libs/LibGlass-1.0:
     url: https://github.com/Spotnick2/LibGlass
-    tag: r1
+    # r6 or newer: the window uses its clean preset (r29)
+    tag: r6
   Libs/LibGroupBuffs-1.0:
     url: https://github.com/Spotnick2/LibGroupBuffs
     tag: r26
