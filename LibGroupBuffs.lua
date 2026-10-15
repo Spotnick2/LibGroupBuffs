@@ -21,7 +21,7 @@ if not lib then return end          -- an equal or newer copy is already loaded
 
 -- Private to this copy and shared by its sections: assigned in the Glass
 -- section, read by the window, lib.Status and lib:Refusal.
-local GlassState, GlassUsable, GlassInst, GLASS_MISSING
+local GlassState, GlassUsable, GlassInst, GLASS_MISSING, GlassTooOld
 
 do -- Compat ==================================================================
 
@@ -824,12 +824,32 @@ GlassUsable = function()
     return GlassState() == nil
 end
 
+-- The window wears LibGlass's clean preset (r29), which exists from r6: an
+-- older LibGlass ignores the option and silently draws the original look, so
+-- CREATING the instance needs r6. It is a floor on building, not on being
+-- usable: a window already built, or an instance an older copy already made,
+-- keeps refreshing on whatever LibGlass is loaded. Returns the LibGlass MINOR
+-- when it is below the floor, else nil.
+local GLASS_FLOOR = 6
+GlassTooOld = function()
+    local _, glassMinor = LibStub:GetLibrary(GLASS, true)
+    if type(glassMinor) == "number" and glassMinor < GLASS_FLOOR then return glassMinor, GLASS_FLOOR end
+    return nil
+end
+
 -- Checked on every use, not only at creation: a LibGlass upgrade that threw
 -- after our instance existed would otherwise go unnoticed until a draw failed
 -- somewhere less obvious.
 GlassInst = function()
     if not GlassUsable() then error(GLASS_MISSING, 2) end
-    if lib.glass == nil then lib.glass = LibStub(GLASS):New({ preset = "clean" }) end
+    if lib.glass == nil then
+        local old = GlassTooOld()
+        if old then
+            error(MAJOR .. " needs " .. GLASS .. " r" .. GLASS_FLOOR .. " or newer to build its window, "
+                .. "and the newest copy loaded is r" .. old .. ": update the addon that embeds it", 2)
+        end
+        lib.glass = LibStub(GLASS):New({ preset = "clean" })
+    end
     return lib.glass
 end
 
@@ -4384,6 +4404,7 @@ do -- New =====================================================================
 --         -- why.code: "incomplete"        the active copy did not finish loading
 --         --           "glass-missing"     LibGlass-1.0 is not loaded at all
 --         --           "glass-incomplete"  LibGlass-1.0 did not finish loading
+--         --           "glass-too-old"     LibGlass-1.0 is below r6 (r29) and no window exists yet
 --         --           "too-old"           the active MINOR is below needs
 --         -- why.text (a sentence for players), why.active, why.needs, why.glassMinor
 --     end
@@ -4450,6 +4471,12 @@ function lib:Refusal(needs)
     if glassWhy == "glass-incomplete" then
         return Refusal(glassWhy, "the LibGlass-1.0 library (r" .. tostring(glassMinor)
             .. ") did not finish loading" .. SEE_WHICH)
+    end
+    local tooOld, floor = GlassTooOld()
+    if lib.glass == nil and tooOld then
+        return Refusal("glass-too-old", "the LibGlass-1.0 library (r" .. tostring(glassMinor)
+            .. ") is too old: this window needs r" .. floor .. " or newer - updating the addons "
+            .. "that embed it should fix this")
     end
     if type(needs) == "number" and active < needs then
         -- LibStub runs the NEWEST copy loaded, so an active copy below the

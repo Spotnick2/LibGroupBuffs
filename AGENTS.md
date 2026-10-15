@@ -59,7 +59,9 @@ and the like name those sections.
   (`lib.ready`), LibGlass is usable and the active MINOR is at least `needs`. **Why** comes from
   `lib:Refusal(needs)` (#54, r28): `nil`, or `{ code, text, active, needs, glassMinor }` with
   every known field filled, `code` one of `"incomplete"`, `"glass-missing"`,
-  `"glass-incomplete"`, `"too-old"`, in that order. `New` decides **with** `Refusal` and raises
+  `"glass-incomplete"`, `"glass-too-old"` (r29: LibGlass below r6, which lacks the clean preset the
+  window is built with; only while no LibGlass instance exists yet, so built windows keep refreshing),
+  `"too-old"`, in that order. `New` decides **with** `Refusal` and raises
   its `text`, so the two cannot disagree, and a host switches on `code` instead of re-reading the
   markers itself (Priestly's `WhyRefused` did before r28). **The codes are contract:** never
   renamed or removed; new ones may be added, so a host treats an unknown code as a generic
