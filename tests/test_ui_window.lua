@@ -940,6 +940,10 @@ H.check(glass.shadow._texture:find(media, 1, true) == 1,
 -- LibGlass's rim, not v1's: drawn at STYLE.rimAlpha (0.7) rather than opaque.
 H.eq(glass.rim._alpha, lib.glass.STYLE.rimAlpha, "the rim is drawn at LibGlass's rim alpha")
 
+-- The window wears the clean material (r29): thin rim, no grain.
+H.eq(glass.size, "thin", "the window panel resolves to the clean thin rim")
+H.eq(lib.glass.STYLE.grain, 0, "and the instance has no grain")
+
 -- A row's colour is a glass bar's colour now.
 local row = ui.rows[1]
 H.check(type(row.fill) == "table", "a row has a glass fill")

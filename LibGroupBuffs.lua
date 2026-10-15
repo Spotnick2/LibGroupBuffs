@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 28
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 29
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -829,7 +829,7 @@ end
 -- somewhere less obvious.
 GlassInst = function()
     if not GlassUsable() then error(GLASS_MISSING, 2) end
-    if lib.glass == nil then lib.glass = LibStub(GLASS):New() end
+    if lib.glass == nil then lib.glass = LibStub(GLASS):New({ preset = "clean" }) end
     return lib.glass
 end
 
