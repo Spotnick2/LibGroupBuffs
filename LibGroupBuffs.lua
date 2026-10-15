@@ -3022,7 +3022,14 @@ local BUILT_TINT = { 0.13, 0.16, 0.22, 0.24 }
 local function TintPanel(f, colour, alpha)
     local g = Panel(f)
     if not g or not g.tint then return end
-    local base = GlassUsable() and GlassInst().STYLE.tint or BUILT_TINT
+    -- An existing instance, else one a usable LibGlass at the floor can make,
+    -- else the built tint: recolouring a panel never constructs one below r6.
+    local base = BUILT_TINT
+    if lib.glass then
+        base = lib.glass.STYLE.tint
+    elseif GlassUsable() and not GlassTooOld() then
+        base = GlassInst().STYLE.tint
+    end
     g.tint:SetColorTexture(colour[1], colour[2], colour[3], base[4] * (alpha or 1))
 end
 
