@@ -8,6 +8,11 @@ Anniversary to Forever. Its siblings — [Wildly](https://github.com/Spotnick2/W
 [Magely](https://github.com/Spotnick2/Magely) — are the same addon with a different `DEFS` table, so
 the parts that are not class-specific live here instead of three times over. All three use it.
 
+The buff window and its popover use `LOW` frame strata, so normal `MEDIUM` or
+higher UI panels can cover them. The popover keeps its higher frame level within
+`LOW`. Existing windows adopt this on their next out-of-combat rebuild. Custom
+bag addons that also use `LOW` still need an in-game overlap check.
+
 ## Why a library
 
 Forever is Vanilla *content* running on the Retail/Mainline *codebase*, and porting to it surfaced a

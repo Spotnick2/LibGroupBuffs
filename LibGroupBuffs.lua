@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 29
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 30
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -2700,7 +2700,7 @@ function Methods:Init()
     local main = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     main._ui = self
     self.main = main
-    main:SetFrameStrata("HIGH")
+    main:SetFrameStrata("LOW")
     main:SetClampedToScreen(true)
     main:SetMovable(true)
     Panel(main)
@@ -2756,7 +2756,7 @@ function Methods:Init()
     local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     pop._ui = self
     self.pop = pop
-    pop:SetFrameStrata("DIALOG")
+    pop:SetFrameStrata("LOW")
     pop:SetFrameLevel(200)
     pop:SetClampedToScreen(true)
     Panel(pop)
@@ -3941,6 +3941,11 @@ local function Rebuild(self)
     if #defs == 0 then self:Close(); return end
 
     ApplyLook(self)
+    -- Normal UI panels must remain usable above the buff window. Apply on
+    -- rebuild too, so a window constructed by an older library is upgraded.
+    -- Rebuild only runs outside combat; both frames parent secure buttons.
+    main:SetFrameStrata("LOW")
+    self.pop:SetFrameStrata("LOW")
 
     for _, r in ipairs(self.rows) do r._active = false; r:Hide() end
     for _, h in ipairs(self.headers) do h:Hide() end
