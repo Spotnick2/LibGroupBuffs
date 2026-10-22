@@ -65,6 +65,23 @@ for k in pairs(_G) do
 end
 H.eq(#added, 0, "building the window adds no globals: " .. table.concat(added, ", "))
 
+H.eq(ui.main:GetFrameStrata(), "LOW", "main stays below normal UI panels")
+H.eq(ui.pop:GetFrameStrata(), "LOW", "popup does not jump above bags or dialogs")
+H.check(ui.pop:GetFrameLevel() > ui.main:GetFrameLevel(), "popup stays above main within LOW")
+H.check(ui.popRows[1]:GetFrameLevel() > ui.pop:GetFrameLevel(), "popup buttons stay above their panel")
+-- An older library can have constructed the frames before this one upgrades.
+ui.main:SetFrameStrata("HIGH")
+ui.pop:SetFrameStrata("DIALOG")
+WoW.inCombat = true
+ui:Update()
+H.eq(ui.main:GetFrameStrata(), "HIGH", "upgraded window keeps its layer during combat")
+H.eq(ui.pop:GetFrameStrata(), "DIALOG", "upgraded popup keeps its layer during combat")
+WoW.inCombat = false
+ui:OnCombatEnd()
+WoW.flushTimers()
+H.eq(ui.main:GetFrameStrata(), "LOW", "window layer migrates after combat")
+H.eq(ui.pop:GetFrameStrata(), "LOW", "popup layer migrates after combat")
+
 ------------------------------------------------------------
 -- Pool sizes come from the worst roster the engine can produce
 ------------------------------------------------------------
