@@ -212,6 +212,7 @@ function H.PriestUI(opts)
         owner   = opts.owner or "Priestly",
         title   = opts.title or "|cff99ddffPriestly|r",
         version = "test",
+        minimizable = opts.minimizable,
         appearance = function() return host.look end,
         unknownClassIcon = "PRIEST_ICON",
         footerItems = function() return host.footer end,
@@ -234,6 +235,10 @@ function H.PriestUI(opts)
         onCloseDeferred = function(_, manual)
             host.deferredCloses = (host.deferredCloses or 0) + 1
             host.deferredManual = manual
+        end,
+        onMinimizeDeferred = function(_, minimized)
+            host.minimizeRequests = host.minimizeRequests or {}
+            host.minimizeRequests[#host.minimizeRequests + 1] = minimized
         end,
     })
     return host
