@@ -14,8 +14,11 @@ local custom = LibStub("LibGlass-1.0"):New({ preset = "clean", style = { gloss =
 local host = H.PriestUI({ owner = "CustomHost" })
 host.engine:RefreshSpells()
 host.ui.host.glass = custom
+local useBodyStyle = true
 host.ui.host.bodyStyle = function()
-    return { tint = { 0.1, 0.2, 0.3, 0.7 }, wash = 0.5, backing = { 0.04, 0.05, 0.07, 0.9 } }
+    if useBodyStyle then
+        return { tint = { 0.1, 0.2, 0.3, 0.7 }, wash = 0.5, backing = { 0.04, 0.05, 0.07, 0.9 } }
+    end
 end
 host.ui:Update()
 H.eq(host.ui.main.glass.tint._colorTexture[4], 0.7, "custom main tint")
@@ -27,6 +30,15 @@ H.eq(host.ui.rows[1].fill.gloss:GetAlpha(), 0.31, "row uses host material")
 H.eq(original.ui.main.glass.tint._colorTexture[4], originalAlpha, "original unaffected")
 H.eq(lib.glass.STYLE, sharedStyle, "shared material identity preserved")
 H.eq(original.ui.main.glass.bodyBacking, nil, "old contract retains no backing")
+useBodyStyle = false
+host.ui:Update()
+for _, frame in ipairs({ host.ui.main, host.ui.pop }) do
+    H.eq(frame.glass.bodyBacking._colorTexture[4], 0, "nil body clears backing")
+    H.near(frame.glass.wash.glassPeak, custom.STYLE.wash, nil, "nil body restores material wash")
+    H.near(frame.glass.tint._colorTexture[4], custom.STYLE.tint[4] * host.ui:Alpha(), nil,
+        "nil body restores normal tint and host opacity")
+end
+useBodyStyle = true
 local f = assert(io.open("LibGroupBuffs.lua", "rb"))
 local source = f:read("*a"); f:close()
 local newer, count = source:gsub('"LibGroupBuffs%-1%.0", 32', '"LibGroupBuffs-1.0", 33', 1)

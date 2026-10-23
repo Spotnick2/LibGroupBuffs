@@ -3079,14 +3079,11 @@ local function TintPanel(f, colour, alpha)
         end
         return
     end
-    local base = BUILT_TINT
-    if own then
-        base = own.STYLE.tint
-    elseif lib.glass then
-        base = lib.glass.STYLE.tint
-    elseif GlassUsable() and not GlassTooOld() then
-        base = GlassInst().STYLE.tint
-    end
+    local glass = own or lib.glass
+    if not glass and GlassUsable() and not GlassTooOld() then glass = GlassInst() end
+    local base = glass and glass.STYLE.tint or BUILT_TINT
+    if g.bodyBacking then g.bodyBacking:SetColorTexture(0, 0, 0, 0) end
+    if glass and glass.SetWash then glass.SetWash(g, glass.STYLE.wash) end
     g.tint:SetColorTexture(colour[1], colour[2], colour[3], base[4] * (alpha or 1))
 end
 
