@@ -195,6 +195,19 @@ vis:Login()                                        -- and GroupJoined, RosterCha
 Also on the instance: `GB.EventFailures()`, `GB.TimerColor`, `GB.Pct`, `GB.FmtTime`, and read-only
 `GB.API`, `GB.STATES`, `GB.PET_GROUP`, `GB.LOAD_CHECK_KEY`, `GB.CLASS_ICONS`, `GB.MINOR`.
 
+Starting with r32, `GB.UI(host)` accepts `glass`, a LibGlass instance selected before the
+window is built, and `bodyStyle(frame)`, an optional callback returning a body descriptor:
+`{ tint = { r, g, b, a }, wash = multiplier, backing = { r, g, b, a } }`. Components are
+plain numbers; colors are 0–1. `wash` multiplies the selected material's own wash and is
+clamped to 0–1 after multiplication. The backing is masked beneath the tint. A body descriptor
+owns opacity, so the host's `alpha` callback does not override it. Returning nil retains the
+normal appearance/alpha behavior. Set these construction options before `Init`; changing
+the material on an already built window requires a reload.
+
+Panels, icon decoration, headers, and row fills use that window's material. The library never
+mutates its style. Hosts that omit both fields keep the shared Clean material and existing
+opacity behavior, including objects built by an older library before an upgrade.
+
 Addons built against r25 and earlier reach the library through `lib.API`, `lib.Engine.New`,
 `lib.UI.New`, `lib.Settings.New`, `lib.Visibility.New` and `lib.Status`. Those stay, unchanged:
 the newest copy loaded serves every addon, including ones that have not moved yet.
