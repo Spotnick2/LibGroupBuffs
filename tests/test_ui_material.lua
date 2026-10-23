@@ -41,7 +41,9 @@ end
 useBodyStyle = true
 local f = assert(io.open("LibGroupBuffs.lua", "rb"))
 local source = f:read("*a"); f:close()
-local newer, count = source:gsub('"LibGroupBuffs%-1%.0", 32', '"LibGroupBuffs-1.0", 33', 1)
+local minor = assert(tonumber(source:match('local MAJOR, MINOR = "LibGroupBuffs%-1%.0", (%d+)')))
+local newer, count = source:gsub('"LibGroupBuffs%-1%.0", ' .. minor,
+    '"LibGroupBuffs-1.0", ' .. (minor + 1), 1)
 H.eq(count, 1, "synthetic upgrade changes only revision")
 assert(loadstring(newer))()
 host.ui:Update()

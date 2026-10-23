@@ -220,6 +220,7 @@ function H.PriestUI(opts)
         scale       = function() return host.ui_config.scale end,
         locked      = function() return host.ui_config.locked end,
         popoverSide = function() return host.ui_config.popoverSide end,
+        growDirection = function() return host.ui_config.growth end,
         showClickHints = function() return host.ui_config.hints end,
         getPos = function()
             if not host.saved.pos then return nil, "no saved pos" end

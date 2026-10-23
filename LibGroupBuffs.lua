@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 32
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 33
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -621,6 +621,63 @@ function API.CountItem(itemID)
         end
     end
     return total
+end
+
+-- Merchant and bag APIs are kept here so consumers do not bind client globals.
+function API.MerchantItem(index)
+    if not (C_MerchantFrame and C_MerchantFrame.GetItemInfo and GetMerchantItemID) then return nil end
+    local ok, info = pcall(C_MerchantFrame.GetItemInfo, index)
+    if not ok or not info then return nil end
+    local idOk, itemID = pcall(GetMerchantItemID, index)
+    if idOk then return itemID, info end
+end
+
+function API.MerchantItemCount()
+    if not GetMerchantNumItems then return 0 end
+    local ok, count = pcall(GetMerchantNumItems)
+    return ok and type(count) == "number" and count or 0
+end
+
+function API.Money()
+    if not GetMoney then return 0 end
+    local ok, money = pcall(GetMoney)
+    return ok and type(money) == "number" and money or 0
+end
+
+function API.BuyMerchantItem(index, quantity)
+    if not BuyMerchantItem then return false end
+    return pcall(BuyMerchantItem, index, quantity)
+end
+
+-- Conservative room estimate: partial stacks and ordinary bag slots only.
+-- Specialty bags are omitted unless the item already has a partial stack there.
+function API.ItemRoom(itemID)
+    if not (C_Item and C_Item.GetItemMaxStackSizeByID and C_Container
+        and C_Container.GetContainerNumFreeSlots and C_Container.GetContainerNumSlots
+        and C_Container.GetContainerItemInfo) then return 0 end
+    local ok, stackSize = pcall(C_Item.GetItemMaxStackSizeByID, itemID)
+    if not ok or type(stackSize) ~= "number" or stackSize < 1 then return 0 end
+    local room = 0
+    local bags = {}
+    for bag = 0, (NUM_BAG_SLOTS or 4) do bags[#bags + 1] = bag end
+    local reagentBag = Enum and Enum.BagIndex and Enum.BagIndex.ReagentBag
+    if reagentBag then bags[#bags + 1] = reagentBag end
+    for _, bag in ipairs(bags) do
+        local freeOk, free, family = pcall(C_Container.GetContainerNumFreeSlots, bag)
+        if freeOk and type(free) == "number" and (family == 0 or family == nil) then
+            room = room + free * stackSize
+        end
+        local slotsOk, slots = pcall(C_Container.GetContainerNumSlots, bag)
+        if slotsOk and type(slots) == "number" then
+            for slot = 1, slots do
+                local itemOk, entry = pcall(C_Container.GetContainerItemInfo, bag, slot)
+                if itemOk and entry and entry.itemID == itemID then
+                    room = room + math.max(0, stackSize - (entry.stackCount or stackSize))
+                end
+            end
+        end
+    end
+    return room
 end
 
 -- ─── item info for tooltips ─────────────────────────────────────────────────
@@ -2216,7 +2273,8 @@ local ApplyLook
 local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 
 local OPTIONAL_FUNCTIONS = {
-    "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
+    "appearance", "footerItems", "previewFooterItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
+    "growDirection",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
     "onTick", "onAppearance", "onMinimizeDeferred", "bodyStyle",
 }
@@ -3041,6 +3099,7 @@ local function RefreshTimersBody(self)
 end
 
 function Methods:RefreshTimers()
+    if self.previewGroups then return end
     WithAuraPass(self, RefreshTimersBody)
 end
 
@@ -3188,7 +3247,7 @@ end
 -- Lays the footer out at y; returns the new y. Only called from a rebuild.
 function Methods:LayoutFooter(y)
     local main = self.main
-    local items = Call(self.host.footerItems) or {}
+    local items = Call(self.previewGroups and self.host.previewFooterItems or self.host.footerItems) or {}
     self.footerItems = items
     for i = #self.footerBtns + 1, #items do
         self.footerBtns[i] = MakeFooterButton(self, main)
@@ -3329,20 +3388,33 @@ end
 
 -- ─── Dragging ───────────────────────────────────────────────────────────────
 
--- Keep the header fixed when changing height. Converting the one anchor to
--- TOPLEFT avoids restoring an old centre/bottom offset after a minimized drag.
--- All inputs are our frame geometry, and every caller is outside combat.
-local function AnchorHeader(main)
+-- Convert the existing anchor without moving the current rectangle. A later
+-- SetSize then moves only the edge opposite the chosen one.
+local function AnchorEdge(main, edge)
     local point, relativeTo, relativePoint, x, y = main:GetPoint()
-    if not point then return end
+    if not point then return false end
+    local target = edge == "up" and "BOTTOMLEFT" or "TOPLEFT"
+    if point == target then return false end
     local fx = point:find("LEFT", 1, true) and 0 or (point:find("RIGHT", 1, true) and 1 or 0.5)
     local fy = point:find("TOP", 1, true) and 1 or (point:find("BOTTOM", 1, true) and 0 or 0.5)
     main:ClearAllPoints()
-    main:SetPoint("TOPLEFT", relativeTo or UIParent, relativePoint,
-        x - fx * main:GetWidth(), y + (1 - fy) * main:GetHeight())
+    main:SetPoint(target, relativeTo or UIParent, relativePoint,
+        x - fx * main:GetWidth(), y + ((edge == "up" and 0 or 1) - fy) * main:GetHeight())
+    return true
+end
+
+local function GrowthDirection(self)
+    local direction = Call(self.host.growDirection)
+    return (direction == "up" or direction == "down") and direction or nil
+end
+
+local function SavePosition(self)
+    local point, _, relPoint, x, y = self.main:GetPoint()
+    Call(self.host.setPos, { point = point, relPoint = relPoint, x = x, y = y })
 end
 
 function Methods:DragStart()
+    if self.previewGroups then return end
     if Call(self.host.locked) then return end
     -- The main frame parents secure buttons, which makes moving it a
     -- protected action in combat.
@@ -3368,15 +3440,17 @@ function Methods:DragStop()
     -- next login.
     self.dragPending = false
     self.main:StopMovingOrSizing()
+    if self.previewGroups then return end
     if Call(self.host.locked) then return end
-    if self.main._minimized then AnchorHeader(self.main) end
+    local growth = GrowthDirection(self)
+    if growth then AnchorEdge(self.main, growth)
+    elseif self.main._minimized then AnchorEdge(self.main, "down") end
     self.moved = true
     -- GetPoint reports relativeTo as nil after StopMovingOrSizing while the
     -- restore anchors explicitly to UIParent. That is not a mismatch: the
     -- frame is PARENTED to UIParent, and a nil relativeTo means "my parent".
     -- Measured in game - saved and restored values match to the decimal.
-    local point, _, relPoint, x, y = self.main:GetPoint()
-    Call(self.host.setPos, { point = point, relPoint = relPoint, x = x, y = y })
+    SavePosition(self)
 end
 
 -- Put the window back at the default spot and forget the saved one. It
@@ -3395,6 +3469,8 @@ function Methods:ResetPosition()
     if self.main then
         self.main:ClearAllPoints()
         self.main:SetPoint(DEFAULT_POS.point, UIParent, DEFAULT_POS.relPoint, DEFAULT_POS.x, DEFAULT_POS.y)
+        local growth = GrowthDirection(self)
+        if growth then AnchorEdge(self.main, growth); self.moved = true end
     end
     return true
 end
@@ -3404,6 +3480,42 @@ end
 -- that matters is still there when somebody asks.
 function Methods:RestoreInfo()
     return { log = self.restoreLog, skips = self.restoreSkips }
+end
+
+-- A visual-only raid sample. Changing mode is refused in combat because the
+-- main and popover frame parent secure buttons. Disarm every pooled button
+-- before exposing synthetic members, including rows left over from a real
+-- roster that the sample will not use.
+function Methods:SetPreview(groupCount)
+    if groupCount ~= nil and groupCount ~= 5 and groupCount ~= 8 then
+        error("LibGroupBuffs UI:SetPreview expects 5, 8, or nil", 2)
+    end
+    if InCombatLockdown() then return false end
+    if self.previewGroups == groupCount then return true end
+    if groupCount then
+        for _, pool in ipairs({ self.rows, self.popRows }) do
+            for _, button in ipairs(pool) do
+                for _, key in ipairs({ "type1", "spell1", "unit1", "type2", "spell2", "unit2" }) do
+                    button:SetAttribute(key, nil)
+                end
+            end
+        end
+    end
+    self.previewGroups = groupCount
+    if self.pop then self.pop:Hide() end
+    if self.main then
+        for _, control in ipairs({ self.main.closeBtn, self.main.minimizeBtn }) do
+            if control then
+                if groupCount then control:Hide() else control:Show() end
+            end
+        end
+    end
+    self.hintRow = nil
+    return true
+end
+
+function Methods:IsPreview()
+    return self.previewGroups ~= nil
 end
 
 -- ─── Popover ────────────────────────────────────────────────────────────────
@@ -3442,10 +3554,12 @@ function Methods:UpdatePopover(anchorRow, members, def)
     self.popHidePending = false
 
     local engine = self.engine
+    local preview = self.previewGroups ~= nil
     pop.hdrIcon:SetTexture(lib.API.SpellIcon(def.hasSingle and def.snglID or def.grpID, def.fallbackIcon))
-    local popPrimary, popSecondary = engine:ClickSpells(def)
+    local popPrimary, popSecondary
+    if not preview then popPrimary, popSecondary = engine:ClickSpells(def) end
     -- Name whatever the primary click actually casts.
-    pop.hdrTxt:SetText(popPrimary or def.sngl)
+    pop.hdrTxt:SetText(preview and (def.sngl or def.grp) or (popPrimary or def.sngl))
     pop._anchorRow = anchorRow
 
     local fallbackIcon = self.host.unknownClassIcon or "Interface\\Icons\\INV_Misc_QuestionMark"
@@ -3453,24 +3567,48 @@ function Methods:UpdatePopover(anchorRow, members, def)
     for i = 1, cnt do
         local m, pr = members[i], self.popRows[i]
         pr._active = true
-        pr._unit = m.unit
+        pr._unit = not preview and m.unit or nil
         pr._def = def
+        pr._preview = preview and m._preview[def.id] or nil
 
         -- Left: the primary spell on this person (a group spell covers their
         -- subgroup). Right: the secondary spell on this person.
-        pr:SetAttribute("type1",  "spell")
+        pr:SetAttribute("type1",  not preview and "spell" or nil)
         pr:SetAttribute("spell1", popPrimary)
-        pr:SetAttribute("unit1",  m.unit)
-        pr:SetAttribute("type2",  "spell")
+        pr:SetAttribute("unit1",  not preview and m.unit or nil)
+        pr:SetAttribute("type2",  not preview and "spell" or nil)
         pr:SetAttribute("spell2", popSecondary)
-        pr:SetAttribute("unit2",  m.unit)
+        pr:SetAttribute("unit2",  not preview and m.unit or nil)
 
         pr.classIcon:SetTexture((m.class and UI.CLASS_ICONS[m.class]) or fallbackIcon)
         local cr, cg, cb = ClassColor(m.class)
         pr.nameTxt:SetText(m.name)
         pr.nameTxt:SetTextColor(cr, cg, cb)
 
-        self:ApplyPopRowVisuals(pr)
+        if preview then
+            local state = pr._preview
+            if state and state.kind == "HAS" then
+                SetFill(pr, POP_ROW_H, 0.10, 0.65, 0.20, 0.80)
+                pr.rangeTxt:SetText("R")
+                pr.rangeTxt:SetTextColor(0.15, 1.00, 0.15)
+                pr.timeTxt:SetText(UI.FmtTime(state.rem))
+                pr.timeTxt:SetTextColor(UI.TimerColor(UI.Pct(state.rem, state.dur)))
+            elseif state and state.kind == "UNKNOWN" then
+                SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.65)
+                pr.rangeTxt:SetText("?")
+                pr.rangeTxt:SetTextColor(unpack(COLOUR.UNKNOWN))
+                pr.timeTxt:SetText("?")
+                pr.timeTxt:SetTextColor(unpack(COLOUR.UNKNOWN))
+            else
+                SetFill(pr, POP_ROW_H, 0.70, 0.13, 0.13, 0.80)
+                pr.rangeTxt:SetText("R")
+                pr.rangeTxt:SetTextColor(0.15, 1.00, 0.15)
+                pr.timeTxt:SetText("MISS")
+                pr.timeTxt:SetTextColor(unpack(COLOUR.MISS))
+            end
+        else
+            self:ApplyPopRowVisuals(pr)
+        end
         pr:Show()
     end
     for i = cnt + 1, #self.popRows do
@@ -3489,6 +3627,7 @@ function Methods:UpdatePopover(anchorRow, members, def)
 end
 
 function Methods:PopRowPreClick(pr)
+    if self.previewGroups then return end
     if InCombatLockdown() then return end
     -- Block a cast at somebody offline or dead.
     if not self.engine:IsValidTarget(pr._unit) then
@@ -3498,6 +3637,7 @@ function Methods:PopRowPreClick(pr)
 end
 
 function Methods:PopRowPostClick(pr)
+    if self.previewGroups then return end
     if InCombatLockdown() then return end
     local df = pr._def
     if df then
@@ -3683,6 +3823,7 @@ end
 -- nothing in combat: SetAttribute is refused under lockdown, so the click uses
 -- whatever was wired before the pull.
 function Methods:RowPreClick(r, button)
+    if self.previewGroups then return end
     if InCombatLockdown() then return end
     local ms, df = r._members, r._def
     if not ms or not df then return end
@@ -3720,6 +3861,7 @@ end
 -- fallback, so the next click - the first in combat, where PreClick cannot
 -- re-aim - buffed yourself.
 function Methods:RowPostClick(r)
+    if self.previewGroups then return end
     if InCombatLockdown() then return end
     local df, ms = r._def, r._members
     if not df or not ms then return end
@@ -3739,7 +3881,7 @@ function Methods:RowEnter(r)
     if not r._active or not r._members or not r._def then return end
     self.hintRow = r
     self:UpdatePopover(r, r._members, r._def)
-    self:ShowClickHint(r)
+    if not self.previewGroups then self:ShowClickHint(r) end
 end
 
 -- The popover's own hide is the hover poll's job: an OnLeave would fire on the
@@ -4027,6 +4169,49 @@ end
 -- and so the combat branch stays OUTSIDE it: that branch calls RefreshTimers,
 -- which opens a pass of its own, and a pass nested inside a pass would have
 -- the inner one's close end the outer.
+local PREVIEW_CLASSES = { "PRIEST", "DRUID", "MAGE", "WARRIOR", "HUNTER" }
+
+local function PreviewRoster(self)
+    local groups, ord = {}, {}
+    for gNum = 1, self.previewGroups do
+        local members = {}
+        groups[gNum], ord[gNum] = members, gNum
+        for slot = 1, 5 do
+            local index = (gNum - 1) * 5 + slot
+            local member = {
+                unit = "preview" .. index,
+                name = "Member " .. index,
+                class = PREVIEW_CLASSES[slot],
+                _preview = {},
+            }
+            for _, def in ipairs(self.engine.defs) do
+                local dur = type(def.duration) == "number" and def.duration > 0 and def.duration or 3600
+                local pattern = gNum % 4
+                local kind = pattern == 0 and "UNKNOWN"
+                    or (pattern == 3 or (pattern == 2 and slot <= 2)) and "MISSING" or "HAS"
+                member._preview[def.id] = { kind = kind, dur = dur, rem = math.floor(dur * (0.3 + slot * 0.1)) }
+            end
+            members[#members + 1] = member
+        end
+    end
+    return groups, ord
+end
+
+local function PreviewStat(members, def)
+    local miss, unknown, minR, minDur = {}, 0, math.huge, 0
+    for _, member in ipairs(members) do
+        local state = member._preview[def.id]
+        if state.kind == "MISSING" then miss[#miss + 1] = member
+        elseif state.kind == "UNKNOWN" then unknown = unknown + 1
+        elseif state.rem < minR then minR, minDur = state.rem, state.dur end
+    end
+    return {
+        miss = miss, nMiss = #miss, nUnknown = unknown, nTotal = #members,
+        allHave = #miss == 0 and unknown == 0,
+        minR = minR == math.huge and 0 or minR, minDur = minDur,
+    }
+end
+
 local function Rebuild(self)
     if not self:Init() then return end
     -- Before anything is measured or placed: a window an older copy built
@@ -4036,7 +4221,9 @@ local function Rebuild(self)
     local engine = self.engine
     local main = self.main
 
-    local groups, ord = engine:GatherGroups()
+    local preview = self.previewGroups ~= nil
+    local groups, ord
+    if preview then groups, ord = PreviewRoster(self) else groups, ord = engine:GatherGroups() end
     if #ord == 0 then self:Close(); return end
 
     -- The pass this runs inside is open from the top, which puts ActiveDefs
@@ -4044,10 +4231,21 @@ local function Rebuild(self)
     -- Priestly's "show Shadow Protection when somebody has it" walks the whole
     -- roster looking for one, immediately before these rows ask about the same
     -- members (#6).
-    local defs = engine:ActiveDefs(groups, ord)
+    local defs = preview and engine.defs or engine:ActiveDefs(groups, ord)
     if #defs == 0 then self:Close(); return end
 
     ApplyLook(self)
+    if preview then
+        if not self.previewSavedTitle then self.previewSavedTitle = main.title:GetText() end
+        main.title:SetText(self.previewSavedTitle .. " [Test]")
+    elseif self.previewSavedTitle then
+        main.title:SetText(self.previewSavedTitle)
+        self.previewSavedTitle = nil
+    end
+    if preview then
+        if main.closeBtn then main.closeBtn:Hide() end
+        if main.minimizeBtn then main.minimizeBtn:Hide() end
+    end
     -- Normal UI panels must remain usable above the buff window. Apply on
     -- rebuild too, so a window constructed by an older library is upgraded.
     -- Rebuild only runs outside combat; both frames parent secure buttons.
@@ -4060,7 +4258,7 @@ local function Rebuild(self)
     local maxRows, maxGroups = #self.rows, #self.headers
     local rowIdx, hdrIdx = 0, 0
     local y = -(HDR_H + 6)
-    local inRaid = IsInRaid()
+    local inRaid = preview or IsInRaid()
     local PET_GROUP = lib.Engine.PET_GROUP
 
     -- Each buff's members for each group, asked ONCE: the same list then drives
@@ -4076,14 +4274,14 @@ local function Rebuild(self)
     for _, gNum in ipairs(ord) do
         local rowsHere = {}
         for _, def in ipairs(defs) do
-            local members = engine:MembersFor(def, groups[gNum])
+            local members = preview and groups[gNum] or engine:MembersFor(def, groups[gNum])
             if #members > 0 then
                 rowsHere[#rowsHere + 1] = { def = def, members = members }
                 -- One cast of a raid-wide buff covers everyone, so its target
                 -- is chosen across the roster rather than inside one subgroup.
                 -- That is what lets a click on any row fix everybody, and what
                 -- leaves the other rows' clicks nothing to do.
-                if engine:IsRaidWide(def) then
+                if not preview and engine:IsRaidWide(def) then
                     local all = raidWide[def.id]
                     if not all then all = {}; raidWide[def.id] = all end
                     for _, m in ipairs(members) do all[#all + 1] = m end
@@ -4122,8 +4320,9 @@ local function Rebuild(self)
                 rowIdx = rowIdx + 1
                 if rowIdx > maxRows then break end
                 local r = self.rows[rowIdx]
-                local st = engine:GroupStat(members, def)
-                local primary, secondary = engine:ClickSpells(def)
+                local st = preview and PreviewStat(members, def) or engine:GroupStat(members, def)
+                local primary, secondary
+                if not preview then primary, secondary = engine:ClickSpells(def) end
                 local groupMode = def.hasGroup and true or false
                 -- A raid-wide group spell is aimed across the roster and goes
                 -- quiet once nobody needs it; a party-scope one keeps picking
@@ -4152,7 +4351,7 @@ local function Rebuild(self)
                 -- Kept on the row so PreClick and the tooltip re-pick against
                 -- the same list this pass used. Nil for a party-scope def,
                 -- which reads as "use my own members".
-                r._castMembers = raidWide[def.id]
+                r._castMembers = preview and nil or raidWide[def.id]
 
                 self:ApplyRowVisuals(r, st)
 
@@ -4160,12 +4359,12 @@ local function Rebuild(self)
                 -- their subgroup; a pet row spans several), or the single one
                 -- when there is no group spell. Right: the single spell on
                 -- whoever needs it most.
-                r:SetAttribute("type1",  "spell")
+                r:SetAttribute("type1",  not preview and "spell" or nil)
                 r:SetAttribute("spell1", primaryUnit and primary or nil)
-                r:SetAttribute("unit1",  primaryUnit or "player")
-                r:SetAttribute("type2",  "spell")
+                r:SetAttribute("unit1",  not preview and (primaryUnit or "player") or nil)
+                r:SetAttribute("type2",  not preview and "spell" or nil)
                 r:SetAttribute("spell2", secondaryUnit and secondary or nil)
-                r:SetAttribute("unit2",  secondaryUnit or "player")
+                r:SetAttribute("unit2",  not preview and (secondaryUnit or "player") or nil)
 
                 r:Show()
                 y = y - ROW_H - 1
@@ -4179,11 +4378,16 @@ local function Rebuild(self)
     y = y - 2
     y = self:LayoutFooter(y)
 
+    local growth = GrowthDirection(self)
+    local reanchored = false
+    if growth and (self.moved or main:IsShown()) then
+        reanchored = AnchorEdge(main, growth)
+    end
     local minimized = self:IsMinimized()
     -- A close can hide the old layout before a deferred mode change is applied.
     -- Preserve its header too; an unpositioned first layout still restores below.
     if minimized ~= (main._minimized == true) and main:GetPoint() then
-        AnchorHeader(main)
+        if not growth then AnchorEdge(main, "down") end
         self.moved = true
     end
     if minimized then
@@ -4218,6 +4422,11 @@ local function Rebuild(self)
     else
         self.restoreSkips = self.restoreSkips + 1
     end
+    if growth then
+        if AnchorEdge(main, growth) then reanchored = true end
+        if reanchored and self.host.getPos and self.host.getPos() then SavePosition(self) end
+        self.moved = true
+    end
 
     main:Show()
     -- Shown for real, out of combat: a close recorded in combat is superseded
@@ -4229,7 +4438,7 @@ local function Rebuild(self)
     -- (and the rebuild has just laid the footer out).
     if not self.visible then self.tick, self.footerTick = 0, 0 end
     SetVisible(self, true)
-    Call(self.host.setVisible, true)
+    if not preview then Call(self.host.setVisible, true) end
     self.laidOut = true
     Call(self.host.onLayout, self)
 

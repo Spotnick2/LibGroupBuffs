@@ -73,6 +73,10 @@ function WoW.reset()
     WoW.itemQuality = {}         -- [itemID] = quality; 1 (common) when unset
     WoW.itemsRequested = {}      -- [itemID] = true once a load was requested
     WoW.bags        = {}         -- [bagID] = { {itemID=, stackCount=}, ... }
+    WoW.bagFree     = { [0] = 16 }
+    WoW.merchantItems = {}
+    WoW.money       = 0
+    WoW.purchases   = {}
     WoW.messages    = {}         -- everything printed to DEFAULT_CHAT_FRAME
     WoW.badEvents   = {}         -- event names RegisterEvent should throw on
     WoW.refusedEvents = {}       -- event names RegisterEvent should return false for
@@ -1100,6 +1104,7 @@ end
 
 C_Item = {
     GetItemIconByID = function(itemID) return "icon:" .. tostring(itemID) end,
+    GetItemMaxStackSizeByID = function() return 20 end,
     -- Returns NOTHING on a cache miss, not nil - the live behaviour, and the
     -- reason API.ItemInfo checks the cache before trusting a result.
     GetItemInfo = function(itemID)
@@ -1133,6 +1138,7 @@ C_Item = {
 }
 
 C_Container = {
+    GetContainerNumFreeSlots = function(bag) return WoW.bagFree[bag] or 0, 0 end,
     GetContainerNumSlots = function(bag)
         return #bagContents(bag) > 0 and 16 or 0
     end,
@@ -1140,6 +1146,16 @@ C_Container = {
         return bagContents(bag)[slot]
     end,
 }
+
+C_MerchantFrame = {
+    GetItemInfo = function(index) return WoW.merchantItems[index] end,
+}
+function GetMerchantNumItems() return #WoW.merchantItems end
+function GetMerchantItemID(index) return WoW.merchantItems[index] and WoW.merchantItems[index].itemID end
+function GetMoney() return WoW.money end
+function BuyMerchantItem(index, quantity)
+    WoW.purchases[#WoW.purchases + 1] = { index = index, quantity = quantity }
+end
 
 ------------------------------------------------------------
 
