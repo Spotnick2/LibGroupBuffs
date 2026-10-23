@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 31
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 32
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -2012,6 +2012,12 @@ local BAR_SLICE = 8
 -- mask gets its rectangle without an anchor whose sign has to be reasoned
 -- about, and it is the same shape as the row fills, which have been right
 -- from the first build.
+-- Optional material belongs to one window; old hosts retain the shared Clean instance.
+local function WindowGlass(frame)
+    local ui = frame and frame._ui
+    return (ui and ui.host.glass) or GlassInst()
+end
+
 local function IconTile(parent, size, point, relTo, relPoint, x, y)
     local box = CreateFrame("Frame", nil, parent)
     box:SetSize(size, size)
@@ -2034,7 +2040,7 @@ local function IconTile(parent, size, point, relTo, relPoint, x, y)
     -- border in their outer few percent, and the rounding eats its corners;
     -- cropping the rest with SetTexCoord is NOT the way to remove it, because
     -- a mask is applied in the texture's untransformed space.
-    local media = GlassInst().MEDIA
+    local media = WindowGlass(parent).MEDIA
     local mask = box:CreateMaskTexture()
     mask:SetTexture(media .. "bar_mask",
                     "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
@@ -2212,11 +2218,16 @@ local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 local OPTIONAL_FUNCTIONS = {
     "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
-    "onTick", "onAppearance", "onMinimizeDeferred",
+    "onTick", "onAppearance", "onMinimizeDeferred", "bodyStyle",
 }
 
 function UI.New(host)
     if type(host) ~= "table" then Fail("host must be a table") end
+    if host.glass ~= nil and (type(host.glass) ~= "table"
+        or type(host.glass.Apply) ~= "function" or type(host.glass.Mask) ~= "function"
+        or type(host.glass.STYLE) ~= "table" or type(host.glass.MEDIA) ~= "string") then
+        Fail("glass must be a LibGlass instance or nil")
+    end
     if host.minimizable ~= nil and type(host.minimizable) ~= "boolean" then
         Fail("minimizable must be a boolean or nil")
     end
@@ -2331,7 +2342,14 @@ local function Panel(f)
     if f.glass then return f.glass end
     if InCombatLockdown() then return nil end
     if f.SetBackdrop then f:SetBackdrop(nil) end
-    f.glass = GlassInst().Apply(f, "large")
+    f.glass = WindowGlass(f).Apply(f, "large")
+    if f._ui.host.bodyStyle then
+        local backing = f:CreateTexture(nil, "BACKGROUND", nil, -7)
+        backing:SetAllPoints(f)
+        backing:AddMaskTexture(f.glass.mask)
+        backing:SetColorTexture(0, 0, 0, 0)
+        f.glass.bodyBacking = backing
+    end
     return f.glass
 end
 
@@ -2373,7 +2391,7 @@ local function Fill(row, height)
         previous:Hide()
     end
 
-    local Glass = GlassInst()
+    local Glass = WindowGlass(row)
     local st = Glass.STYLE
     local mask = Glass.Mask(row, "bar_mask", FILL_MASK_MARGIN)
 
@@ -2455,7 +2473,7 @@ local function HeaderGlass(main)
     -- correctly: the band is inset 4px inside a panel that is already
     -- rounded, so its own corners barely show, and the gloss is what makes it
     -- glass rather than the corners.
-    local Glass = GlassInst()
+    local Glass = WindowGlass(main)
     local gloss = main:CreateTexture(nil, "ARTWORK", nil, 2)
     gloss:SetAllPoints(tint)
     gloss:SetTexture(Glass.MEDIA .. "gloss")
@@ -2629,7 +2647,7 @@ local function MakeCloseButton(ui, main)
 
     local xEdge = xBtn:CreateTexture(nil, "OVERLAY")
     xEdge:SetAllPoints(xBtn)
-    xEdge:SetTexture(GlassInst().MEDIA .. "bar_edge")
+    xEdge:SetTexture(WindowGlass(xBtn).MEDIA .. "bar_edge")
     xEdge:SetTextureSliceMargins(BAR_SLICE, BAR_SLICE, BAR_SLICE, BAR_SLICE)
     local xModes = Enum and Enum.UITextureSliceMode
     xEdge:SetTextureSliceMode((xModes and xModes.Stretched) or 0)
@@ -2713,7 +2731,7 @@ function Methods:Init()
     -- exists, so a window that threw halfway through building would stay
     -- half-built, failing every later refresh on some missing part instead
     -- of naming what is missing.
-    GlassInst()
+    local glass = self.host.glass or GlassInst()
     local nGroups, nRows, nPop = self:Capacity()
     self.capacity = { groups = nGroups, rows = nRows, popRows = nPop }
 
@@ -3047,12 +3065,25 @@ local function TintPanel(f, colour, alpha)
     if not g or not g.tint then return end
     -- An existing instance, else one a usable LibGlass at the floor can make,
     -- else the built tint: recolouring a panel never constructs one below r6.
-    local base = BUILT_TINT
-    if lib.glass then
-        base = lib.glass.STYLE.tint
-    elseif GlassUsable() and not GlassTooOld() then
-        base = GlassInst().STYLE.tint
+    local body = Call(f._ui.host.bodyStyle, f)
+    local own = f._ui.host.glass
+    if type(body) == "table" then
+        local glass = WindowGlass(f)
+        if type(body.tint) == "table" then g.tint:SetColorTexture(unpack(body.tint)) end
+        if type(body.wash) == "number" and glass.SetWash then
+            glass.SetWash(g, math.max(0, math.min(1, glass.STYLE.wash * body.wash)))
+        end
+        if g.bodyBacking then
+            local backing = body.backing or { 0, 0, 0, 0 }
+            g.bodyBacking:SetColorTexture(unpack(backing))
+        end
+        return
     end
+    local glass = own or lib.glass
+    if not glass and GlassUsable() and not GlassTooOld() then glass = GlassInst() end
+    local base = glass and glass.STYLE.tint or BUILT_TINT
+    if g.bodyBacking then g.bodyBacking:SetColorTexture(0, 0, 0, 0) end
+    if glass and glass.SetWash then glass.SetWash(g, glass.STYLE.wash) end
     g.tint:SetColorTexture(colour[1], colour[2], colour[3], base[4] * (alpha or 1))
 end
 
