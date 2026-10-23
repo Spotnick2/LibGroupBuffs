@@ -95,6 +95,37 @@ ui:OnCombatEnd(); settle()
 H.check(not ui.main._minimized and #H.ActiveRows(ui) > 0, "restore completes")
 
 -- Close beats either mode, regardless of the order it was requested.
+-- Compare header coordinates relative to the same anchor before and after a
+-- hidden transition; checking only the minimized flag misses a centre shift.
+local function headerPosition(frame)
+    local point, relativeTo, relativePoint, x, y = frame:GetPoint()
+    local left = point:find("LEFT", 1, true) and 0 or (point:find("RIGHT", 1, true) and 1 or 0.5)
+    local top = point:find("TOP", 1, true) and 1 or (point:find("BOTTOM", 1, true) and 0 or 0.5)
+    return relativeTo, relativePoint, x - left * frame:GetWidth(), y + (1 - top) * frame:GetHeight()
+end
+for _, startMinimized in ipairs({ false, true }) do
+    for _, anchor in ipairs({ "CENTER", "BOTTOMRIGHT" }) do
+        host, ui = setup(true)
+        ui:SetMinimized(startMinimized)
+        ui.main:ClearAllPoints()
+        ui.main:SetPoint(anchor, UIParent, "CENTER", 100, -50)
+        local relativeTo, relativePoint, x, y = headerPosition(ui.main)
+        WoW.inCombat = true
+        ui:SetMinimized(not startMinimized)
+        ui:Close(true)
+        cleanCombat("hidden mode transition")
+        WoW.inCombat = false
+        ui:OnCombatEnd(); settle()
+        H.check(not ui.main:IsShown(), "close finishes before mode transition")
+        ui:Open(0); settle()
+        local newRelativeTo, newRelativePoint, newX, newY = headerPosition(ui.main)
+        H.check(relativeTo == newRelativeTo and relativePoint == newRelativePoint,
+            "hidden transition keeps relative anchor")
+        H.near(newX, x, 0.001, "hidden transition keeps header left")
+        H.near(newY, y, 0.001, "hidden transition keeps header top")
+        H.eq(ui.main._minimized, not startMinimized, "hidden transition applies requested mode")
+    end
+end
 for _, closeFirst in ipairs({ false, true }) do
     host, ui = setup(true)
     WoW.inCombat = true

@@ -4149,7 +4149,9 @@ local function Rebuild(self)
     y = self:LayoutFooter(y)
 
     local minimized = self:IsMinimized()
-    if minimized ~= (main._minimized == true) and main:IsShown() then
+    -- A close can hide the old layout before a deferred mode change is applied.
+    -- Preserve its header too; an unpositioned first layout still restores below.
+    if minimized ~= (main._minimized == true) and main:GetPoint() then
         AnchorHeader(main)
         self.moved = true
     end
