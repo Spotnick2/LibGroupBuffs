@@ -13,6 +13,34 @@ higher UI panels can cover them. The popover keeps its higher frame level within
 `LOW`. Existing windows adopt this on their next out-of-combat rebuild. Custom
 bag addons that also use `LOW` still need an in-game overlap check.
 
+## Optional minimize/restore (r31)
+
+Pass `minimizable = true` to `GB.UI` to add a `-` / `+` header control. Hosts that
+do not opt in keep their existing header. The version text is omitted from an
+opted-in header to reserve the controls' space; keep version information in the
+host's diagnostics.
+
+- `ui:IsMinimized()` reports the requested, session-only state. It defaults to
+  false on a new UI instance; no SavedVariables are read or written for it.
+- `ui:SetMinimized(bool)` and `ui:ToggleMinimized()` return false if disabled or
+  combat defers the layout. During combat, only the requested state changes; the
+  latest request is applied by the normal `OnCombatEnd` rebuild. An optional
+  `onMinimizeDeferred(ui, minimized)` hook can explain that delay to the player.
+- Minimize is separate from close: `IsVisible()` stays true, no closed preference
+  is saved, and a close wins over either mode. Refreshes and subsequent opens keep
+  the session's minimized state. Restore uses the current roster and settings.
+- The header keeps its position when the body changes height. Dragging while
+  minimized saves a top anchor so an expanded window on the next login uses the
+  same header position. Lock and reset retain their normal behavior.
+- A companion host must handle `ui:IsMinimized()` in `onLayout` before opting in:
+  hide the companion while minimized and restore it when expanded. This hook runs
+  after the protected layout has actually changed, outside combat. The existing
+  `onVisibility` and `onTick` contracts are unchanged; minimized is still open.
+
+In-game acceptance still includes clicks, dragging, edge clamping, scale, popup
+dismissal, and minimize/restore/close ordering during combat. Unit tests cannot
+prove the client's visual layout or protection behavior.
+
 ## Why a library
 
 Forever is Vanilla *content* running on the Retail/Mainline *codebase*, and porting to it surfaced a

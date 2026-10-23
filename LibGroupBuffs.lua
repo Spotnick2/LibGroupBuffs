@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 30
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 31
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -2212,11 +2212,14 @@ local function Fail(msg) error("LibGroupBuffs UI.New: " .. msg, 3) end
 local OPTIONAL_FUNCTIONS = {
     "appearance", "footerItems", "alpha", "scale", "locked", "popoverSide", "showClickHints",
     "getPos", "setPos", "setVisible", "onLayout", "onVisibility", "onCloseDeferred",
-    "onTick", "onAppearance",
+    "onTick", "onAppearance", "onMinimizeDeferred",
 }
 
 function UI.New(host)
     if type(host) ~= "table" then Fail("host must be a table") end
+    if host.minimizable ~= nil and type(host.minimizable) ~= "boolean" then
+        Fail("minimizable must be a boolean or nil")
+    end
     if type(host.engine) ~= "table" or getmetatable(host.engine) ~= lib.EngineMeta then
         Fail("engine must be an engine from this library's Engine.New")
     end
@@ -2243,6 +2246,7 @@ function UI.New(host)
         -- false, not nil: this copy built the window, and nil is how a window
         -- an older copy built says it predates the field (ApplyAppearance).
         laidOut = false,
+        minimized = false,      -- session-only preference, separate from visible
         rows = {}, popRows = {}, headers = {}, footerBtns = {},
         footerItems = {},
     }, lib.UIMeta)
@@ -2642,6 +2646,18 @@ local function MakeCloseButton(ui, main)
     return xBtn
 end
 
+-- Opt-in: a host with a companion pane must first teach its onLayout hook to
+-- honour IsMinimized(). Older hosts keep their existing header and semantics.
+local function MakeMinimizeButton(ui, main)
+    local btn = MakeCloseButton(ui, main)
+    btn:ClearAllPoints()
+    btn:SetPoint("RIGHT", main.closeBtn, "LEFT", -3, 0)
+    btn:SetScript("OnClick", function(b) return b._ui:ToggleMinimized() end)
+    btn:SetScript("OnEnter", function(b) return b._ui:MinimizeButtonHover(b, true) end)
+    btn:SetScript("OnLeave", function(b) return b._ui:MinimizeButtonHover(b, false) end)
+    return btn
+end
+
 -- The popover's own header. Same rules as StyleHeader.
 local function StylePopHeader(pop)
     if not pop.hdrEdge then
@@ -2681,6 +2697,11 @@ local function StyleHeader(main)
     Style(main.version, GRP_FONT, "LEFT")
     main.version:ClearAllPoints()
     main.version:SetPoint("LEFT", main.title, "RIGHT", 3, -1)
+    if main._ui.host.minimizable then
+        -- Reserve both controls' space. The version remains in host diagnostics.
+        main.version:Hide()
+        main.title:SetPoint("RIGHT", main, "RIGHT", -(2 * (HDR_H - 12) + 14), 0)
+    end
 end
 
 -- Build the frames, once. Refused in combat: secure buttons cannot be created
@@ -2725,12 +2746,14 @@ function Methods:Init()
     main.version:SetText(self.host.version and ("|cff555577" .. self.host.version .. "|r") or "")
 
     main.closeBtn = MakeCloseButton(self, main)
+    if self.host.minimizable then main.minimizeBtn = MakeMinimizeButton(self, main) end
 
     -- Covers the header only, so the row buttons still get their clicks.
     local drag = CreateFrame("Frame", nil, main)
     drag._ui = self
     drag:SetPoint("TOPLEFT",  hdrBg, "TOPLEFT",  0, 0)
-    drag:SetPoint("TOPRIGHT", hdrBg, "TOPRIGHT", -16, 0)  -- leave room for the X
+    drag:SetPoint("TOPRIGHT", hdrBg, "TOPRIGHT",
+        self.host.minimizable and -(2 * (HDR_H - 12) + 9) or -16, 0)
     drag:SetHeight(HDR_H)
     drag:EnableMouse(true)
     -- Gated rather than unregistered: leaving RegisterForDrag in place keeps
@@ -3275,6 +3298,19 @@ end
 
 -- ─── Dragging ───────────────────────────────────────────────────────────────
 
+-- Keep the header fixed when changing height. Converting the one anchor to
+-- TOPLEFT avoids restoring an old centre/bottom offset after a minimized drag.
+-- All inputs are our frame geometry, and every caller is outside combat.
+local function AnchorHeader(main)
+    local point, relativeTo, relativePoint, x, y = main:GetPoint()
+    if not point then return end
+    local fx = point:find("LEFT", 1, true) and 0 or (point:find("RIGHT", 1, true) and 1 or 0.5)
+    local fy = point:find("TOP", 1, true) and 1 or (point:find("BOTTOM", 1, true) and 0 or 0.5)
+    main:ClearAllPoints()
+    main:SetPoint("TOPLEFT", relativeTo or UIParent, relativePoint,
+        x - fx * main:GetWidth(), y + (1 - fy) * main:GetHeight())
+end
+
 function Methods:DragStart()
     if Call(self.host.locked) then return end
     -- The main frame parents secure buttons, which makes moving it a
@@ -3302,6 +3338,7 @@ function Methods:DragStop()
     self.dragPending = false
     self.main:StopMovingOrSizing()
     if Call(self.host.locked) then return end
+    if self.main._minimized then AnchorHeader(self.main) end
     self.moved = true
     -- GetPoint reports relativeTo as nil after StopMovingOrSizing while the
     -- restore anchors explicitly to UIParent. That is not a mismatch: the
@@ -3368,6 +3405,7 @@ end
 
 function Methods:UpdatePopover(anchorRow, members, def)
     if InCombatLockdown() then return end
+    if self.main and self.main._minimized then return end
     local pop = self.pop
     if not pop then return end
     self.popHidePending = false
@@ -3690,6 +3728,38 @@ function Methods:MainFrame()
     return self.main
 end
 
+-- Requested state, like IsVisible: the actual protected layout may lag until
+-- combat ends. Open/refresh never clear this preference; Close never reopens it.
+function Methods:IsMinimized()
+    return self.host.minimizable == true and self.minimized == true
+end
+
+function Methods:SetMinimized(minimized)
+    if not self.host.minimizable then return false end
+    minimized = minimized and true or false
+    local changed = self.minimized ~= minimized
+    self.minimized = minimized
+    if InCombatLockdown() then
+        if changed and self.visible then Call(self.host.onMinimizeDeferred, self, minimized) end
+        return false
+    end
+    if self.visible then self:Update() end
+    return true
+end
+
+function Methods:ToggleMinimized()
+    return self:SetMinimized(not self:IsMinimized())
+end
+
+function Methods:MinimizeButtonHover(btn, over)
+    self:CloseButtonHover(btn, over)
+    if not over then ReleaseTooltip(); return end
+    OwnTooltip(btn, "ANCHOR_RIGHT", TIP_GAP)
+    GameTooltip:SetText(self:IsMinimized() and "Restore window" or "Minimize window")
+    if InCombatLockdown() then GameTooltip:AddLine("Applies when combat ends.", 1, 0.82, 0) end
+    GameTooltip:Show()
+end
+
 local function SetVisible(self, visible)
     local was = self.visible
     self.visible = visible
@@ -3864,7 +3934,7 @@ end
 -- when combat ends.
 -- The layout this copy draws. Bumped whenever the geometry changes, which is
 -- what tells an older copy's window apart from one this copy built.
-local LAYOUT = 2
+local LAYOUT = 3
 
 -- Bring a window an older copy built up to this one's layout.
 --
@@ -3900,6 +3970,12 @@ function Methods:AdoptLayout()
         if x.Hide then x:Hide() end
         if x.EnableMouse then x:EnableMouse(false) end
         main.closeBtn = MakeCloseButton(self, main)
+    end
+    if self.host.minimizable and not main.minimizeBtn then
+        main.minimizeBtn = MakeMinimizeButton(self, main)
+        main.dragHandle:ClearAllPoints()
+        main.dragHandle:SetPoint("TOPLEFT", main.hdrBg, "TOPLEFT", 0, 0)
+        main.dragHandle:SetPoint("TOPRIGHT", main.hdrBg, "TOPRIGHT", -(2 * (HDR_H - 12) + 9), 0)
     end
 
     -- The divider was adopted where the OLD header put it, which is no longer
@@ -4072,7 +4148,27 @@ local function Rebuild(self)
     y = y - 2
     y = self:LayoutFooter(y)
 
-    main:SetSize(FRAME_W, math.abs(y) + 2)
+    local minimized = self:IsMinimized()
+    -- A close can hide the old layout before a deferred mode change is applied.
+    -- Preserve its header too; an unpositioned first layout still restores below.
+    if minimized ~= (main._minimized == true) and main:GetPoint() then
+        AnchorHeader(main)
+        self.moved = true
+    end
+    if minimized then
+        for _, r in ipairs(self.rows) do r._active = false; r:Hide() end
+        for _, h in ipairs(self.headers) do h:Hide() end
+        for _, btn in ipairs(self.footerBtns) do btn:Hide() end
+        main.ftrLine:Hide()
+        self.pop:Hide()
+        self.popHidePending = false
+        self.hintRow = nil
+        self.tipPending, self.tipButton = false, nil
+        if GameTooltip:GetOwner() and GameTooltip:GetOwner()._ui == self then ReleaseTooltip() end
+    end
+    main._minimized = minimized
+    if main.minimizeBtn then main.minimizeBtn.label:SetText(minimized and "+" or "-") end
+    main:SetSize(FRAME_W, minimized and (HDR_H + 8) or (math.abs(y) + 2))
 
     if not self.moved and not main:IsShown() then
         main:ClearAllPoints()

@@ -1312,4 +1312,33 @@ local line = RunReadmeHost("current, LibGlass missing")
 H.check(line:find("reinstall MyAddon", 1, true) ~= nil,
     "on a copy with Refusal it words the code its own way: " .. line)
 
+-- An opted-in host may have built its window on an older active library.
+freshLibStub()
+load(Fixtures(29, { "LibGroupBuffs.lua" }), "r29")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local minHost = H.PriestUI({ minimizable = true })
+minHost.config.visible.shadow = false
+minHost.engine:RefreshSpells()
+minHost.ui:Update()
+local minMain = minHost.ui.main
+H.eq(minMain.minimizeBtn, nil, "r29 has no minimize control")
+WoW.inCombat = true
+load(CURRENT_FILES, "current")
+minHost.ui:SetMinimized(true)
+H.eq(minMain.minimizeBtn, nil, "upgrade adds no control during combat")
+H.eq(#WoW.blockedCalls, 0, "upgrade queues minimize without protected writes")
+WoW.inCombat = false
+minHost.ui:OnCombatEnd()
+WoW.flushTimers()
+H.eq(minHost.ui.main, minMain, "upgrade keeps the old main frame")
+H.check(minMain.minimizeBtn ~= nil and minMain._minimized, "old window gains control and applies request")
+local heldButton = minMain.minimizeBtn
+load(withMinor(CURRENT_FILES, CURRENT + 1), "next")
+H.check(minHost.ui:IsMinimized(), "minimized state survives another library upgrade")
+H.runScript(heldButton, "OnClick")
+H.check(not minHost.ui:IsMinimized(), "existing handler dispatches restore after upgrade")
+H.eq(minMain.minimizeBtn, heldButton, "no duplicate control after upgrade")
+
 H.done("test_versions")

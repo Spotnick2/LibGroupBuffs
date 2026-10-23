@@ -161,6 +161,16 @@ and the like name those sections.
   Contracts:
   - **Frames are anonymous.** The library creates no globals; tests and addons reach frames
     through the ui object.
+  - **Minimize is opt-in (`minimizable = true`, r31)** and session-only. `IsMinimized`
+    reports the requested state; `main._minimized` records the applied layout. A combat
+    request stores only the preference and optionally calls `onMinimizeDeferred`; the
+    normal `OnCombatEnd` rebuild applies it. It never opens a closed window, overrides
+    a queued close, or writes a hidden visibility preference. Routine opens and refreshes
+    retain the preference. Restore rebuilds the current roster. The rows, footer and
+    popover are hidden only outside combat, leaving the header and `+` control.
+    Companion hosts must honor `IsMinimized()` in `onLayout` before opting in; existing
+    visibility/tick contracts remain unchanged. Header position is normalized to a top
+    anchor on layout transitions and minimized drag saves, so resizing preserves it.
   - **Every installed handler and delayed callback dispatches through the ui object**
     (`self._ui:Method()`), because handlers are installed once and a captured function would keep
     running the copy that installed it. Pool sizes: groups `8 + ceil(40 / bucketSize)`, rows
