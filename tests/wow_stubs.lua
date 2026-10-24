@@ -632,7 +632,7 @@ local function makeFrame(name, parent, template)
             if KNOWN_METHODS[k] then return chain end
             error("call to widget method '" .. k .. "', which this stub does "
                 .. "not define. Confirm it exists on this client in the newest "
-                .. "C:/Projects/WoW/References/forever-api-<build>.md, then either "
+                .. "C:/Projects/WoW/References/Forever/api/forever-api-<build>.md, then either "
                 .. "implement it above or add it to KNOWN_METHODS. If it does "
                 .. "NOT exist, the addon is the thing to fix.", 2)
         end,

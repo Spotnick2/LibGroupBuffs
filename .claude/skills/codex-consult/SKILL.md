@@ -83,7 +83,7 @@ at `C:/Projects/WoW/Priestly`, and the unported TBC siblings at `C:/Projects/WoW
 findings are measured on the live client, and a cold reviewer will otherwise argue from Classic-era
 or Retail behaviour that does not hold here - that auras throw for the whole group in combat, that
 no SavedVariables survive a restart, that the client's secure handler decides which mouse edge
-acts. The newest `C:/Projects/WoW/References/forever-api-<build>.md` is the full measured API surface if
+acts. The newest `C:/Projects/WoW/References/Forever/api/forever-api-<build>.md` is the full measured API surface if
 a question turns on whether something exists.
 
 Say what you have already established and ask it not to repeat that work. A clean "no defect found"

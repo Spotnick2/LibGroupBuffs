@@ -16,12 +16,12 @@ Repository-specific additions:
   `gh pr diff 8 -R Spotnick2/LibGroupBuffs`); PR numbers overlap with consumer repositories.
 - The library has no build constant yet. Match Priestly's `MEASURED_ON_BUILD` in
   `C:\Projects\WoW\Priestly\PriestlyConfig.lua` to
-  `C:/Projects/WoW/References/forever-api-<version>.<build>.md`. Runtime measurements live in
+  `C:/Projects/WoW/References/Forever/api/forever-api-<version>.<build>.md`. Runtime measurements live in
   `C:\Projects\WoW\Priestly\docs\FOREVER-PROBE.md`.
 - A change here ships in every consumer. Review it as a change to Priestly, Wildly and Magely at
   once: check the version guard, table identity across an upgrade, that instance functions
   dispatch through `lib.impl` at call time, and that nothing assumes one particular consumer.
-- `C:\Projects\WoW\References\EMBEDDED-LIBRARIES.md` is the shared rulebook for embedded libraries
+- `C:\Projects\WoW\References\Docs\EMBEDDED-LIBRARIES.md` is the shared rulebook for embedded libraries
   (packaging, pinning, upgrade rules, tests); LibGlass-1.0 (`C:\Projects\WoW\LibGlass`) is the worked
   example this library now follows.
 
@@ -413,7 +413,7 @@ and the like name those sections.
 
 ## Client Rules (measured, not inferred)
 
-- **Three sources, three questions.** The dump (`C:/Projects/WoW/References/forever-api-<build>.md`)
+- **Three sources, three questions.** The dump (`C:/Projects/WoW/References/Forever/api/forever-api-<build>.md`)
   says what **exists**. A probe in game says what **works**. And `C:/Projects/WoW/wow-ui-source` —
   Blizzard's shipped Interface code for this exact build, with `version.txt` naming it — says what
   the client's **own UI does and depends on**. That third one closes the gap behind "a function in
@@ -466,7 +466,7 @@ absent or half-loaded load it themselves (`freshLibStub(true)` in `test_versions
 define. That only works if it also models the client's absences and shapes honestly — a stub more
 forgiving than the client lets broken code pass a green suite, which is how a call to the removed
 `MouseIsOver` shipped once. Before stubbing a new global, confirm it exists in the newest
-`C:/Projects/WoW/References/forever-api-<build>.md`, and stub it with the client's exact signature.
+`C:/Projects/WoW/References/Forever/api/forever-api-<build>.md`, and stub it with the client's exact signature.
 
 Strict globals only catch what actually runs, so every script handler the library installs needs a
 test that executes it.
