@@ -1253,6 +1253,63 @@ if CURRENT > 26 then
 end
 
 ------------------------------------------------------------
+-- Every frozen release upgraded to this copy
+--
+-- What a player meets: an addon shipping rN built its instance and window,
+-- then a newer addon's copy loads. Priestly ships r31 and Buffy shipped r32,
+-- so a release that only ever loads after a newer copy proves nothing about
+-- them (Codex review of #72). The window was placed by its centre, as every
+-- copy before r33 saved it; the current copy's fixed-edge growth rebuilds it
+-- onto its top edge, which only the new implementation can do.
+------------------------------------------------------------
+
+for _, release in ipairs(SINGLE) do
+    local n = release[1]
+    if CURRENT > n then
+        local tag = "r" .. n .. " -> current: "
+        freshLibStub()
+        load(release[2], "r" .. n)
+        lib = LibStub("LibGroupBuffs-1.0")
+        local oldGB = lib:New({ owner = "Priestly", report = function() end })
+        local oldFmt = oldGB.FmtTime
+        local oldUpdate = lib.UIMethods.Update
+        WoW.reset()
+        H.TeachSpells({ "FORT_SINGLE", "SPIRIT_SINGLE" })
+        H.Party3()
+        local host = H.PriestUI({ minimizable = true })
+        host.ui_config.growth = "down"
+        host.saved.pos = { point = "CENTER", relPoint = "CENTER", x = 120, y = 80 }
+        host.engine:RefreshSpells()
+        host.ui:Update()
+        local main = host.ui.main
+        H.eq((main:GetPoint()), "CENTER", tag .. "r" .. n .. " placed the window by its centre")
+
+        load(CURRENT_FILES, "current")
+        H.eq(activeMinor(), CURRENT, tag .. "the current copy takes over")
+        H.check(LibStub("LibGroupBuffs-1.0") == lib, tag .. "keeping the library table")
+        H.eq(lib.instances.Priestly, oldGB, tag .. "and the instance r" .. n .. " made")
+        for _, name in ipairs(lib._test.FUNCTIONS) do
+            H.eq(type(oldGB[name]), "function", tag .. "which has " .. name)
+        end
+        H.eq(oldFmt(90), lib.UI.FmtTime(90), tag .. "a function held from r" .. n .. " still answers")
+        H.eq(lib.Status(n), "ok", tag .. "an r" .. n .. " host asking is told ok")
+        H.check(getmetatable(host.ui).__index == lib.UIMethods, tag .. "the window keeps the shared methods")
+        H.check(lib.UIMethods.Update ~= oldUpdate, tag .. "which now hold the current Update")
+        H.eq(host.ui.Update, lib.UIMethods.Update, tag .. "and the window resolves to it")
+
+        host.ui:Update()
+        H.eq(host.ui.main, main, tag .. "the rebuild keeps the window r" .. n .. " built")
+        local point, _, relPoint, x, y = main:GetPoint()
+        H.eq(point, "TOPLEFT", tag .. "and re-anchors it on its top edge")
+        H.eq(relPoint, "CENTER", tag .. "relative to the same point")
+        H.near(x, 120 - main:GetWidth() / 2, 0.001, tag .. "without moving it sideways")
+        H.near(y, 80 + main:GetHeight() / 2, 0.001, tag .. "or up and down")
+        H.eq(host.saved.pos.point, "TOPLEFT", tag .. "and saves the new anchor")
+        H.eq(#WoW.blockedCalls, 0, tag .. "with no protected write")
+    end
+end
+
+------------------------------------------------------------
 -- The README's own host example, run against every active copy it can meet
 --
 -- lib:Refusal is new in r28, and a refusal is exactly when the active copy
