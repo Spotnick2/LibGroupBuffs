@@ -123,17 +123,16 @@ local R24 = Fixtures(24, SIX_FILES)
 -- until each moves to r26 in a release of its own.
 local R25 = Fixtures(25, SIX_FILES)
 -- r26 is the first single-file release: from there on, one fixture per tag,
--- tests/fixtures/LibGroupBuffs-rN.lua. Found by counting up from 26 until one
--- is missing, so freezing a release is adding its file and nothing else.
+-- tests/fixtures/LibGroupBuffs-rN.lua. Found by trying every MINOR from 26 up
+-- to the current one, so freezing a release is adding its file and nothing
+-- else. A MINOR that was never tagged leaves a gap (r30 is one), and the scan
+-- steps over it: stopping at the first gap once hid r31 and later.
 local SINGLE = {}
-do
-    local n = 26
-    while true do
-        local f = io.open("tests/fixtures/LibGroupBuffs-r" .. n .. ".lua", "rb")
-        if not f then break end
+for n = 26, CURRENT do
+    local f = io.open("tests/fixtures/LibGroupBuffs-r" .. n .. ".lua", "rb")
+    if f then
         f:close()
         SINGLE[#SINGLE + 1] = { n, Fixtures(n, { "LibGroupBuffs.lua" }) }
-        n = n + 1
     end
 end
 H.check(#SINGLE >= 1, "the single-file releases are frozen, from r26 on")
