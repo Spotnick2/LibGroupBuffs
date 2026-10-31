@@ -133,11 +133,23 @@ end
 
 Probe:Command("state", state, "which copies run; is the window clean")
 
-Probe:Command("show", function()
+-- Open the window NOW. ui:Open() coalesces through a timer, so a step that
+-- screenshots as it completes would shoot a closed window; out of combat,
+-- Update builds and shows at once (in combat it records the show for the
+-- fight's end, which is all anything can do). Returns whether the frame is
+-- on screen, which is what the screenshot will show.
+local function openNow()
     local ok, err = pcall(build)
-    if not ok then say("build refused: " .. tostring(err)); return end
+    if not ok then error(err, 0) end
     ui:Open()
-    say("open requested; visible " .. Show(ui:IsVisible()))
+    ui:Update()
+    return ui.main ~= nil and ui.main:IsShown(), ui:IsVisible()
+end
+
+Probe:Command("show", function()
+    local ok, shown, visible = pcall(openNow)
+    if not ok then say("build refused: " .. tostring(shown)); return end
+    say("open requested; on screen " .. Show(shown) .. ", visible " .. Show(visible))
 end, "build the synthetic window and open it")
 
 Probe:Command("hide", function()
@@ -282,12 +294,7 @@ Probe:Steps("bg", {
     { text = "Sampling before the gates open.", auto = true, run = function() return sample("before gates") end,
       check = function() return not InCombatLockdown(), "out of combat" end },
     { text = "Open the probe window.", button = "Open", screenshot = "probe window, before gates",
-      run = function()
-          local ok, err = pcall(build)
-          if not ok then error(err, 0) end
-          ui:Open()
-          return ui:IsVisible()
-      end },
+      run = function() return openNow() end },
     { text = "Open Priestly's window (/priestly show) and hover a row so its popover shows. Then press Next.",
       screenshot = "Priestly popover, before gates" },
     { text = "In the popover: is the RANGE mark (left of the time) '?' for every member?", ask = true },
@@ -417,8 +424,12 @@ local function rememberWindow()
         .. " shown " .. Show(get(m, "IsShown", nil)) .. " pop shown " .. Show(get(ui.pop, "IsShown", nil))
 end
 
+local sweepDirty = false     -- a sweep ran and the window was not restored yet
+
 local function sweep()
     if not ui or not ui.main then error("no window: run step 1 first", 0) end
+    if not sweepSaved then rememberWindow() end
+    sweepDirty = true
     local results = {}
     for _, e in ipairs(SWEEP) do results[#results + 1] = e[1] .. "=" .. sweepOne(e, ui.main) end
     local plain = CreateFrame("Frame", nil, UIParent)
@@ -433,6 +444,8 @@ end
 
 local function restoreWindow()
     if not sweepSaved or not ui or not ui.main then return "nothing saved" end
+    if InCombatLockdown() then return "in combat: restored at PLAYER_REGEN_ENABLED" end
+    sweepDirty = false
     local m, s = ui.main, sweepSaved
     m:SetAlpha(s.alpha)
     m:SetScale(s.scale)
@@ -448,6 +461,21 @@ local function restoreWindow()
     ui:Update()
     return "restored; shown " .. Show(get(m, "IsShown", nil))
 end
+
+-- The procedure's own restore step is not the only way back: stopping the
+-- procedure, or a step failing after a write the client accepted, would leave
+-- the window resized, rescaled or hidden for the session. So the fight's end
+-- restores it whenever a sweep is outstanding, and `/fp gb restore` does so
+-- on demand.
+local sweepWatch = CreateFrame("Frame")
+Probe:RegisterEvents(sweepWatch, { "PLAYER_REGEN_ENABLED" })
+sweepWatch:SetScript("OnEvent", function()
+    if sweepDirty then say("sweep outstanding at combat's end: " .. restoreWindow()) end
+end)
+
+Probe:Command("restore", function()
+    say("restore: " .. restoreWindow())
+end, "put the probe window back after a sweep (out of combat)")
 
 Probe:Steps("sweep", {
     rev = 1,
@@ -596,7 +624,7 @@ Probe:Steps("spells", {
 -- ─── look (r29) ─────────────────────────────────────────────────────────────
 
 Probe:Steps("look", {
-    rev = 1,
+    rev = 2,                                   -- step 2 opens through openNow
     title = "r29: the window wears the clean preset",
     { text = "Out of combat, on a priest. Reading the versions and the material.", auto = true,
       run = function() state(); local L = lib(); return L and L.shared.MINOR end,
@@ -604,12 +632,8 @@ Probe:Steps("look", {
           local L = lib()
           return L ~= nil and L.shared.MINOR >= 29, "LibGroupBuffs MINOR " .. tostring(L and L.shared.MINOR)
       end },
-    { text = "Open the window over scenery.", button = "Open", screenshot = "window, clean", run = function()
-          local ok, err = pcall(build)
-          if not ok then error(err, 0) end
-          ui:Open()
-          return ui:IsVisible()
-      end },
+    { text = "Open the window over scenery.", button = "Open", screenshot = "window, clean",
+      run = function() return openNow() end },
     { text = "Thin rim, smooth body (no grain), bars about 60% see-through?", ask = true,
       screenshot = "clean look" },
     { text = "Check the material again, now that a window exists.", button = "Check",
@@ -641,8 +665,9 @@ if type(NS) == "table" then
     NS._test = {
         Probe = Probe, DEFS = DEFS, SPELL_IDS = SPELL_IDS,
         build = build, sample = sample, sweep = sweep, snapshot = snapshot, summary = summary,
-        rememberWindow = rememberWindow, restoreWindow = restoreWindow,
+        rememberWindow = rememberWindow, restoreWindow = restoreWindow, openNow = openNow,
+        sweepIsDirty = function() return sweepDirty end,
         window = function() return ui, engine end,
-        spellWatch = spellWatch,
+        spellWatch = spellWatch, sweepWatch = sweepWatch,
     }
 end

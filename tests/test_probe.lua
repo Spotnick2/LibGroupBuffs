@@ -155,6 +155,20 @@ H.check(logHas("byIndex=nil walk=1"), "the index read answers nil")
 H.check(logHas("lib.ReadBuff=\"BLOCKED\""), "which the library refuses to call an absence while the flag is up")
 WoW.secret = false
 
+-- The step that screenshots the window must have it on screen as it
+-- completes: Open alone schedules through a timer (Codex, round 1).
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+do
+    local w = T.window()
+    if w then w:Close(true) WoW.flushTimers(1) end
+    local shown, visible = T.openNow()
+    H.check(shown, "openNow puts the frame on screen before any timer runs")
+    H.check(visible, "and the window is logically open")
+    H.check(T.window().main:IsShown(), "so a screenshot taken as the step completes shows it")
+end
+
 -- The bg procedure's own steps.
 WoW.reset()
 H.TeachSpells({ "FORT_SINGLE" })
@@ -197,8 +211,16 @@ H.check(#WoW.blockedCalls > 0, "the stub refused the measured calls")
 for _, line in ipairs(log) do
     H.check(not tostring(line):find("threw:", 1, true), "no sweep entry threw: " .. tostring(line))
 end
+H.check(T.sweepIsDirty(), "after a sweep the window counts as dirty")
+H.check(T.restoreWindow():find("in combat", 1, true) ~= nil, "it cannot be restored while the fight is on")
+H.check(T.sweepIsDirty(), "and stays dirty")
 WoW.inCombat = false
-H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "the window is restored after the fight")
+H.check(WoW.events[T.sweepWatch] and WoW.events[T.sweepWatch].PLAYER_REGEN_ENABLED,
+    "the probe listens for the fight's end on its own")
+H.runScript(T.sweepWatch, "OnEvent", "PLAYER_REGEN_ENABLED")
+H.check(not T.sweepIsDirty(), "and restores the window there, whatever became of the procedure")
+H.check(logHas("sweep outstanding at combat's end: restored"), "saying so")
+H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "restoring again on demand is harmless")
 WoW.flushTimers(1)
 H.eq(ui.main:GetFrameStrata(), "LOW", "to its strata")
 H.eq(ui.main:GetAlpha(), 1, "and its alpha (the window's alpha lives on its glass, not the frame)")

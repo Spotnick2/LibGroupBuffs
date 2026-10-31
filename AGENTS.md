@@ -189,8 +189,9 @@ and the like name those sections.
     its own. A host must never hide, move, resize, rescale or re-anchor the main frame or the
     popover from a hook or a slash command: the client refuses it silently and blames the host
     (`ADDON_ACTION_BLOCKED` naming the addon, which is what Wildly #42 reported from its pre-library
-    window). Read from `MainFrame()` freely; every write goes through `ui:Close`, `ui:Open`,
-    `ui:SetMinimized` and `OnCombatEnd`, which defer. The test stub records every state write to
+    window). Read from `MainFrame()` freely; what a host wants of the window it asks for through
+    `ui:Close`, `ui:Open`, `ui:SetMinimized` and `ui:ResetPosition`, which remember the request
+    in combat and carry it out in `OnCombatEnd`. The test stub records every state write to
     a protected frame in combat in `WoW.combatTouches` (r33 audit) so a host suite can assert the
     same rule on its own hooks.
   - **A deferred close is always reported** while the frame is still on screen, whoever asked
