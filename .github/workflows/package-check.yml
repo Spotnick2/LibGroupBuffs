@@ -32,6 +32,10 @@ jobs:
           echo "LibGlass at $ref ($(git -C "$RUNNER_TEMP/LibGlass" rev-parse --short HEAD))"
 
       - name: Unit tests
+        env:
+          # tests/test_probe.lua needs the private ForeverProbe checkout; it
+          # prints SKIPPED here and runs on the owner's machine.
+          FOREVERPROBE_OPTIONAL: "1"
         run: |
           for f in tests/test_*.lua; do
             echo "-- $f"

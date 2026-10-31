@@ -49,6 +49,21 @@ H.check(u1 == "player" or u1 == "party1" or u1 == "party2",
     "the target is a group member, got " .. tostring(u1))
 
 ------------------------------------------------------------
+-- The buttons cast by the client's own names (r33 audit, Magely #48)
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE", "FORT_GROUP" })
+WoW.locale = "deDE"
+WoW.Know(H.SPELL.FORT_SINGLE, "Machtwort: Seelenstaerke")
+WoW.Know(H.SPELL.FORT_GROUP, "Gebet der Seelenstaerke")
+host.engine:RefreshSpells()
+ui:Update()
+row = H.ActiveRows(ui)[1]
+H.eq(row:GetAttribute("spell1"), "Gebet der Seelenstaerke",
+    "on a German client the left click casts the group spell under its German name")
+H.eq(row:GetAttribute("spell2"), "Machtwort: Seelenstaerke", "and the right click the single form")
+
+------------------------------------------------------------
 -- The target follows who is actually missing the buff
 ------------------------------------------------------------
 

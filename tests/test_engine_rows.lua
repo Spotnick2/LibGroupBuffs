@@ -368,4 +368,27 @@ H.eq(select(3, other:BuffRem("party1", other.defs[1])), lib.Engine.STATES.UNKNOW
 H.secrecy(false)
 H.check(getmetatable(priest) == getmetatable(other), "both run the one shared set of methods")
 
+------------------------------------------------------------
+-- A roster slot whose unit does not exist (r33 audit, #63, candidate A4).
+-- GetRaidRosterInfo(i) naming a slot while UnitExists("raid"..i) is false has
+-- not been measured on this client; today such a slot is listed, and reads
+-- as missing rather than '?'. Pinned so a change here is deliberate.
+setup({ "FORT_SINGLE" })
+WoW.inRaid = true
+WoW.groupMembers = 3
+for i = 1, 3 do WoW.raidRoster[i] = { name = "Raider" .. i, subgroup = 1 } end
+WoW.SetUnit("raid1", { name = "Raider1", guid = "R1", class = "WARRIOR" })
+WoW.SetUnit("raid2", { name = "Raider2", guid = "R2", class = "MAGE" })
+groups, ord = E:GatherGroups()
+H.eq(#groups[1], 3, "a roster slot with a name but no unit is still listed")
+H.eq(groups[1][3].unit, "raid3", "under its token")
+H.eq(groups[1][3].name, "Raider3", "with the roster's name")
+do
+    local _, _, st, _, basis = E:BuffRem("raid3", host.def("fort"))
+    H.eq(st, lib.Engine.STATES.MISSING, "and reads as missing, not as unknown")
+    H.eq(basis, "live", "as a live answer")
+    H.eq(lib.API.SpellRange("raid3", "Power Word: Fortitude"), "UNKNOWN", "with an unknown range")
+end
+
+
 H.done("test_engine_rows")

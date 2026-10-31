@@ -274,6 +274,32 @@ function H.runScript(frame, script, ...)
     return ok
 end
 
+-- ForeverProbe, the host Tools/LibGroupBuffsProbe depends on, from its
+-- checkout ($FOREVERPROBE, else ..\ForeverProbe). It is private and only on
+-- the owner's disk, so CI does not have it: with FOREVERPROBE_OPTIONAL=1 (CI)
+-- a missing checkout skips the calling test file; without it (locally) that
+-- is an error, never a silent skip. Loaded into THIS stub, the way the client
+-- loads a dependency: its TOC's files in order, then its ADDON_LOADED.
+function H.loadForeverProbe()
+    local root = (os.getenv("FOREVERPROBE") or "../ForeverProbe"):gsub("\\", "/"):gsub("/$", "")
+    local toc = io.open(root .. "/ForeverProbe.toc", "rb")
+    if not toc then
+        if os.getenv("FOREVERPROBE_OPTIONAL") == "1" then
+            io.write("SKIPPED: ForeverProbe is not here (private, local only); the probe test runs locally\n")
+            os.exit(0)
+        end
+        error("ForeverProbe checkout not found at " .. root .. ": clone it there or set FOREVERPROBE", 0)
+    end
+    local files = {}
+    for line in toc:read("*a"):gmatch("[^\r\n]+") do
+        if line:match("%.lua$") and not line:match("^#") then files[#files + 1] = root .. "/" .. line end
+    end
+    toc:close()
+    for _, file in ipairs(files) do assert(loadfile(file))("ForeverProbe", {}) end
+    WoW.dispatch("ADDON_LOADED", "ForeverProbe")
+    return ForeverProbe
+end
+
 -- Combat aura secrecy as measured on the live client: the flag is set AND
 -- every index read throws, while the by-name lookup quietly returns nil.
 function H.secrecy(on)

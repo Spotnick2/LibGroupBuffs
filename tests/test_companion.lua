@@ -274,6 +274,7 @@ local vis = lib.Visibility.New({
     setPreference = function(v) host.preferenceWritten = v end,
 })
 WoW.inCombat = true
+WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
 host.deferredCloses = 0
 host.saved.visible = nil
 host.config.showSolo = false
@@ -294,6 +295,9 @@ H.check(ui.pendingShow, "the show is recorded for the fight's end")
 host.config.showSolo = false
 vis:SoloToggled(false)
 H.eq(host.deferredCloses, 2, "and a close after it is explained again, not swallowed by the latch")
+H.eq(#WoW.blockedCalls, 0, "none of it attempted a call the client blocks")
+H.eq(#WoW.combatWrites, 0, "nor a secure attribute write")
+H.eq(#WoW.combatTouches, 0, "nor any other write to the protected frames")
 WoW.inCombat = false
 ui:OnCombatEnd()
 WoW.flushTimers(1)

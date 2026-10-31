@@ -88,6 +88,7 @@ function WoW.reset()
     WoW.instanceMapID = 0        -- GetInstanceInfo's 8th return; 0 outdoors
     WoW.combatWrites = {}        -- SetAttribute calls made while WoW.inCombat
     WoW.blockedCalls = {}        -- protected calls refused while WoW.inCombat
+    WoW.combatTouches = {}       -- EVERY state write to a protected frame in combat
     WoW.byNameBlind = false      -- simulate GetAuraDataBySpellName not resolving
     WoW.auraReadsThrow = false   -- combat secrecy: index reads throw
     WoW.aurasAreSecret = false   -- combat secrecy: the struct's fields throw
@@ -230,6 +231,19 @@ local PROTECTED_METHODS = {
     StartMoving = true, StopMovingOrSizing = true, SetParent = true,
 }
 
+-- Which method names count as writing a protected frame's state in combat
+-- (WoW.combatTouches). Wider than PROTECTED_METHODS, which is only what was
+-- measured refused; see the loop that installs it in makeFrame.
+local function TOUCHES_FRAME_STATE(name)
+    if name == "SetScript" or name == "HookScript" then return false end
+    if name == "Show" or name == "Hide" or name == "EnableMouse"
+        or name == "Raise" or name == "Lower" then
+        return true
+    end
+    return name:match("^Set") ~= nil or name:match("^Start") ~= nil
+        or name:match("^Stop") ~= nil or name:match("^Clear") ~= nil
+end
+
 -- Widget methods this client has that the stub models as doing nothing.
 -- Every one was checked against the build dump before it was added; a method
 -- that is NOT there is not a candidate for this list, it is a bug in the
@@ -290,12 +304,16 @@ local function makeFrame(name, parent, template)
         return self
     end
     -- A write to a secure attribute under combat lockdown is refused by the
-    -- client - silently, as far as the addon can tell. The stub still stores
-    -- it (so a test can see what was attempted) and records it, so a test can
-    -- assert that nothing tried.
+    -- client - silently, as far as the addon can tell (PORTING-TBC-TO-FOREVER
+    -- "Secure click-casting": SetAttribute does nothing under lockdown). The
+    -- stub refuses it the same way and records the attempt, so a test can
+    -- assert that nothing tried. Until the r33 audit it stored the value as
+    -- well, so a test reading the attribute back saw a cast the client would
+    -- never have made.
     f.SetAttribute = function(self, k, v)
         if WoW.inCombat then
             WoW.combatWrites[#WoW.combatWrites + 1] = { frame = self, key = k, value = v }
+            return self
         end
         self._attr[k] = v
         return self
@@ -601,6 +619,26 @@ local function makeFrame(name, parent, template)
                     return self
                 end
                 return real(self, ...)
+            end
+        end
+    end
+
+    -- Every state write to a protected frame in combat, refused or not.
+    -- PROTECTED_METHODS is the MEASURED list of refusals and stays that way;
+    -- this record is wider on purpose. The window's contract is stronger than
+    -- the client's rule - it touches NOTHING in combat (AGENTS.md, UI) - so a
+    -- test asserts this is empty without having to know which methods this
+    -- build refuses, and a regression through a method the client refuses
+    -- but nobody measured (SetShown, SetFrameStrata...) still goes red.
+    -- Script handlers are not frame state and are left out.
+    for name, fn in pairs(f) do
+        if type(fn) == "function" and TOUCHES_FRAME_STATE(name) then
+            f[name] = function(self, ...)
+                if WoW.inCombat and self._protected then
+                    WoW.combatTouches[#WoW.combatTouches + 1] =
+                        { frame = self, method = name }
+                end
+                return fn(self, ...)
             end
         end
     end

@@ -210,6 +210,96 @@ do
 end
 
 ------------------------------------------------------------
+-- The popover's two '?' are independent (r33 audit, #63)
+--
+-- "Everyone shows '?' in battlegrounds" can be two different things. The
+-- range mark beside the icon is '?' when C_Spell.IsSpellInRange answers
+-- nil; the time column (and the row's MISS slot) is '?' when the aura read
+-- was blocked and nothing was ever cached for that GUID. Either can happen
+-- without the other, and a report that says "?" has to say which.
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+ui:Update()
+do
+    local r = H.ActiveRows(ui)[1]
+    H.runScript(r, "OnEnter")
+    local pr = ui.popRows[1]
+    -- WoW.range is empty by default: the client answered nil for every unit.
+    H.eq(pr.rangeTxt:GetText(), "?", "range unknown: the mark beside the icon is '?'")
+    H.eq(pr.timeTxt:GetText(), "MISS", "while a readable, unbuffed member still says MISS")
+    H.eq(r.missAll:GetText(), "MISS", "and so does the row")
+
+    -- Reads blocked, cache empty, OUT of combat: the secrecy flag alone, as
+    -- a PvP instance might hold it up. H.secrecy would set inCombat too.
+    for k in pairs(host.engine.cache) do host.engine.cache[k] = nil end
+    WoW.secret, WoW.auraReadsThrow = true, true
+    ui:RefreshTimers()
+    H.eq(pr.timeTxt:GetText(), "?", "blocked read, nothing cached: the time column is '?'")
+    H.eq(r.missAll:GetText(), "?", "and the row says '?' rather than MISS")
+    H.eq(pr.rangeTxt:GetText(), "?", "the range mark is still its own '?'")
+
+    -- The client answers the range for this member while the reads stay
+    -- blocked: one '?' goes, the other stays.
+    WoW.range[pr._unit] = true
+    ui:RefreshTimers()
+    H.eq(pr.rangeTxt:GetText(), "R", "a range answer clears the range mark alone")
+    H.eq(pr.timeTxt:GetText(), "?", "the time column is still unreadable")
+    WoW.secret, WoW.auraReadsThrow = false, false
+    WoW.range[pr._unit] = nil
+end
+
+------------------------------------------------------------
+-- The roster is not rebuilt in combat (r33 audit, #63)
+--
+-- A battleground raid churns while the fight is on, and the window cannot
+-- rewrite its rows then (the secure attributes are locked), so it keeps the
+-- tokens it had. BuffRem keys on the GUID behind each token, so a newcomer
+-- in an old slot is honestly UNKNOWN, and a slot that emptied reads as
+-- missing; neither touches a protected frame. Pinned so a change here is
+-- deliberate.
+------------------------------------------------------------
+
+setup({ "FORT_SINGLE" })
+WoW.inRaid = true
+WoW.groupMembers = 5
+for i = 1, 5 do
+    local nm = "Raider" .. i
+    WoW.raidRoster[i] = { name = nm, subgroup = 1 }
+    WoW.SetUnit("raid" .. i, { name = nm, guid = "R" .. i, class = "WARRIOR" })
+end
+ui:Update()
+do
+    local r = H.ActiveRows(ui)[1]
+    H.eq(#r._members, 5, "five raiders in the one subgroup")
+    H.runScript(r, "OnEnter")
+    local function popRowFor(unit)
+        for _, pr in ipairs(ui.popRows) do
+            if pr._active and pr._unit == unit then return pr end
+        end
+    end
+    H.secrecy(true)                                   -- the gates open
+    WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
+    WoW.SetUnit("raid3", { name = "Newcomer", guid = "R3b", class = "MAGE" })  -- someone new in slot 3
+    WoW.units.raid5 = nil                             -- slot 5 emptied
+    WoW.raidRoster[5] = nil
+    WoW.groupMembers = 4
+    ui:Update()
+    H.eq(#r._members, 5, "a rebuild in combat keeps the roster the row was built with")
+    H.eq(popRowFor("raid1").timeTxt:GetText(), "MISS", "a raider seen before the pull: remembered absence")
+    H.eq(popRowFor("raid3").timeTxt:GetText(), "?", "the newcomer's GUID was never read: '?'")
+    H.eq(popRowFor("raid5").timeTxt:GetText(), "MISS", "an emptied slot reads as missing, not as '?'")
+    H.eq(#WoW.blockedCalls, 0, "and none of it attempted a call the client blocks")
+    H.eq(#WoW.combatWrites, 0, "nor rewired a button")
+    H.eq(#WoW.combatTouches, 0, "nor wrote to a protected frame at all")
+    H.secrecy(false)
+    ui:OnCombatEnd()
+    WoW.flushTimers(1)
+    r = H.ActiveRows(ui)[1]
+    H.eq(#r._members, 4, "the fight's end rebuilds the current roster")
+end
+
+------------------------------------------------------------
 -- The ticker and the popover's hover poll
 ------------------------------------------------------------
 
@@ -450,6 +540,7 @@ H.check(not ui:IsVisible(), "a close after combat's end beats the rebuild it que
 setup()
 ui:Update()
 WoW.inCombat = true
+WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
 host.deferredCloses = 0
 ui:Close()                                  -- the addon's own close: the group emptied
 H.check(ui.main:IsShown() and not ui:IsVisible(), "still on screen, logically closed")
@@ -461,6 +552,9 @@ H.eq(host.deferredManual, true, "as their own")
 H.runScript(ui.main.closeBtn, "OnClick")
 ui:Close()
 H.eq(host.deferredCloses, 2, "after which nothing more is said in that fight, of either kind")
+H.eq(#WoW.blockedCalls, 0, "none of it attempted a call the client blocks")
+H.eq(#WoW.combatWrites, 0, "nor a secure attribute write")
+H.eq(#WoW.combatTouches, 0, "nor any other write to the protected frames")
 WoW.inCombat = false
 ui:OnCombatEnd()
 H.check(not ui.main:IsShown(), "and the fight's end hides it")
@@ -876,12 +970,21 @@ end
 -- Nothing the window does in combat is a blocked call
 ------------------------------------------------------------
 
+-- Every handler the window installs and every entry point a host can reach,
+-- run in combat, with three records that must all stay empty: the calls the
+-- client refuses (measured), the secure attribute writes, and - wider than
+-- either - any write at all to a protected frame (WoW.combatTouches, r33
+-- audit). The third is the window's own rule, "touches NOTHING", and it is
+-- what catches a regression through a method nobody has measured yet.
 setup({ "FORT_SINGLE" })
+host.footer = { { itemID = 17056, usedBy = "Levitate" } }
 ui:Update()
 row = H.ActiveRows(ui)[1]
 H.runScript(row, "OnEnter")
+ui:Open(0.1)                                   -- queued just before the pull...
 WoW.inCombat = true
-WoW.blockedCalls, WoW.combatWrites = {}, {}
+WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
+WoW.flushTimers(1)                             -- ...and flushed inside it
 ui:Update()
 ui:RefreshTimers()
 ui:RefreshFooter()
@@ -889,22 +992,64 @@ ui:ApplyAppearance()
 ui:ScheduleRefresh()
 ui:UpdatePopover(row, row._members, row._def)
 ui:ShowClickHint(row)
+ui:SetPreview(5)
+ui:SetPreview(nil)
+ui:AdoptLayout()
+ui:Open(0.1)
+WoW.flushTimers(1)
 H.runScript(row, "PreClick", "LeftButton")
 H.runScript(row, "PostClick", "LeftButton")
+H.runScript(row, "OnLeave")
+H.runScript(row, "OnEnter")
 H.runScript(ui.popRows[1], "PreClick", "LeftButton")
 H.runScript(ui.popRows[1], "PostClick", "LeftButton")
+H.runScript(ui.popRows[1], "OnEnter")
+H.runScript(ui.popRows[1], "OnLeave")
+H.runScript(ui.footerBtns[1], "OnEnter")
+H.runScript(ui.footerBtns[1], "OnLeave")
 H.runScript(ui.main, "OnUpdate", 1.0)
 H.runScript(ui.pop, "OnUpdate", 1.0)
 H.runScript(ui.main.dragHandle, "OnDragStart")
 H.runScript(ui.main.dragHandle, "OnDragStop")
 H.runScript(ui.main.closeBtn, "OnClick")
 ui:ResetPosition()
+ui:OnCombatEnd()                               -- a host calling it too early
 WoW.flushTimers(1)
 H.eq(#WoW.blockedCalls, 0, "not one protected call is attempted during a fight")
 H.eq(#WoW.combatWrites, 0, "and not one secure attribute is written")
+H.eq(#WoW.combatTouches, 0, "and nothing else is written to a protected frame either")
 WoW.inCombat = false
 ui:OnCombatEnd()
 WoW.flushTimers(1)
+H.check(not ui.main:IsShown(), "the close recorded in the fight lands when it ends")
+
+-- The same sweep over a window with the opt-in minimize control.
+do
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    local mh = H.PriestUI({ minimizable = true })
+    mh.engine:RefreshSpells()
+    H.Party3()
+    mh.ui:Update()
+    local mrow = H.ActiveRows(mh.ui)[1]
+    WoW.inCombat = true
+    WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
+    H.runScript(mh.ui.main.minimizeBtn, "OnEnter")
+    H.runScript(mh.ui.main.minimizeBtn, "OnClick")
+    H.runScript(mh.ui.main.minimizeBtn, "OnLeave")
+    mh.ui:SetMinimized(false)
+    mh.ui:ToggleMinimized()
+    mh.ui:Update()
+    H.runScript(mrow, "OnEnter")
+    H.runScript(mh.ui.main, "OnUpdate", 1.0)
+    WoW.flushTimers(1)
+    H.eq(#WoW.blockedCalls, 0, "minimize and restore in combat attempt no refused call")
+    H.eq(#WoW.combatWrites, 0, "write no attribute")
+    H.eq(#WoW.combatTouches, 0, "and touch no protected frame")
+    WoW.inCombat = false
+    mh.ui:OnCombatEnd()
+    WoW.flushTimers(1)
+end
 
 ------------------------------------------------------------
 -- Two addons, two windows
