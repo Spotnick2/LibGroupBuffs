@@ -264,6 +264,54 @@ H.eq(openInFight.ui:last(), nil, "and left alone in combat, which the library re
 WoW.inCombat = false
 
 ------------------------------------------------------------
+-- A real window behind the policy, in combat (r33 audit, Wildly #42)
+--
+-- The fake ui above records which request the policy makes. This drives the
+-- real window through the same requests mid-fight and checks that the group
+-- emptying, which closes the window automatically, writes nothing to the
+-- protected frames: the frame stays up until the fight ends, and the host is
+-- told the close was automatic.
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+local real = H.PriestUI()
+real.engine:RefreshSpells()
+H.Party3()
+local realPref = true
+local realPolicy = lib.Visibility.New({
+    ui            = real.ui,
+    isMyClass     = function() return true end,
+    showSolo      = function() return real.config.showSolo end,
+    getPreference = function() return realPref end,
+    setPreference = function(v) realPref = v end,
+})
+realPolicy:RosterChanged()
+WoW.flushTimers(1)
+H.check(real.ui:IsVisible(), "a roster of three opens the window")
+
+WoW.inCombat = true
+WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches = {}, {}, {}
+real.deferredCloses = 0
+WoW.groupMembers = 0
+WoW.units.party1, WoW.units.party2 = nil, nil
+realPolicy:RosterChanged()
+H.check(not real.ui:IsVisible(), "the group emptying mid-fight closes the window logically")
+H.check(real.ui.main:IsShown(), "while its frame stays up: the client would refuse to hide it")
+H.eq(real.deferredCloses, 1, "the host is asked to explain")
+H.eq(real.deferredManual, false, "as an automatic close")
+H.eq(realPref, true, "and the player's preference is left alone")
+realPolicy:SoloToggled(false)
+H.eq(real.deferredCloses, 1, "a solo untick on top of it says nothing more in that fight")
+H.eq(#WoW.blockedCalls, 0, "none of it attempted a call the client blocks")
+H.eq(#WoW.combatWrites, 0, "nor a secure attribute write")
+H.eq(#WoW.combatTouches, 0, "nor any other write to the protected frames")
+WoW.inCombat = false
+real.ui:OnCombatEnd()
+WoW.flushTimers(1)
+H.check(not real.ui.main:IsShown(), "the fight's end hides it for real")
+
+------------------------------------------------------------
 -- An upgrade keeps what a running session has already seen
 --
 -- The state that matters is not a fresh object's: it is one that has already

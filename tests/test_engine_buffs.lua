@@ -573,6 +573,120 @@ H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "and the name the clie
 H.eq(report[1].forms[1].from, "resolved", "resolved, not fallen back to")
 
 ------------------------------------------------------------
+-- A localized name, end to end (r33 audit, Magely #48)
+--
+-- Resolving the name is only the first step. Everything after it matches by
+-- that name: the aura walk, the by-name fast path, the UNIT_AURA filter, the
+-- range check and the names the secure buttons cast. One test drives a
+-- German client through all of them, so "non-English clients break" has a
+-- place to fail if any one of them still compared against the English
+-- literal.
+------------------------------------------------------------
+
+local DE_SINGLE, DE_GROUP = "Machtwort: Seelenstaerke", "Gebet der Seelenstaerke"
+fort = setup()
+WoW.locale = "deDE"
+WoW.Know(H.SPELL.FORT_SINGLE, DE_SINGLE)
+WoW.Know(H.SPELL.FORT_GROUP, DE_GROUP)
+E:RefreshSpells()
+H.eq(fort.sngl, DE_SINGLE, "the def carries the client's single-form name")
+H.eq(fort.grp, DE_GROUP, "and its group-form name")
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", DE_SINGLE, 3600, 1800)
+rem, dur, state = E:BuffRem("party1", fort)
+H.eq(state, HAS, "an aura under the German single name is the buff")
+WoW.ClearAuras("party1")
+WoW.SetAura("party1", DE_GROUP, 3600, 1800)
+rem, dur, state = E:BuffRem("party1", fort)
+H.eq(state, HAS, "and so is one under the German group name")
+WoW.byNameBlind = true                       -- force the walk, not the fast path
+WoW.ClearAuras("party1")
+WoW.SetAura("party1", DE_SINGLE, 3600, 1800)
+for k in pairs(E.cache) do E.cache[k] = nil end
+H.eq(select(3, E:BuffRem("party1", fort)), HAS, "the index walk matches the German name too")
+WoW.byNameBlind = false
+H.check(E:AuraEventIsRelevant("party1", { addedAuras = { { name = DE_SINGLE } } }),
+    "a UNIT_AURA adding the German name is relevant")
+H.check(not E:AuraEventIsRelevant("party1", { addedAuras = { { name = H.NAME.FORT_SINGLE } } }),
+    "while the English literal no longer is: nothing compares against it")
+local primary, secondary = E:ClickSpells(fort)
+H.eq(primary, DE_GROUP, "the left click casts by the German group name")
+H.eq(secondary, DE_SINGLE, "the right click by the German single name")
+WoW.range.party1 = true
+H.eq(lib.API.SpellRange("party1", primary), "IN_RANGE", "and the range check by that name is answered")
+WoW.range.party1 = nil
+
+-- The failure that is left: a name that never resolved. The English literal
+-- stays, matches nothing on this client, and nothing errors - every member
+-- reads as unbuffed and every range as unknown. The next refresh that
+-- resolves repairs all of it, which is what a host's SPELLS_CHANGED handler
+-- is for; SpellReport is how a player finds out meanwhile.
+WoW.reset()
+H.TeachSpells()                                  -- every spell exists on the client...
+WoW.locale = "deDE"
+WoW.Know(H.SPELL.FORT_SINGLE, DE_SINGLE)         -- ...Fortitude under its German names
+WoW.Know(H.SPELL.FORT_GROUP, DE_GROUP)
+local realName3 = lib.API.SpellName
+lib.API.SpellName = function() return nil end     -- the client answers for nothing
+local cold = H.PriestEngine()
+cold.engine:RefreshSpells()
+local cfort = cold.def("fort")
+H.eq(cfort.sngl, H.NAME.FORT_SINGLE, "unresolved: the host's English literal stays")
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.SetAura("party1", DE_SINGLE, 3600, 1800)
+WoW.range.party1 = true
+rem, dur, state = cold.engine:BuffRem("party1", cfort)
+H.eq(state, MISSING, "a member wearing the German buff reads as MISSING, with no error anywhere")
+H.eq(lib.API.SpellRange("party1", cfort.sngl), "UNKNOWN", "and the range by the English name is UNKNOWN")
+H.check(cold.engine:SpellReport().unresolved > 0, "which the report is the only thing to say")
+lib.API.SpellName = realName3
+cold.engine:RefreshSpells()
+H.eq(select(3, cold.engine:BuffRem("party1", cfort)), HAS, "the next refresh that resolves repairs it")
+H.eq(cold.engine:SpellReport().unresolved, 0, "and the report is clean")
+WoW.range.party1 = nil
+
+------------------------------------------------------------
+-- Secrecy out of combat (r33 audit, #63)
+--
+-- H.secrecy couples the flag, the throwing reads and combat, because that is
+-- what a fight looks like. A battleground may hold the flag up with no fight
+-- on. ReadBuff then refuses an EMPTY walk (nothing seen while the flag is up
+-- is not evidence of being unbuffed), the cache never fills for a GUID never
+-- read, and the member stays UNKNOWN however often it is asked.
+------------------------------------------------------------
+
+fort = setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+WoW.secret = true
+WoW.auraReadsThrow = false
+WoW.inCombat = false
+H.eq(lib.API.ReadBuff("party1", fort.names), "BLOCKED",
+    "an empty aura list while the flag is up is BLOCKED, not NONE")
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, UNKNOWN, "so a member never read is UNKNOWN out of combat too")
+H.eq(basis, nil, "with nothing to base it on")
+for _ = 1, 5 do E:BuffRem("party1", fort) end
+H.eq(select(3, E:BuffRem("party1", fort)), UNKNOWN,
+    "and stays UNKNOWN however often it is asked: only HAS or NONE fills the cache")
+WoW.secret = false
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "the flag down, the same empty list is a confirmed absence")
+H.eq(basis, "live", "read live")
+
+-- A remembered absence has no age limit of its own: it is the last thing
+-- seen, and PruneCache - which the host calls on roster changes - is what
+-- ages the cache. Pinned as current behaviour, not endorsed as a fix.
+fort = setup()
+WoW.SetUnit("party1", { name = "Karuzo Elegia", guid = "P1" })
+E:BuffRem("party1", fort)                      -- NONE, cached
+H.secrecy(true)
+WoW.time = WoW.time + 3000
+rem, dur, state, _, basis = E:BuffRem("party1", fort)
+H.eq(state, MISSING, "fifty minutes into a fight the absence still stands")
+H.eq(basis, "remembered", "as remembered")
+H.secrecy(false)
+
+------------------------------------------------------------
 -- Aura passes (#6)
 --
 -- Confirming an ABSENCE is what costs a walk of somebody's auras - a hit

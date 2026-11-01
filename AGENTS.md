@@ -183,6 +183,19 @@ and the like name those sections.
     handlers never write attributes, and `Close` (returns false), `ResetPosition` (false) and
     `DragStop` only record what the player asked for. `OnCombatEnd` does all of it, in that order.
     `Close` bumps a generation so a show queued earlier (`Open(delay)`) cannot reopen the window.
+  - **Host hooks run in combat and receive `ui`.** `onVisibility`, `setVisible`,
+    `onCloseDeferred`, `onMinimizeDeferred`, `onTick`, `onAppearance` and `setPos(nil)` all fire
+    while the fight is on, and `ui:MainFrame()` hands out the protected frame with no guard of
+    its own. A host must never hide, move, resize, rescale or re-anchor the main frame or the
+    popover from a hook or a slash command: the client refuses the measured ones silently (hide,
+    move, re-anchor, unclamp, stop-drag; resize and rescale are unmeasured), and the
+    `ADDON_ACTION_BLOCKED` names whichever addon's taint the call path carries, which from a
+    host's own hook is the host (Wildly #42 is that message from Wildly's pre-library window).
+    Read from `MainFrame()` freely; what a host wants of the window it asks for through
+    `ui:Close`, `ui:Open`, `ui:SetMinimized` and `ui:ResetPosition`, which remember the request
+    in combat and carry it out in `OnCombatEnd`. The test stub records every state write to
+    a protected frame in combat in `WoW.combatTouches` (r33 audit) so a host suite can assert the
+    same rule on its own hooks.
   - **A deferred close is always reported** while the frame is still on screen, whoever asked
     for it: the X button, a slash command, or the addon's own automatic close (the group emptied,
     "show when solo" unticked mid-fight). The host gets `onCloseDeferred(ui, manual)`, and **what
