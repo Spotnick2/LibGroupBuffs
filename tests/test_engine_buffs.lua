@@ -456,6 +456,7 @@ setup()
 local report = E:SpellReport()
 H.eq(report.locale, "enUS", "the report carries the client's language")
 H.eq(report.unresolved, 0, "and nothing is unresolved when the client answers")
+H.eq(report.unknown, 0, "nor of unknown origin: this copy stamps every def it accepts")
 
 local fort
 for _, entry in ipairs(report) do if entry.id == "fort" then fort = entry end end
@@ -561,6 +562,27 @@ H.eq(report[1].forms[1].from, "resolved", "the form the client answered for is r
 H.eq(report[1].forms[2].from, "fallback", "while the one it did not is still the host's literal")
 H.check(report.unresolved > 0, "and the count notices the half that failed")
 lib.API.SpellName = realName2
+
+-- A def an older copy built carries no stamp, and a refresh that fails on it
+-- leaves "unknown": the name may already be the client's own, so it is not a
+-- fallback. Counted apart (r34), so a host can say "of unknown origin" rather
+-- than hide it inside a clean unresolved count.
+setup()
+local realName4 = lib.API.SpellName
+lib.API.SpellName = function() return nil end
+local legacy = H.PriestEngine()
+local lfort = legacy.def("fort")
+lfort.snglFrom, lfort.grpFrom = nil, nil               -- as a pre-r16 copy left it
+legacy.engine:RefreshSpells()
+report = legacy.engine:SpellReport()
+H.eq(report[1].forms[1].from, "unknown", "an unstamped form that fails to resolve is unknown")
+H.eq(report.unknown, 2, "both of Fortitude's forms are counted as unknown")
+H.eq(report.unresolved, 4, "while the stamped defs that failed are unresolved, as before")
+lib.API.SpellName = realName4
+legacy.engine:RefreshSpells()
+report = legacy.engine:SpellReport()
+H.eq(report.unknown, 0, "and a refresh that resolves clears it")
+H.eq(report.unresolved, 0, "on both counts")
 
 -- Localized: the name follows the client, and nothing is left in English.
 setup()

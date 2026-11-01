@@ -310,6 +310,9 @@ and the like name those sections.
   hides is the failure, which is why `Engine:SpellReport()` exists. Never infer a failure by
   comparing a name to the literal: a locale that leaves a spell untranslated resolves to exactly
   that string.
+  `SpellReport().unresolved` counts only `fallback`; `unknown` forms are counted apart in
+  `SpellReport().unknown` (r34), so a host can report them as "of unknown origin" instead of
+  hiding them inside a clean count.
   `unknown` is the upgrade case, and the reason `Engine.New` stamps every def it accepts: a def
   reaching `RefreshSpells` **unstamped** was built by a copy older than r16, so the name in it may
   already be one the client gave that copy. Reporting it as the host's English literal would call

@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 33
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 34
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -1400,9 +1400,12 @@ end
 -- fallback is the signature of the bug above. It is not the same as a spell
 -- the player has not learned, which is ordinary and appears as known = false,
 -- nor as one whose provenance is "unknown", where an older copy of this
--- library built the def and the name may be either.
+-- library built the def and the name may be either. Those are counted apart,
+-- in `unknown` (r34): a host that prints "N names unresolved" can then say
+-- "N names of unknown origin" for the upgrade case instead of saying nothing,
+-- which is what hiding them inside a zero `unresolved` amounted to.
 function Methods:SpellReport()
-    local out = { locale = lib.API.Locale and lib.API.Locale() or "?", unresolved = 0 }
+    local out = { locale = lib.API.Locale and lib.API.Locale() or "?", unresolved = 0, unknown = 0 }
     for _, d in ipairs(self.defs) do
         local forms = {}
         forms[#forms + 1] =
@@ -1414,7 +1417,11 @@ function Methods:SpellReport()
                   from = d.grpFrom or "unknown", known = d.hasGroup == true }
         end
         for _, form in ipairs(forms) do
-            if form.from == "fallback" then out.unresolved = out.unresolved + 1 end
+            if form.from == "fallback" then
+                out.unresolved = out.unresolved + 1
+            elseif form.from == "unknown" then
+                out.unknown = out.unknown + 1
+            end
         end
         out[#out + 1] = { id = d.id, label = d.label, forms = forms }
     end

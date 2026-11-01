@@ -900,6 +900,7 @@ H.eq(report[1].forms[1].name, "Machtwort: Seelenstaerke", "the localized name su
 H.eq(report[1].forms[1].from, "unknown",
     "and is reported as unknown provenance, not as the host's English literal")
 H.eq(report.unresolved, 0, "so nothing claims the addon is unlocalized")
+H.eq(report.unknown, 2, "while the report counts both of its forms apart, as names of unknown origin (r34)")
 
 -- A failed lookup afterwards must not turn "unknown" into "fallback": the
 -- name is still whatever r15 put there.
@@ -1260,7 +1261,8 @@ end
 -- so a release that only ever loads after a newer copy proves nothing about
 -- them (Codex review of #72). The window was placed by its centre, as every
 -- copy before r33 saved it; the current copy's fixed-edge growth rebuilds it
--- onto its top edge, which only the new implementation can do.
+-- onto its top edge, which only the new implementation can do. r33 and later
+-- anchored it there themselves, and for them the upgrade must change nothing.
 ------------------------------------------------------------
 
 for _, release in ipairs(SINGLE) do
@@ -1282,7 +1284,15 @@ for _, release in ipairs(SINGLE) do
         host.engine:RefreshSpells()
         host.ui:Update()
         local main = host.ui.main
-        H.eq((main:GetPoint()), "CENTER", tag .. "r" .. n .. " placed the window by its centre")
+        -- Fixed-edge growth arrived in r33: copies before it placed the window
+        -- by its centre; r33 and later already anchor its top edge, and the
+        -- upgrade must then leave it exactly where it was.
+        local before = { main:GetPoint() }
+        if n >= 33 then
+            H.eq(before[1], "TOPLEFT", tag .. "r" .. n .. " placed the window by its top edge")
+        else
+            H.eq(before[1], "CENTER", tag .. "r" .. n .. " placed the window by its centre")
+        end
 
         load(CURRENT_FILES, "current")
         H.eq(activeMinor(), CURRENT, tag .. "the current copy takes over")
@@ -1302,8 +1312,13 @@ for _, release in ipairs(SINGLE) do
         local point, _, relPoint, x, y = main:GetPoint()
         H.eq(point, "TOPLEFT", tag .. "and re-anchors it on its top edge")
         H.eq(relPoint, "CENTER", tag .. "relative to the same point")
-        H.near(x, 120 - main:GetWidth() / 2, 0.001, tag .. "without moving it sideways")
-        H.near(y, 80 + main:GetHeight() / 2, 0.001, tag .. "or up and down")
+        if n >= 33 then
+            H.near(x, before[4], 0.001, tag .. "leaving it where r" .. n .. " anchored it")
+            H.near(y, before[5], 0.001, tag .. "to the pixel")
+        else
+            H.near(x, 120 - main:GetWidth() / 2, 0.001, tag .. "without moving it sideways")
+            H.near(y, 80 + main:GetHeight() / 2, 0.001, tag .. "or up and down")
+        end
         H.eq(host.saved.pos.point, "TOPLEFT", tag .. "and saves the new anchor")
         H.eq(#WoW.blockedCalls, 0, tag .. "with no protected write")
     end
