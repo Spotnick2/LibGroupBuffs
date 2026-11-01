@@ -223,6 +223,12 @@ H.runScript(T.sweepWatch, "OnEvent", "PLAYER_REGEN_ENABLED")
 H.check(not T.sweepIsDirty(), "and restores the window there, whatever became of the procedure")
 H.check(logHas("sweep outstanding at combat's end: restored"), "saying so")
 H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "restoring again on demand is harmless")
+-- The anchor restore has to be seen to do something: the stub refuses the
+-- sweep's re-anchor, so break the anchor by hand before restoring again.
+ui.main:ClearAllPoints()
+ui.main:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -3, 3)
+H.eq((ui.main:GetPoint()), "BOTTOMRIGHT", "the anchor is broken")
+H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "and restored again")
 WoW.flushTimers(1)
 H.eq(ui.main:GetFrameStrata(), "LOW", "to its strata")
 H.check(not ui.main:IsMouseEnabled(), "to its mouse state, which the sweep's EnableMouse(true) had changed")

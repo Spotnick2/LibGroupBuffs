@@ -299,7 +299,7 @@ Probe:Steps("bg", {
     -- fires as the step completes, and completing a step by a click on the
     -- panel moves the cursor off the row, which hides the popover 0.15 s
     -- later. The probe's window is the same code as Priestly's.
-    { text = "Hover a row of the probe window so its popover shows; the step completes by itself and takes the shot.",
+    { text = "Hover a row of the probe window so its popover shows; the step completes by itself and takes the shot. Keep the cursor on the row until the shutter sound.",
       timeout = 120, screenshot = "probe popover, before gates",
       wait = function() return ui and ui.pop and ui.pop:IsShown(), "hover a row of the probe window" end },
     { text = "Open Priestly's window too (/priestly show) and hover a row: its popover is the same code. Then press Next." },
@@ -317,7 +317,7 @@ Probe:Steps("bg", {
     { text = "Sampling after combat, still inside.", auto = true, run = function() return sample("after combat") end },
     { text = "Out of combat, with a teammate far across the map: press Sample, and type their raid index in the Note.",
       button = "Sample", run = function() return sample("far member") end },
-    { text = "Hover a row of the probe window again; the step completes by itself and takes the shot.",
+    { text = "Hover a row of the probe window again; the step completes by itself and takes the shot. Keep the cursor on the row until the shutter sound.",
       timeout = 120, screenshot = "probe popover, far member",
       wait = function() return ui and ui.pop and ui.pop:IsShown(), "hover a row of the probe window" end },
     { text = "Hover Priestly's popover again: does any member show '?' in the RANGE mark now?", ask = true },
@@ -448,7 +448,9 @@ local sweepDirty = false     -- a sweep ran and the window was not restored yet
 
 local function sweep()
     if not ui or not ui.main then error("no window: run step 1 first", 0) end
-    if not sweepSaved then rememberWindow() end
+    -- Snapshot NOW, not at step 1: the window is unlocked, and a drag between
+    -- the two would be snapped back by the restore. Reads are free in combat.
+    rememberWindow()
     sweepDirty = true
     local results = {}
     for _, e in ipairs(SWEEP) do results[#results + 1] = e[1] .. "=" .. sweepOne(e, ui.main) end
