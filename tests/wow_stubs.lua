@@ -224,7 +224,12 @@ end
 -- combat the client REFUSES those calls (ADDON_ACTION_BLOCKED) instead of
 -- throwing, which is invisible to an addon, so the stub records each attempt
 -- in WoW.blockedCalls and does nothing. Measured on build 69913: parking the
--- buff window offscreen during combat was blocked at SetClampedToScreen.
+-- buff window offscreen during combat was blocked at SetClampedToScreen, and
+-- hide, move, re-anchor and stop-drag are refused (Priestly FOREVER-PROBE
+-- section 13). SetAlpha, SetSize and SetScale are here from the port and were
+-- NOT measured: the parking sequence was blocked at its first call. The probe's
+-- `sweep` procedure decides them; until then no test should lean on their
+-- refusal (r33 audit).
 local PROTECTED_METHODS = {
     Show = true, Hide = true, SetPoint = true, ClearAllPoints = true,
     SetClampedToScreen = true, SetAlpha = true, SetSize = true, SetScale = true,
@@ -304,14 +309,15 @@ local function makeFrame(name, parent, template)
         return self
     end
     -- A write to a secure attribute under combat lockdown is refused by the
-    -- client - silently, as far as the addon can tell (PORTING-TBC-TO-FOREVER
-    -- "Secure click-casting": SetAttribute does nothing under lockdown). The
-    -- stub refuses it the same way and records the attempt, so a test can
-    -- assert that nothing tried. Until the r33 audit it stored the value as
-    -- well, so a test reading the attribute back saw a cast the client would
-    -- never have made.
+    -- client on a protected frame - silently, as far as the addon can tell
+    -- (PORTING-TBC-TO-FOREVER "Secure click-casting": SetAttribute does
+    -- nothing under lockdown). On a frame that is not protected it lands as
+    -- usual. The stub refuses it the same way and records the attempt, so a
+    -- test can assert that nothing tried. Until the r33 audit it stored the
+    -- value as well, so a test reading the attribute back saw a cast the
+    -- client would never have made.
     f.SetAttribute = function(self, k, v)
-        if WoW.inCombat then
+        if WoW.inCombat and self._protected then
             WoW.combatWrites[#WoW.combatWrites + 1] = { frame = self, key = k, value = v }
             return self
         end
@@ -630,7 +636,9 @@ local function makeFrame(name, parent, template)
     -- test asserts this is empty without having to know which methods this
     -- build refuses, and a regression through a method the client refuses
     -- but nobody measured (SetShown, SetFrameStrata...) still goes red.
-    -- Script handlers are not frame state and are left out.
+    -- Script handlers are not frame state and are left out. Methods the
+    -- catch-all below serves (KNOWN_METHODS, WoW.allowMethod) are recorded the
+    -- same way there.
     for name, fn in pairs(f) do
         if type(fn) == "function" and TOUCHES_FRAME_STATE(name) then
             f[name] = function(self, ...)
@@ -667,7 +675,17 @@ local function makeFrame(name, parent, template)
             local first = k:sub(1, 1)
             if first ~= first:upper() or first == "_" then return nil end
             if ABSENT_MEMBERS[k] then return nil end
-            if KNOWN_METHODS[k] then return chain end
+            if KNOWN_METHODS[k] then
+                if TOUCHES_FRAME_STATE(k) then
+                    return function(self, ...)
+                        if WoW.inCombat and self._protected then
+                            WoW.combatTouches[#WoW.combatTouches + 1] = { frame = self, method = k }
+                        end
+                        return self
+                    end
+                end
+                return chain
+            end
             error("call to widget method '" .. k .. "', which this stub does "
                 .. "not define. Confirm it exists on this client in the newest "
                 .. "C:/Projects/WoW/References/Forever/api/forever-api-<build>.md, then either "

@@ -194,6 +194,8 @@ H.check(ui.main and ui.main:IsShown(), "the probe's window is up")
 clearLog()
 local remembered = T.rememberWindow()
 H.eq(type(remembered), "string", "the window's state before the sweep is text: " .. tostring(remembered))
+local p0 = { ui.main:GetPoint() }
+H.check(not ui.main:IsMouseEnabled(), "Init never enables the mouse on the main frame")
 WoW.inCombat = true
 WoW.blockedCalls = {}
 local result = T.sweep()
@@ -201,7 +203,7 @@ H.eq(type(result), "string", "the sweep returns a summary")
 H.check(logHas("SWEEP main:Hide() begin") and logHas("SWEEP main:Hide() end"), "each entry is bracketed in the log")
 local function verdict(label) return result:match(label:gsub("%p", "%%%0") .. "=([^;]+)") end
 H.eq(verdict("main:Hide()"), "unchanged", "a refused hide leaves the frame shown")
-H.eq(verdict("main:SetAlpha(0.5)"), "unchanged", "and a refused alpha change leaves it opaque")
+H.eq(verdict("main:ClearAllPoints()+SetPoint(same)"), "unchanged", "and a refused re-anchor leaves the anchor")
 H.eq(verdict("main:SetShown(false)"), "changed",
     "a method nobody measured is not refused by the stub: the sweep in game decides")
 H.eq(verdict("main:SetFrameStrata(MEDIUM)"), "changed", "same for the strata")
@@ -223,9 +225,67 @@ H.check(logHas("sweep outstanding at combat's end: restored"), "saying so")
 H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "restoring again on demand is harmless")
 WoW.flushTimers(1)
 H.eq(ui.main:GetFrameStrata(), "LOW", "to its strata")
+H.check(not ui.main:IsMouseEnabled(), "to its mouse state, which the sweep's EnableMouse(true) had changed")
+do
+    local p1 = { ui.main:GetPoint() }
+    H.eq(p1[1], p0[1], "and to its anchor point")
+    H.eq(tostring(p1[4]) .. "," .. tostring(p1[5]), tostring(p0[4]) .. "," .. tostring(p0[5]), "at the same offset")
+end
 H.eq(ui.main:GetAlpha(), 1, "and its alpha (the window's alpha lives on its glass, not the frame)")
 drive("sweep", { skip = { [3] = true } })   -- step 3 is the sweep itself, run in combat above
 H.eq(#WoW.messages, 0, "nothing to chat")
+
+------------------------------------------------------------
+-- The moments that only a wait step gets right
+--
+-- Inside the PLAYER_REGEN_DISABLED handler InCombatLockdown() is still false
+-- on this client, and ForeverProbe completes an event step there and runs
+-- the next auto step at once; a procedure resumed at PLAYER_LOGIN runs its
+-- next auto step before PLAYER_ENTERING_WORLD; a screenshot fires as a step
+-- completes, after the click that completed it moved the cursor off the
+-- row. So the sweep, the combat sample, the relaunch check and the popover
+-- shots are wait steps whose condition is the thing itself.
+------------------------------------------------------------
+
+local function stepWhere(name, needle)
+    for _, step in ipairs(procs[name].steps) do
+        if step.text:find(needle, 1, true) then return step end
+    end
+end
+WoW.inCombat = false
+local pull = stepWhere("sweep", "Pull one mob")
+H.check(pull and pull.wait and not pull.event, "the sweep waits for lockdown instead of the combat event")
+H.check(not pull.wait(), "and does not complete while lockdown is off, as it is inside PLAYER_REGEN_DISABLED")
+WoW.inCombat = true
+H.check(pull.wait(), "only once lockdown is on")
+WoW.inCombat = false
+local gates = stepWhere("bg", "Gates open")
+H.check(gates and gates.wait and not gates.event, "the battleground's combat sample waits the same way")
+H.check(not gates.wait(), "off")
+WoW.inCombat = true
+H.check(gates.wait(), "on")
+WoW.inCombat = false
+
+-- The popover shots complete only while the popover is up.
+ui:Close(true)
+WoW.flushTimers(1)
+T.openNow()
+local hover = stepWhere("bg", "Hover a row of the probe window so its popover shows")
+H.check(hover and hover.wait and hover.screenshot, "the first popover shot is a wait with a screenshot")
+H.check(not hover.wait(), "which does not complete while nothing is hovered")
+H.runScript(H.ActiveRows(ui)[1], "OnEnter")
+H.check(ui.pop:IsShown(), "hovering a row shows the probe's popover")
+H.check(hover.wait(), "and then the step completes, with the popover on screen for the shot")
+local hover2 = stepWhere("bg", "Hover a row of the probe window again")
+H.check(hover2 and hover2.wait and hover2.screenshot, "the far-member shot is the same kind of step")
+
+-- The synthetic host carries out deferred work at combat's end on its own.
+WoW.inCombat = true
+H.eq(ui:Close(true), false, "a close in combat is deferred")
+H.check(ui.main:IsShown(), "the frame stays up")
+WoW.inCombat = false
+H.runScript(T.sweepWatch, "OnEvent", "PLAYER_REGEN_ENABLED")
+H.check(not ui.main:IsShown(), "and the probe host lands it at combat's end, sweep or no sweep")
 
 ------------------------------------------------------------
 -- spells: snapshots, and the procedure's steps
@@ -239,6 +299,9 @@ H.eq(T.snapshot("test2"), 0, "defined on the client: none missing")
 H.check(logHas("SPELLS test missing=" .. #T.SPELL_IDS), "a snapshot logs its phase and count")
 H.check(logHas("SPELLS test2 missing=0"), "each time")
 H.check(T.summary():find("test=" .. #T.SPELL_IDS, 1, true) ~= nil, "the summary lists this run's phases")
+local relaunch = stepWhere("spells", "Waiting for the relaunch")
+H.check(relaunch and relaunch.wait and not relaunch.run, "the relaunch check is a wait, not an auto step")
+H.check(not relaunch.wait(), "which does not complete before the entering-world snapshots exist")
 -- Through the probe's own frame: dispatching to every frame would also build
 -- ForeverProbe's console, which needs widget methods the stub does not model.
 H.check(WoW.events[T.spellWatch] and WoW.events[T.spellWatch].PLAYER_LOGIN, "the probe listens for PLAYER_LOGIN")
@@ -252,6 +315,8 @@ H.check(logHas("SPELL_DATA_LOAD_RESULT 1243 true"), "a load result for one of th
 H.check(not logHas("SPELL_DATA_LOAD_RESULT 99999"), "and one for any other spell is not")
 H.check(logHas("SPELLS PLAYER_LOGIN "), "a login is snapshotted")
 H.check(logHas("SPELLS PLAYER_ENTERING_WORLD+5s "), "and again five seconds after entering the world")
+H.check(relaunch.wait(), "after which the relaunch check completes")
+H.check(select(1, relaunch.check()), "and passes when every id resolved at both phases")
 drive("spells")
 H.eq(#WoW.messages, 0, "nothing to chat")
 

@@ -295,16 +295,31 @@ Probe:Steps("bg", {
       check = function() return not InCombatLockdown(), "out of combat" end },
     { text = "Open the probe window.", button = "Open", screenshot = "probe window, before gates",
       run = function() return openNow() end },
-    { text = "Open Priestly's window (/priestly show) and hover a row so its popover shows. Then press Next.",
-      screenshot = "Priestly popover, before gates" },
+    -- A wait, so the shot is taken while the popover is up: a screenshot
+    -- fires as the step completes, and completing a step by a click on the
+    -- panel moves the cursor off the row, which hides the popover 0.15 s
+    -- later. The probe's window is the same code as Priestly's.
+    { text = "Hover a row of the probe window so its popover shows; the step completes by itself and takes the shot.",
+      timeout = 120, screenshot = "probe popover, before gates",
+      wait = function() return ui and ui.pop and ui.pop:IsShown(), "hover a row of the probe window" end },
+    { text = "Open Priestly's window too (/priestly show) and hover a row: its popover is the same code. Then press Next." },
     { text = "In the popover: is the RANGE mark (left of the time) '?' for every member?", ask = true },
     { text = "And is the TIME column '?' for every member, with the row grey and '?'?", ask = true },
-    { text = "Gates open: fight until you are in combat.", event = "PLAYER_REGEN_DISABLED" },
+    -- A wait, not the PLAYER_REGEN_DISABLED event: inside that handler
+    -- InCombatLockdown() is still false (PORTING-TBC-TO-FOREVER, CastProbe
+    -- 70338), and the host completes an event step there and runs the next
+    -- auto step at once, so the "in combat" sample would be taken at the edge
+    -- of the fight rather than inside it.
+    { text = "Gates open: fight until you are in combat. The step completes by itself once lockdown is on.",
+      timeout = 600, wait = function() return InCombatLockdown(), "not in combat lockdown yet" end },
     { text = "Sampling in combat.", auto = true, run = function() return sample("in combat") end },
     { text = "Leave combat (wait it out).", event = "PLAYER_REGEN_ENABLED" },
     { text = "Sampling after combat, still inside.", auto = true, run = function() return sample("after combat") end },
     { text = "Out of combat, with a teammate far across the map: press Sample, and type their raid index in the Note.",
-      button = "Sample", screenshot = "popover, far member", run = function() return sample("far member") end },
+      button = "Sample", run = function() return sample("far member") end },
+    { text = "Hover a row of the probe window again; the step completes by itself and takes the shot.",
+      timeout = 120, screenshot = "probe popover, far member",
+      wait = function() return ui and ui.pop and ui.pop:IsShown(), "hover a row of the probe window" end },
     { text = "Hover Priestly's popover again: does any member show '?' in the RANGE mark now?", ask = true },
     { text = "Leave the battleground.", event = "PLAYER_ENTERING_WORLD" },
     { text = "Sampling after leaving.", auto = true, run = function() return sample("after leaving") end },
@@ -417,6 +432,11 @@ local function rememberWindow()
         width = get(m, "GetWidth", 0), height = get(m, "GetHeight", 0),
         strata = get(m, "GetFrameStrata", "LOW"), level = get(m, "GetFrameLevel", 1),
         clamped = get(m, "IsClampedToScreen", true),
+        mouse = get(m, "IsMouseEnabled", false),      -- Init never enables it on main
+        point = (function()
+            local ok, p, rel, rp, x, y = pcall(m.GetPoint, m, 1)
+            if ok and p then return { p, rel, rp, x, y } end
+        end)(),
     }
     return "alpha " .. Show(sweepSaved.alpha) .. " scale " .. Show(sweepSaved.scale)
         .. " size " .. Show(sweepSaved.width) .. "x" .. Show(sweepSaved.height)
@@ -453,7 +473,11 @@ local function restoreWindow()
     m:SetFrameStrata(s.strata)
     m:SetFrameLevel(s.level)
     m:SetClampedToScreen(s.clamped)
-    m:EnableMouse(true)
+    m:EnableMouse(s.mouse and true or false)
+    if s.point then
+        m:ClearAllPoints()
+        m:SetPoint(s.point[1], s.point[2], s.point[3], s.point[4], s.point[5])
+    end
     m:Show()
     local inst = lib().glass
     if inst and inst.SetWash and m.glass then inst.SetWash(m.glass, inst.STYLE.wash) end
@@ -470,6 +494,10 @@ end
 local sweepWatch = CreateFrame("Frame")
 Probe:RegisterEvents(sweepWatch, { "PLAYER_REGEN_ENABLED" })
 sweepWatch:SetScript("OnEvent", function()
+    -- What every real host does on PLAYER_REGEN_ENABLED: the window carries
+    -- out whatever it recorded during the fight (a close, a popover hide, a
+    -- show). Without it a close deferred in a battleground never lands.
+    if ui then ui:OnCombatEnd() end
     if sweepDirty then say("sweep outstanding at combat's end: " .. restoreWindow()) end
 end)
 
@@ -491,7 +519,12 @@ Probe:Steps("sweep", {
       check = function()
           return not InCombatLockdown() and ui and ui.main and ui.main:IsShown(), "window up, out of combat"
       end },
-    { text = "Pull one mob and stay in combat (do not kill it yet).", event = "PLAYER_REGEN_DISABLED" },
+    -- A wait, not the PLAYER_REGEN_DISABLED event: inside that handler
+    -- InCombatLockdown() is still false (PORTING-TBC-TO-FOREVER, CastProbe
+    -- 70338), and the host would run the sweep right there, with every write
+    -- accepted and nothing measured.
+    { text = "Pull one mob and stay in combat (do not kill it yet). The step completes by itself once lockdown is on.",
+      timeout = 120, wait = function() return InCombatLockdown(), "not in combat lockdown yet" end },
     { text = "Trying each write on the protected frame. Watch the console for ADDON_ACTION_BLOCKED.", auto = true,
       run = function() return sweep() end,
       check = function() return InCombatLockdown(), "still in combat while sweeping" end },
@@ -600,7 +633,11 @@ Probe:Steps("spells", {
       end },
     { text = "Exit the game fully and relaunch (a cold spell cache), then log in on the same character.",
       reload = "exit" },
-    { text = "The relaunch's snapshots.", auto = true, run = function() return summary() end,
+    -- A wait: the host resumes a procedure at PLAYER_LOGIN and would run an
+    -- auto step there, before PLAYER_ENTERING_WORLD and before this file's own
+    -- login snapshot, so the check would find nothing to check.
+    { text = "Waiting for the relaunch's snapshots (login, entering world, +5 s).", timeout = 60,
+      wait = function() return missingAt("PLAYER_ENTERING_WORLD+5s") ~= nil, summary() end,
       check = function()
           local a, b = missingAt("PLAYER_LOGIN"), missingAt("PLAYER_ENTERING_WORLD")
           return a == 0 and b == 0, "missing at login " .. tostring(a) .. ", entering world " .. tostring(b)

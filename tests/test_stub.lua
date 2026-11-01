@@ -210,6 +210,15 @@ H.eq(armed:GetAttribute("spell1"), "Power Word: Fortitude", "and NOT stored: the
 WoW.inCombat = false
 armed:SetAttribute("spell1", "Prayer of Fortitude")
 H.eq(armed:GetAttribute("spell1"), "Prayer of Fortitude", "out of combat the write lands")
+-- Only a protected frame is refused: the client lets an ordinary frame's
+-- attributes change in combat, and so does the stub.
+local loose = WoW.makeFrame("StubTestLoose")
+WoW.combatWrites = {}
+WoW.inCombat = true
+loose:SetAttribute("type1", "spell")
+H.eq(loose:GetAttribute("type1"), "spell", "an unprotected frame's attribute write in combat lands")
+H.eq(#WoW.combatWrites, 0, "and is not recorded as a refused one")
+WoW.inCombat = false
 
 -- Every state write to a protected frame in combat is recorded, refused or
 -- not. PROTECTED_METHODS is only what was MEASURED refused (hide, move,
@@ -223,14 +232,15 @@ local plain = WoW.makeFrame("StubTestPlain")
 WoW.inCombat = true
 parent:SetFrameStrata("HIGH")                 -- not in PROTECTED_METHODS
 parent:SetShown(false)
-parent:SetAlpha(0.5)                          -- in PROTECTED_METHODS: refused AND recorded
+parent:Hide()                                 -- measured refused: refused AND recorded
+parent:SetMovable(true)                       -- served by the catch-all (KNOWN_METHODS)
 parent:SetScript("OnUpdate", function() end) -- a handler is not frame state
 plain:SetFrameStrata("HIGH")
 plain:Hide()
 local touched = {}
 for _, t in ipairs(WoW.combatTouches) do touched[#touched + 1] = t.method end
 table.sort(touched)
-H.eq(table.concat(touched, ","), "SetAlpha,SetFrameStrata,SetShown",
+H.eq(table.concat(touched, ","), "Hide,SetFrameStrata,SetMovable,SetShown",
     "every state write to the protected frame is recorded, whether or not the client refuses it")
 H.eq(#WoW.blockedCalls, 1, "while only the measured refusal is a blocked call")
 H.eq(parent:GetFrameStrata(), "HIGH", "an unmeasured method still takes effect in the stub")

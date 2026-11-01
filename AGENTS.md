@@ -187,9 +187,11 @@ and the like name those sections.
     `onCloseDeferred`, `onMinimizeDeferred`, `onTick`, `onAppearance` and `setPos(nil)` all fire
     while the fight is on, and `ui:MainFrame()` hands out the protected frame with no guard of
     its own. A host must never hide, move, resize, rescale or re-anchor the main frame or the
-    popover from a hook or a slash command: the client refuses it silently and blames the host
-    (`ADDON_ACTION_BLOCKED` naming the addon, which is what Wildly #42 reported from its pre-library
-    window). Read from `MainFrame()` freely; what a host wants of the window it asks for through
+    popover from a hook or a slash command: the client refuses the measured ones silently (hide,
+    move, re-anchor, unclamp, stop-drag; resize and rescale are unmeasured), and the
+    `ADDON_ACTION_BLOCKED` names whichever addon's taint the call path carries, which from a
+    host's own hook is the host (Wildly #42 is that message from Wildly's pre-library window).
+    Read from `MainFrame()` freely; what a host wants of the window it asks for through
     `ui:Close`, `ui:Open`, `ui:SetMinimized` and `ui:ResetPosition`, which remember the request
     in combat and carry it out in `OnCombatEnd`. The test stub records every state write to
     a protected frame in combat in `WoW.combatTouches` (r33 audit) so a host suite can assert the
