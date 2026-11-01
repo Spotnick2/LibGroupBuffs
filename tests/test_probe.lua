@@ -214,6 +214,17 @@ for _, line in ipairs(log) do
     H.check(not tostring(line):find("threw:", 1, true), "no sweep entry threw: " .. tostring(line))
 end
 H.check(T.sweepIsDirty(), "after a sweep the window counts as dirty")
+-- Back to the sweep step and run it again in the same fight: the snapshot
+-- must still be the window before the FIRST sweep.
+local level0, width0 = 0, 0
+do
+    local snap = T.remembered()
+    level0, width0 = snap.level, snap.width
+end
+H.check(ui.main:GetFrameLevel() ~= level0, "the first sweep changed the frame level")
+T.sweep()
+H.eq(T.remembered().level, level0, "a repeated sweep keeps the first snapshot's level")
+H.eq(T.remembered().width, width0, "and its width")
 H.check(T.restoreWindow():find("in combat", 1, true) ~= nil, "it cannot be restored while the fight is on")
 H.check(T.sweepIsDirty(), "and stays dirty")
 WoW.inCombat = false
@@ -231,6 +242,7 @@ H.eq((ui.main:GetPoint()), "BOTTOMRIGHT", "the anchor is broken")
 H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "and restored again")
 WoW.flushTimers(1)
 H.eq(ui.main:GetFrameStrata(), "LOW", "to its strata")
+H.eq(ui.main:GetFrameLevel(), level0, "to the level it had before the first of two sweeps")
 H.check(not ui.main:IsMouseEnabled(), "to its mouse state, which the sweep's EnableMouse(true) had changed")
 do
     local p1 = { ui.main:GetPoint() }

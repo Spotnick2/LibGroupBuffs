@@ -450,7 +450,10 @@ local function sweep()
     if not ui or not ui.main then error("no window: run step 1 first", 0) end
     -- Snapshot NOW, not at step 1: the window is unlocked, and a drag between
     -- the two would be snapped back by the restore. Reads are free in combat.
-    rememberWindow()
+    -- But only while no sweep is outstanding: the procedure allows Back, and a
+    -- second sweep in the same fight would snapshot the state the first one
+    -- left, which the restore would then put back (Codex round 2).
+    if not sweepDirty then rememberWindow() end
     sweepDirty = true
     local results = {}
     for _, e in ipairs(SWEEP) do results[#results + 1] = e[1] .. "=" .. sweepOne(e, ui.main) end
@@ -706,6 +709,7 @@ if type(NS) == "table" then
         build = build, sample = sample, sweep = sweep, snapshot = snapshot, summary = summary,
         rememberWindow = rememberWindow, restoreWindow = restoreWindow, openNow = openNow,
         sweepIsDirty = function() return sweepDirty end,
+        remembered = function() return sweepSaved end,
         window = function() return ui, engine end,
         spellWatch = spellWatch, sweepWatch = sweepWatch,
     }
