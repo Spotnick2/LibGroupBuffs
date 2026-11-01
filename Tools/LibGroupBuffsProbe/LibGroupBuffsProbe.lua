@@ -483,12 +483,18 @@ local function restoreWindow()
         m:ClearAllPoints()
         m:SetPoint(s.point[1], s.point[2], s.point[3], s.point[4], s.point[5])
     end
-    m:Show()
     local inst = lib().glass
     if inst and inst.SetWash and m.glass then inst.SetWash(m.glass, inst.STYLE.wash) end
+    -- What the player asked for during the fight wins over the sweep: a close
+    -- (the X, /fp gb hide) is carried out here, and only a window that is
+    -- still logically open is shown and rebuilt. Showing it unconditionally
+    -- reopened a window the player closed mid-fight (Codex review of #76).
     ui:OnCombatEnd()
-    ui:Update()
-    return "restored; shown " .. Show(get(m, "IsShown", nil))
+    if ui:IsVisible() then
+        m:Show()
+        ui:Update()
+    end
+    return "restored; shown " .. Show(get(m, "IsShown", nil)) .. ", visible " .. Show(ui:IsVisible())
 end
 
 -- The procedure's own restore step is not the only way back: stopping the
@@ -535,7 +541,10 @@ Probe:Steps("sweep", {
       check = function() return InCombatLockdown(), "still in combat while sweeping" end },
     { text = "Kill the mob or let combat end.", event = "PLAYER_REGEN_ENABLED" },
     { text = "Restoring the window.", auto = true, run = function() return restoreWindow() end,
-      check = function() return ui and ui.main and ui.main:IsShown(), "window back" end },
+      check = function()
+          return ui and ui.main and ui.main:IsShown() == ui:IsVisible(),
+              "on screen exactly when the window is open"
+      end },
     { text = "Type /reload to save the results.", reload = true },
 })
 

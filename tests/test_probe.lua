@@ -253,6 +253,24 @@ H.eq(ui.main:GetAlpha(), 1, "and its alpha (the window's alpha lives on its glas
 drive("sweep", { skip = { [3] = true } })   -- step 3 is the sweep itself, run in combat above
 H.eq(#WoW.messages, 0, "nothing to chat")
 
+-- A close the player made mid-fight survives the restore (Codex review of
+-- #76): the X after a sweep, then the fight's end.
+ui:Open()
+WoW.flushTimers(1)
+ui:Update()
+H.check(ui:IsVisible() and ui.main:IsShown(), "the window is open again")
+WoW.inCombat = true
+T.sweep()
+H.eq(ui:Close(true), false, "the player closes it mid-fight: deferred")
+WoW.inCombat = false
+H.runScript(T.sweepWatch, "OnEvent", "PLAYER_REGEN_ENABLED")
+WoW.flushTimers(1)
+H.check(not T.sweepIsDirty(), "the sweep is restored")
+H.check(not ui:IsVisible(), "the window stays closed")
+H.check(not ui.main:IsShown(), "and off screen: the restore does not reopen it")
+local restoreStep = procs.sweep.steps[5]
+H.check(select(1, restoreStep.check()), "and the procedure's restore check accepts a closed window")
+
 ------------------------------------------------------------
 -- The moments that only a wait step gets right
 --
