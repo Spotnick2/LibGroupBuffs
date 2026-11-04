@@ -29,8 +29,8 @@ Repository-specific additions:
 
 `LibGroupBuffs-1.0` is the shared engine behind three WoW: Forever addons — Priestly, Wildly and
 Magely — which are the same PallyPower-style group buff manager with different `DEFS` tables.
-All three consume it. Changes are validated through Priestly first (the pilot), so keep them
-class-agnostic from the start.
+All three consume it, and so does Buffy (`C:\Projects\WoW\Buffy`). Buffy is the pilot (since
+r34): it validates each release first, in game. Keep changes class-agnostic from the start.
 
 It is a **LibStub library**, embedded into each addon at package time through `.pkgmeta` externals.
 It **depends on LibGlass-1.0**, which each consumer embeds *beside* it (`Libs\LibGlass-1.0`,
@@ -526,15 +526,17 @@ behaviour through Priestly's wrappers.
 
 ### Validate through a consumer before tagging
 
-The library's own tests cover each contract. Priestly exercises the library far more — every aura
-read, click and tooltip — so run its suite against your working copy before tagging:
+The library's own tests cover each contract. Run the pilot's suite against your working copy
+before tagging. Priestly's suite exercises the library more than any other (every aura read,
+click and tooltip), so run it too:
 
 ```powershell
-pwsh ..\Priestly\tests\run.ps1        # reads this checkout as ../LibGroupBuffs
+pwsh ..\Buffy\tests\run.ps1           # the pilot; reads this checkout as ../LibGroupBuffs
+pwsh ..\Priestly\tests\run.ps1        # the widest coverage
 ```
 
-Its first line names the library revision it ran against. `pwsh ..\Priestly\Tools\deploy.ps1`
-puts the same working copy into the game for an in-game check.
+Priestly's first line names the library revision it ran against. `pwsh ..\Buffy\Tools\deploy.ps1`
+puts the same working copy into the game for the pilot's in-game check.
 
 ## Workflow
 
@@ -552,12 +554,13 @@ Consumers pin a tag, so nothing reaches them until one exists. The checklist is
 `EMBEDDED-LIBRARIES.md` §9:
 
 1. Raise `MINOR` for any behaviour change, in the same PR. The PR's tests are green, and so are
-   the pilot consumer's (Priestly) against the merged commit: `pwsh ..\Priestly\tests\run.ps1`.
+   the pilot consumer's (Buffy) against the merged commit: `pwsh ..\Buffy\tests\run.ps1`.
 2. After merge, the pilot validates **that exact commit** in game, pinned by `commit:` in a
-   Priestly PR.
+   Buffy PR. If Buffy must ship first, tag first and track the in-game check as a Buffy issue
+   (r34 did this).
 3. Tag the merge commit `r<MINOR>` and push the tag: `git tag r26 && git push origin r26`. The tag
-   and `MINOR` must match. The pilot switches its pin to `tag: r<MINOR>` and reruns its CI before
-   it releases.
+   and `MINOR` must match. Publish the GitHub Release (`EMBEDDED-LIBRARIES.md` §9 step 4). The
+   pilot switches its pin to `tag: r<MINOR>` and reruns its CI before it releases.
 4. Freeze the release as `tests/fixtures/LibGroupBuffs-r<MINOR>.lua` for the next MINOR's upgrade
    test.
 5. **The other consumers bump their pin in their next release, not now.** No fan-out of PRs:
