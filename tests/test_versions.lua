@@ -1412,4 +1412,70 @@ H.runScript(heldButton, "OnClick")
 H.check(not minHost.ui:IsMinimized(), "existing handler dispatches restore after upgrade")
 H.eq(minMain.minimizeBtn, heldButton, "no duplicate control after upgrade")
 
+------------------------------------------------------------
+-- A window an older copy drew takes this client's font (#84)
+--
+-- On a Korean client LibGlass r12 names 2002.TTF for its Arial Narrow member,
+-- and every copy up to r35 set Arial Narrow itself: its names are boxes. Frames
+-- are built once, so without the adoption the window keeps that font for the
+-- session, rows and popover included. r34 is a fixed point before the fix
+-- (r35's runtime is the same code).
+------------------------------------------------------------
+
+freshLibStub()
+load(Fixtures(34, { "LibGroupBuffs.lua" }), "r34")
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE" })
+H.Party3()
+local fontArial = LibStub("LibGlass-1.0").FONTS.arial
+local shippedFont = fontArial.file
+fontArial.file = "Fonts\\2002.TTF"
+local fontHost = H.PriestUI({ minimizable = true })
+fontHost.config.visible.shadow = false
+fontHost.engine:RefreshSpells()
+fontHost.ui:Update()
+local fontUI = fontHost.ui
+
+-- Every font string under the window's main frame and popover, by the file
+-- it is drawn in.
+local function fontFiles()
+    local inside = { [fontUI.main] = true, [fontUI.pop] = true }
+    local files, n = {}, 0
+    for _, w in ipairs(WoW.widgets) do
+        if w._type == "FontString" then
+            local p = w._parent
+            while p and not inside[p] do p = p._parent end
+            if p then
+                n = n + 1
+                local f = w._font and w._font[1] or "none"
+                files[f] = (files[f] or 0) + 1
+            end
+        end
+    end
+    return files, n
+end
+local before, total = fontFiles()
+H.check(total >= 10, "the walk reaches r34's text (" .. total .. " font strings)")
+H.eq(before["Fonts\\ARIALN.TTF"], total, "r34 drew all of it in Arial Narrow, whatever LibGlass names")
+
+-- In combat the adoption waits: rows are secure buttons, and the pass resizes them.
+WoW.inCombat = true
+WoW.blockedCalls = {}
+load(CURRENT_FILES, "current")
+H.check(pcall(fontUI.Update, fontUI), "the first refresh on the current copy runs in combat")
+H.eq(#WoW.blockedCalls, 0, "with no call the client would refuse")
+H.eq(fontFiles()["Fonts\\ARIALN.TTF"], total, "and the text keeps its font until the fight ends")
+WoW.inCombat = false
+
+H.check(pcall(fontUI.Update, fontUI), "the first rebuild after the fight")
+local after, totalAfter = fontFiles()
+H.eq(after["Fonts\\2002.TTF"], totalAfter,
+    "re-styles every string of the r34 window in this client's font (title, rows, popover, labels)")
+H.eq(after["Fonts\\ARIALN.TTF"], nil, "with none left in Arial Narrow")
+H.eq(fontUI.main._fontFile, "Fonts\\2002.TTF", "and records the font it was styled in")
+local logged = #fontUI.main.title._log
+fontUI:Update()
+H.eq(#fontUI.main.title._log, logged, "so the next rebuild styles nothing again")
+fontArial.file = shippedFont
+
 H.done("test_versions")
