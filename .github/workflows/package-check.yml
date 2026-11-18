@@ -31,13 +31,18 @@ jobs:
           echo "LIBGLASS=$RUNNER_TEMP/LibGlass" >> "$GITHUB_ENV"
           echo "LibGlass at $ref ($(git -C "$RUNNER_TEMP/LibGlass" rev-parse --short HEAD))"
 
+      # The tests' scaffolding is WowTestKit, at the commit tests/kit.pin names,
+      # fetched outside the tree and checked to BE that commit.
+      - name: Fetch WowTestKit at its pin
+        run: |
+          bash tests/fetch_kit.sh "$RUNNER_TEMP/WowTestKit"
+          echo "WOWTESTKIT=$RUNNER_TEMP/WowTestKit" >> "$GITHUB_ENV"
+
       - name: Unit tests
         env:
           # tests/test_probe.lua needs the private ForeverProbe checkout; it
           # prints SKIPPED here and runs on the owner's machine.
           FOREVERPROBE_OPTIONAL: "1"
-        run: |
-          for f in tests/test_*.lua; do
-            echo "-- $f"
-            lua5.1 "$f" || exit 1
-          done
+        # No TOC (the syntax step above checked the Lua): the kit's runner
+        # runs every tests/test_*.lua, one process each.
+        run: bash "$WOWTESTKIT/scripts/run.sh" ""

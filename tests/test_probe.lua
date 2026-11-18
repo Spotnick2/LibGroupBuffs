@@ -204,8 +204,10 @@ H.check(logHas("SWEEP main:Hide() begin") and logHas("SWEEP main:Hide() end"), "
 local function verdict(label) return result:match(label:gsub("%p", "%%%0") .. "=([^;]+)") end
 H.eq(verdict("main:Hide()"), "unchanged", "a refused hide leaves the frame shown")
 H.eq(verdict("main:ClearAllPoints()+SetPoint(same)"), "unchanged", "and a refused re-anchor leaves the anchor")
-H.eq(verdict("main:SetShown(false)"), "changed",
-    "a method nobody measured is not refused by the stub: the sweep in game decides")
+-- SetShown(false) is a hide, and WowTestKit refuses it as one (the pre-kit
+-- stub let it through as unmeasured); the sweep in game decides it.
+H.eq(verdict("main:SetShown(false)"), "unchanged",
+    "SetShown(false) is refused by the stub as the hide it is: the sweep in game decides")
 H.eq(verdict("main:SetFrameStrata(MEDIUM)"), "changed", "same for the strata")
 H.eq(verdict("plain:Hide()"), "changed", "and the plain frame is free")
 H.eq(verdict("plain:SetAlpha(0.5)"), "changed", "in every respect")
@@ -355,5 +357,11 @@ H.check(relaunch.wait(), "after which the relaunch check completes")
 H.check(select(1, relaunch.check()), "and passes when every id resolved at both phases")
 drive("spells")
 H.eq(#WoW.messages, 0, "nothing to chat")
+
+-- Every widget method the probe, the window it drives and ForeverProbe's
+-- console called is on that type in the pinned build (tests/test_methods.lua
+-- does the same for the library alone).
+local recorded = Kit.checkMethods()
+check(recorded >= 95, "the probe's procedures reached the window and the console (" .. recorded .. " recorded)")
 
 H.done("test_probe")
