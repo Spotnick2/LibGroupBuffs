@@ -946,7 +946,7 @@ do
     local parent = ui.main                    -- protected: it parents them
     WoW.inCombat = true
     for _, method in ipairs({ "Show", "Hide", "SetPoint", "ClearAllPoints",
-                              "SetClampedToScreen", "SetAlpha", "SetSize", "SetScale",
+                              "SetClampedToScreen", "SetSize", "SetScale",
                               "StartMoving", "StopMovingOrSizing", "SetParent" }) do
         for _, f in ipairs({ protectedFrame, parent }) do
             WoW.blockedCalls = {}
@@ -954,14 +954,21 @@ do
             H.eq(#WoW.blockedCalls, 1, method .. " on a protected frame is refused and recorded")
         end
     end
+    -- SetAlpha is NOT refused: measured in combat on 70959 (the owner's /fp
+    -- sweep), it took effect with no ADDON_ACTION_BLOCKED.
+    for _, f in ipairs({ protectedFrame, parent }) do
+        WoW.blockedCalls = {}
+        f:SetAlpha(0.5)
+        H.eq(#WoW.blockedCalls, 0, "SetAlpha on a protected frame is allowed, as measured")
+    end
     -- The refusal must also leave the frame alone.
     WoW.inCombat = false
-    parent:SetAlpha(1)
+    parent:SetScale(1)
     parent:Show()
     WoW.inCombat = true
-    parent:SetAlpha(0)
+    parent:SetScale(2)
     parent:Hide()
-    H.eq(parent:GetAlpha(), 1, "a refused SetAlpha changes nothing")
+    H.eq(parent:GetScale(), 1, "a refused SetScale changes nothing")
     H.check(parent:IsShown(), "and a refused Hide leaves the frame up")
     WoW.inCombat = false
 end

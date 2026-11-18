@@ -306,12 +306,14 @@ end
 
 -- SetAttribute is refused below, with its key and value recorded.
 WoW.PROTECTED.SetAttribute = nil
--- Refused here as before the kit, though nobody has measured them (r33
--- audit; LibGroupBuffsProbe's sweep decides): SetAlpha, SetScale and
--- SetParent on a window that parents secure buttons. The kit's list is the
--- measured one and leaves them out; keeping them refused errs on the strict
--- side, and the window touches none of them in combat anyway (combatTouches).
-WoW.PROTECTED.SetAlpha, WoW.PROTECTED.SetScale, WoW.PROTECTED.SetParent = true, true, true
+-- Beyond the kit's list, on a window that parents secure buttons (the
+-- owner's /fp sweep in combat, build 70959): SetScale is REFUSED, as are
+-- SetShown and the rest the kit already refuses. SetAlpha is ALLOWED: it took
+-- effect with no ADDON_ACTION_BLOCKED, so it is not refused here (the pre-kit
+-- stub refused it, wrongly). SetParent is still unmeasured: refused here as
+-- a strict guess, and the window touches none of them in combat anyway
+-- (combatTouches).
+WoW.PROTECTED.SetScale, WoW.PROTECTED.SetParent = true, true
 
 -- WowTestKit #81: the kit has no hook on every call to a widget, which
 -- combatTouches needs. Its dispatch asks WoW.PROTECTED[method] and then
