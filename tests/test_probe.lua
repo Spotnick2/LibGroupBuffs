@@ -208,7 +208,9 @@ H.eq(verdict("main:ClearAllPoints()+SetPoint(same)"), "unchanged", "and a refuse
 -- stub let it through as unmeasured); the sweep in game decides it.
 H.eq(verdict("main:SetShown(false)"), "unchanged",
     "SetShown(false) is refused by the stub as the hide it is: the sweep in game decides")
-H.eq(verdict("main:SetFrameStrata(MEDIUM)"), "changed", "same for the strata")
+-- Measured on 70959 (#82): the strata is refused, the alpha is not.
+H.eq(verdict("main:SetFrameStrata(MEDIUM)"), "unchanged", "a refused strata change leaves the strata")
+H.eq(verdict("main:SetAlpha(0.5)"), "changed", "while the alpha, allowed, changes")
 H.eq(verdict("plain:Hide()"), "changed", "and the plain frame is free")
 H.eq(verdict("plain:SetAlpha(0.5)"), "changed", "in every respect")
 H.check(#WoW.blockedCalls > 0, "the stub refused the measured calls")
@@ -218,14 +220,18 @@ end
 H.check(T.sweepIsDirty(), "after a sweep the window counts as dirty")
 -- Back to the sweep step and run it again in the same fight: the snapshot
 -- must still be the window before the FIRST sweep.
-local level0, width0 = 0, 0
+-- The alpha is what the sweep can change (the client refuses its level,
+-- size and strata writes on this frame), so it is what tells a stale snapshot
+-- from the first one.
+local level0, width0, alpha0 = 0, 0, 1
 do
     local snap = T.remembered()
-    level0, width0 = snap.level, snap.width
+    level0, width0, alpha0 = snap.level, snap.width, snap.alpha
 end
-H.check(ui.main:GetFrameLevel() ~= level0, "the first sweep changed the frame level")
+H.check(ui.main:GetAlpha() ~= alpha0, "the first sweep changed the alpha")
 T.sweep()
-H.eq(T.remembered().level, level0, "a repeated sweep keeps the first snapshot's level")
+H.eq(T.remembered().alpha, alpha0, "a repeated sweep keeps the first snapshot's alpha")
+H.eq(T.remembered().level, level0, "and its level")
 H.eq(T.remembered().width, width0, "and its width")
 H.check(T.restoreWindow():find("in combat", 1, true) ~= nil, "it cannot be restored while the fight is on")
 H.check(T.sweepIsDirty(), "and stays dirty")
@@ -236,16 +242,23 @@ H.runScript(T.sweepWatch, "OnEvent", "PLAYER_REGEN_ENABLED")
 H.check(not T.sweepIsDirty(), "and restores the window there, whatever became of the procedure")
 H.check(logHas("sweep outstanding at combat's end: restored"), "saying so")
 H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "restoring again on demand is harmless")
--- The anchor restore has to be seen to do something: the stub refuses the
--- sweep's re-anchor, so break the anchor by hand before restoring again.
+H.eq(ui.main:GetAlpha(), alpha0, "to the alpha it had before the first of two sweeps")
+-- The rest of the restore has to be seen to do something: the stub refuses
+-- the sweep's re-anchor, strata, level and mouse writes (measured on 70959,
+-- #82), so break them by hand, out of combat, before restoring again.
 ui.main:ClearAllPoints()
 ui.main:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -3, 3)
+ui.main:SetFrameStrata("HIGH")
+ui.main:SetFrameLevel(level0 + 5)
+ui.main:EnableMouse(true)
 H.eq((ui.main:GetPoint()), "BOTTOMRIGHT", "the anchor is broken")
+H.check(ui.main:GetFrameStrata() == "HIGH" and ui.main:GetFrameLevel() == level0 + 5
+    and ui.main:IsMouseEnabled(), "and so are the strata, the level and the mouse")
 H.check(T.restoreWindow():find("restored", 1, true) ~= nil, "and restored again")
 WoW.flushTimers(1)
 H.eq(ui.main:GetFrameStrata(), "LOW", "to its strata")
 H.eq(ui.main:GetFrameLevel(), level0, "to the level it had before the first of two sweeps")
-H.check(not ui.main:IsMouseEnabled(), "to its mouse state, which the sweep's EnableMouse(true) had changed")
+H.check(not ui.main:IsMouseEnabled(), "to its mouse state")
 do
     local p1 = { ui.main:GetPoint() }
     H.eq(p1[1], p0[1], "and to its anchor point")

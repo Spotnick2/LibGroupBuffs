@@ -314,6 +314,11 @@ WoW.PROTECTED.SetAttribute = nil
 -- a strict guess, and the window touches none of them in combat anyway
 -- (combatTouches).
 WoW.PROTECTED.SetScale, WoW.PROTECTED.SetParent = true, true
+-- WowTestKit #83: SetFrameStrata, SetFrameLevel and EnableMouse are refused
+-- too, measured in the same sweep (ADDON_ACTION_BLOCKED for each; #82, porting
+-- guide section 3). The kit's list lacks them; drop this line (and SetScale
+-- above) once the pin moves to a kit commit that has them.
+WoW.PROTECTED.SetFrameStrata, WoW.PROTECTED.SetFrameLevel, WoW.PROTECTED.EnableMouse = true, true, true
 
 -- WowTestKit #81: the kit has no hook on every call to a widget, which
 -- combatTouches needs. Its dispatch asks WoW.PROTECTED[method] and then

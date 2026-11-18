@@ -63,6 +63,10 @@ refuses on a protected frame (only hide, move, re-anchor, unclamp and stop-drag 
 `g.wash:SetShown` on a *region* of the protected frame) is free. Nothing in the library calls the
 unmeasured methods in combat today; the stub test is what keeps it that way.
 
+**Decided** (sweep run #419, 70959, 2026-11-18, #74 and #82). Every one of those is refused
+except `SetAlpha`, which is allowed. `SetWash` and a region's `SetShown` are free. The stub
+refuses the measured list (#81, #82).
+
 Next step: close Wildly #42 as fixed by v1.0.0 (any user still seeing it is on v0.1.x and should
 update); close Priestly #110 and Magely #53 as covered by construction, pointing at the sweep
 test and the sweep procedure.
@@ -179,6 +183,20 @@ evidence and is optional.
 
 Measured facts go to `References/Docs/PORTING-TBC-TO-FOREVER.md` §3 and one AGENTS.md bullet
 each; Priestly's `docs/FOREVER-PROBE.md` gets a note from a Priestly session.
+
+**Decided on 2026-11-18** (70959, an enUS priest; #74, #82, Spotnick2/wow-dev-tools#49):
+- **B1: not needed.** The sweep (run #419) refused `SetScale`, `SetWidth`, `SetHeight`, `SetSize`,
+  `SetFrameStrata`, `SetFrameLevel`, `SetShown`, `EnableMouse`, `Hide`, `Show`, re-anchor and
+  unclamp on the window, and `SetAttribute` and `SetWidth` on a secure row. None of them is
+  called in combat by the library (`WoW.combatTouches` stays empty) or by LibGlass `SetWash`,
+  which the client allows, as it does `SetAlpha` and a region's show and hide. The refused
+  methods are in the stub (#81, #82).
+- **C1: not needed.** The `spells` runs (#417 to #419, a full relaunch between) found no ID without
+  a name at any phase. `IsSpellDataCached` read false for 12 of 13 while the names were already
+  there, so the flag is not the trigger the row assumed, and `Resolve` needs no data request.
+  Another language is unmeasured (Magely#48), and that is the only case left.
+- **C2: not needed.** `DoesSpellExist` was true for all 13 consumer IDs.
+- **A1 to A4** wait for the `bg` procedure (#63).
 
 ## Review status
 
