@@ -4149,7 +4149,11 @@ local LAYOUT = 3
 function Methods:AdoptLayout()
     local main = self.main
     if not main then return false end
-    if main._layout == LAYOUT then return true end
+    -- The font file is part of the layout (#84): a window an older copy drew
+    -- in Arial Narrow keeps it on a Korean or Chinese client, every string
+    -- of it, unless it is styled again here, once.
+    local font = GlassFontFile(FONT_FILE)
+    if main._layout == LAYOUT and main._fontFile == font then return true end
     if InCombatLockdown() then return false end
 
     StyleHeader(main)
@@ -4173,6 +4177,10 @@ function Methods:AdoptLayout()
         if x.EnableMouse then x:EnableMouse(false) end
         main.closeBtn = MakeCloseButton(self, main)
     end
+    -- Their labels are font strings too, made once with the button.
+    for _, b in ipairs({ main.closeBtn, main.minimizeBtn }) do
+        if b and b.label then Style(b.label, ROW_FONT, "CENTER") end
+    end
     if self.host.minimizable and not main.minimizeBtn then
         main.minimizeBtn = MakeMinimizeButton(self, main)
         main.dragHandle:ClearAllPoints()
@@ -4191,6 +4199,7 @@ function Methods:AdoptLayout()
     end
 
     main._layout = LAYOUT
+    main._fontFile = font
     return true
 end
 
