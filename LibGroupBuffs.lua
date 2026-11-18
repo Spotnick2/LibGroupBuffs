@@ -15,13 +15,13 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 35
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 36
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
 -- Private to this copy and shared by its sections: assigned in the Glass
 -- section, read by the window, lib.Status and lib:Refusal.
-local GlassState, GlassUsable, GlassInst, GLASS_MISSING, GlassTooOld
+local GlassState, GlassUsable, GlassInst, GLASS_MISSING, GlassTooOld, GlassFontFile
 
 do -- Compat ==================================================================
 
@@ -908,6 +908,21 @@ GlassInst = function()
         lib.glass = LibStub(GLASS):New({ preset = "clean" })
     end
     return lib.glass
+end
+
+-- The file the window's text is drawn in: LibGlass's Arial Narrow member,
+-- which from LibGlass r12 is chosen by the client's language (#84,
+-- LibGlass#69). A font file has no per-character fallback, so Arial Narrow
+-- draws Korean and Chinese as empty boxes, and on those clients LibGlass
+-- names the file Blizzard uses instead. Before r12 it is Arial Narrow on every
+-- client, and so is the fallback here when LibGlass or its table is missing.
+GlassFontFile = function(fallback)
+    local glass = LibStub:GetLibrary(GLASS, true)
+    local fonts = type(glass) == "table" and rawget(glass, "FONTS")
+    local arial = type(fonts) == "table" and fonts.arial
+    local file = type(arial) == "table" and arial.file
+    if type(file) == "string" and file ~= "" then return file end
+    return fallback
 end
 
 end -- Glass
@@ -2123,8 +2138,15 @@ end
 
 -- Text over glass needs its own shadow: the panel behind it is translucent,
 -- so a light letter can land on a light patch of the world.
+-- The file is LibGlass's for this client's language (#84). If that one does
+-- not load (SetFont returns false: two of the Chinese clients' files are
+-- missing on an English client, porting guide "A font file draws one
+-- script"), Arial Narrow: a font string with no font throws on SetText.
 local function Style(fs, size, justify)
-    fs:SetFont(FONT_FILE, size, "")
+    local file = GlassFontFile(FONT_FILE)
+    if not fs:SetFont(file, size, "") and file ~= FONT_FILE then
+        fs:SetFont(FONT_FILE, size, "")
+    end
     fs:SetShadowColor(0, 0, 0, 0.9)
     fs:SetShadowOffset(1, -1)
     if justify then fs:SetJustifyH(justify) end
