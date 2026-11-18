@@ -1,0 +1,8 @@
+# WowTestKit for these tests: the commit, and the client build to test against.
+# build: the library records no measured build of its own (AGENTS.md: it
+# follows Priestly's MEASURED_ON_BUILD, 70338, the build the old stub also
+# modelled). The kit has no data for 70338 (its oldest is 70450), so this is
+# the newest build the kit has.
+sha=3cba24fd68e35758c19671bcedfefa9ad228c60f
+build=70959
+api=2

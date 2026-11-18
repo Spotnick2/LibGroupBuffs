@@ -368,11 +368,16 @@ and the like name those sections.
   library checkout (neither is shipped):
   - `tests/config_scan.lua` — fails their run on a write to their SavedVariables outside a
     `config-owner` region.
-  - `tests/wow_stubs.lua` — the stub itself. A host sets `WoW.SetPlayerDefaults` (it is not a
-    priest), `WoW.allowGlobal(...)` for its own globals, and defines any API only it calls. Both
-    work after the file has run, which is the only order a host has. Keeping a copy is what let
-    Priestly's drift out of the combat refusal model, so every refusal measured here is measured
-    once. `tests/test_stub.lua` is that contract: the seam and the returns hosts read.
+  - `tests/wow_stubs.lua` — the stub itself, on WowTestKit (Testing, below). A host sets
+    `WoW.SetPlayerDefaults` (it is not a priest), `WoW.allowGlobal(...)` for its own globals, and
+    defines any API only it calls. Both work after the file has run, which is the only order a
+    host has. Keeping a copy is what let Priestly's drift out of the combat refusal model, so
+    every refusal measured here is measured once. `tests/test_stub.lua` is that contract: the
+    seam and the returns hosts read. The file starts with `dofile("tests/kit.lua")` relative to
+    the current directory, so a host runs it on **its own** `tests/kit.lua` and `kit.pin` (its kit
+    commit and build, never this library's). A host with no `tests/kit.pin` yet gets
+    `tests/wow_stubs_legacy.lua`, the frozen pre-kit stub, unchanged; delete it once Priestly,
+    Wildly, Magely and Buffy are all on the kit.
     `WoW.build`'s default is the **installed client's** build (`.build.info` in the World of
     Warcraft root names it without launching the game), never a host's `measuredOnBuild`: hosts
     re-probe at different times, and one can be sitting on an older measured build deliberately,
@@ -478,6 +483,18 @@ when it is not at the ref in `tests/libglass-ref.txt`, which is what CI fetches;
 `(host, ns)` to every chunk as the client does (`H.HOST`, "Priestly"). Tests of LibGlass being
 absent or half-loaded load it themselves (`freshLibStub(true)` in `test_versions.lua`).
 
+The test scaffolding is WowTestKit (`C:\Projects\WoW\WowTestKit`; its README is the reference)
+at the commit and client build `tests\kit.pin` names. `tests\run.ps1` puts that commit in
+`%LOCALAPPDATA%\WowTestKit\<sha>` and hands off to the kit's runner; CI fetches it with
+`tests\fetch_kit.sh`. `tests\kit.lua`, `kit.ps1` and `fetch_kit.sh` are the kit's bootstrap
+copies: never edit them here. A kit need is an issue on the kit, worked around in
+`tests\wow_stubs.lua` with a `-- WowTestKit #N:` comment meanwhile. `tests\run.ps1 -KitDev`
+runs against the `..\WowTestKit` working copy instead of the pin. The kit's build (`build=` in
+the pin) is which API lists the methods and events are checked against; `WoW.build`, what
+`GetBuildInfo` reports, is the stub's own (above). `tests/test_methods.lua` checks every widget
+method the library calls exists on that type in the build (`Kit.checkMethods`), and
+`test_probe.lua` does the same for the probe.
+
 `tests/wow_stubs.lua` is an **allowlist**: it fails the run on the read of any global it does not
 define. That only works if it also models the client's absences and shapes honestly — a stub more
 forgiving than the client lets broken code pass a green suite, which is how a call to the removed
@@ -487,12 +504,13 @@ forgiving than the client lets broken code pass a green suite, which is how a ca
 Strict globals only catch what actually runs, so every script handler the library installs needs a
 test that executes it.
 
-**Methods are strict too, since #34.** A frame answers an unknown PascalCase key with an error, not
-a silent no-op — the no-op is how a call to `GameTooltip:SetItemByID`, which this client does not
-have at all, passed a green suite and failed only in game. Confirm a method in the build dump, then
-implement it or add it to `KNOWN_METHODS`; if it is not in the dump, the caller is what needs
-fixing. `WoW.allowMethod` is the host's escape hatch, and it is for methods you have checked, not
-for quieting a failure.
+**Methods are strict too, since #34.** A widget answers a PascalCase key the pinned build lacks on
+its type with nil, so the call fails where it is made, not a silent no-op — the no-op is how a call
+to `GameTooltip:SetItemByID`, which this client does not have at all, passed a green suite and
+failed only in game. A method the build has reads as one (doing nothing unless the kit or the stub
+models it); a method Blizzard adds in Lua (BackdropTemplateMixin's) is `Kit.allowMethods` with its
+file. `WoW.allowMethod` is the host's escape hatch, for methods you have checked, not for quieting
+a failure: `Kit.checkMethods` still fails a method the build lacks.
 
 A key that is **not** PascalCase reads nil, because it is the addon's own field and an unset field
 is nil. That matters more than it sounds: while the stub handed back a callable, `if not f.iconEdge`

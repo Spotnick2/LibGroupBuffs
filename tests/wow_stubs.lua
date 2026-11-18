@@ -1,37 +1,78 @@
 ------------------------------------------------------------
--- wow_stubs.lua
+-- wow_stubs.lua - the client surface LibGroupBuffs and its hosts test against,
+-- on WowTestKit.
 --
--- Minimal World of Warcraft: Forever API surface so LibGroupBuffs can be
--- loaded and unit-tested under stock Lua 5.1 (the interpreter WoW uses), with
--- no game client.
---
--- Only what the addon touches at load time, plus the APIs the functions under
--- test call. Tests drive behaviour through the exported `WoW` table:
+-- The mechanics (strict globals, widgets that record every method called and
+-- exist only as the pinned build has them, protected frames in combat,
+-- timers, print, hooksecurefunc, secrets, the assertions) are the kit's:
+-- tests/kit.lua loads it at the commit and build tests/kit.pin names. This
+-- file adds what is LibGroupBuffs' own: the unit, aura, spell and item APIs,
+-- the tooltip and chat frame, and the driver the tests and the hosts call
+-- (WoW.SetUnit, WoW.SetAura, WoW.dispatch, WoW.flushTimers, WoW.messages,
+-- WoW.blockedCalls, WoW.combatWrites, WoW.combatTouches...).
 --
 --     dofile("tests/wow_stubs.lua")     -- FIRST, in every test file
 --     WoW.reset()
 --     WoW.SetUnit("party1", { name = "Karuzo Elegia", class = "MAGE" })
 --     WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1200)
 --
--- Frames record their secure attributes, so tests can assert what a click
--- would actually have cast.
---
 -- CONSUMING ADDONS SHARE THIS FILE, the way they share tests/config_scan.lua:
 -- every client absence and refusal measured here is measured once. A host
 -- loads it from its library checkout and layers its own differences on top:
 --
---     dofile(H.libraryRoot() .. "/tests/wow_stubs.lua")
+--     loadfile(LIBRARY .. "/tests/wow_stubs.lua")()
 --     WoW.SetPlayerDefaults({ name = "Wildly Testcase", class = "DRUID" })
 --     WoW.allowGlobal("Wildly", "WildlyDB")   -- the host's own globals
 --     function EJ_GetNumTiers() ... end       -- APIs only the host calls
 --
 -- Both calls work after the file has run: the defaults are read on every
 -- WoW.reset(), and the allow-list is consulted when a global is read, not
--- when strictGlobals() is installed.
+-- when strict globals are installed. Defining a global after it is fine too
+-- (strict globals only refuse READS of undefined names). A host whose layer
+-- builds widgets calls WoW.strictGlobals() again at its end, so the methods
+-- check sees only what the tests make the addon call.
+--
+-- WHICH KIT. This file runs `dofile("tests/kit.lua")` relative to the
+-- current directory, which is the root of the repo running the tests: here,
+-- this repo's pin; in a host, the HOST's own tests/kit.lua and kit.pin. So a
+-- host chooses its kit commit and build, never this library.
+--
+-- A HOST NOT ON THE KIT YET (no tests/kit.pin in its root) gets the frozen
+-- pre-kit stub, tests/wow_stubs_legacy.lua, unchanged: its local runs against
+-- this checkout keep working until it moves. Remove the legacy file once
+-- Priestly, Wildly and Magely are all on the kit.
 ------------------------------------------------------------
 
-WoW = {}
-local WoW = WoW
+local pinFile = io.open("tests/kit.pin", "rb")
+if not pinFile then
+    local here = (debug.getinfo(1, "S").source:match("^@(.*)[/\\][^/\\]*$") or "tests")
+    return dofile(here .. "/wow_stubs_legacy.lua")
+end
+pinFile:close()
+
+dofile("tests/kit.lua")
+local Methods = WoW.Methods
+
+------------------------------------------------------------
+-- The driver's names over the kit's
+--
+-- The tests and all three hosts say WoW.time and WoW.inCombat; the kit's
+-- clock and combat flag are WoW.now and WoW.combat (GetTime, timers,
+-- InCombatLockdown and the protected-frame refusals read those). One state,
+-- two names: neither alias is ever stored on WoW itself, so a write to
+-- either lands in the kit's field.
+------------------------------------------------------------
+
+local ALIAS = { time = "now", inCombat = "combat" }
+setmetatable(WoW, {
+    __index = function(t, k)
+        local a = ALIAS[k]
+        if a then return rawget(t, a) end
+    end,
+    __newindex = function(t, k, v)
+        rawset(t, ALIAS[k] or k, v)
+    end,
+})
 
 -- Event registrations are a load-time fact, not per-test state: the addon
 -- registers once when its files load, so WoW.reset() must not wipe them or
@@ -42,7 +83,7 @@ WoW.events = {}              -- [frame] = { [event] = true }
 -- State
 ------------------------------------------------------------
 
-function WoW.reset()
+table.insert(WoW.onReset, function()
     WoW.time        = 10000
     WoW.inCombat    = false
     WoW.secret      = false      -- C_Secrets.ShouldAurasBeSecret()
@@ -51,6 +92,8 @@ function WoW.reset()
     -- purpose, with its login notice firing - and a stub that follows a host
     -- would then model a client nobody is running. .build.info in the World
     -- of Warcraft root names the installed build without launching the game.
+    -- (tests/kit.pin's build is which API lists the kit checks against: the
+    -- kit has none for 70338.)
     WoW.build       = "70338"    -- 1.60.1.70338, built Oct  9 2026
     WoW.locale      = "enUS"
     WoW.units       = {}         -- [unit] = { name, guid, class, connected, dead, level }
@@ -80,13 +123,12 @@ function WoW.reset()
     WoW.messages    = {}         -- everything printed to DEFAULT_CHAT_FRAME
     WoW.badEvents   = {}         -- event names RegisterEvent should throw on
     WoW.refusedEvents = {}       -- event names RegisterEvent should return false for
-    WoW.timers      = {}
     WoW.mouseOver   = {}         -- [frame] = true; drives frame:IsMouseOver()
     WoW.auraReads   = { byIndex = 0, byName = 0 }
     WoW.centers     = {}         -- [frame] = x; drives frame:GetCenter()
     WoW.screenWidth = 1920       -- what UIParent:GetWidth() reports
     WoW.instanceMapID = 0        -- GetInstanceInfo's 8th return; 0 outdoors
-    WoW.combatWrites = {}        -- SetAttribute calls made while WoW.inCombat
+    WoW.combatWrites = {}        -- SetAttribute calls refused while WoW.inCombat
     WoW.blockedCalls = {}        -- protected calls refused while WoW.inCombat
     WoW.combatTouches = {}       -- EVERY state write to a protected frame in combat
     WoW.byNameBlind = false      -- simulate GetAuraDataBySpellName not resolving
@@ -94,6 +136,22 @@ function WoW.reset()
     WoW.aurasAreSecret = false   -- combat secrecy: the struct's fields throw
 
     WoW.SetUnit("player", WoW.playerDefaults)
+end)
+
+-- WowTestKit #80: the kit's WoW.reset discards every frame made so far
+-- (events and OnUpdate no longer reach them, and each leaves its parent's
+-- children). These suites load the library or the host ONCE, at the top of
+-- the file, and reset the client's state between sections: the frames built
+-- at load must survive, or WoW.dispatch finds nothing to fire at and a window
+-- walked after a reset has lost its children. So the kit's reset runs with
+-- no frames to discard, and the frames, widgets and recorded method calls
+-- are kept.
+local kitReset = WoW.reset
+function WoW.reset()
+    local frames, widgets, called = WoW.frames, WoW.widgets, WoW.methodsCalled
+    WoW.frames = {}
+    kitReset()
+    WoW.frames, WoW.widgets, WoW.methodsCalled = frames, widgets, called
 end
 
 -- Who "player" is, and what any unit is when a test does not say. A host sets
@@ -186,28 +244,28 @@ function WoW.DefineSpell(spellID, name)
     WoW.spells[spellID] = { name = name, iconID = 100000 + spellID }
 end
 
--- Run pending C_Timer callbacks.
+-- Run pending C_Timer callbacks (the kit's C_Timer and its WoW.timers).
 --
 -- With `advance`, move the clock forward by that many seconds and run only
 -- what comes due, oldest first - which is how a test says "this much time
 -- passed", catches a callback that fires too early, and lets a timer from an
--- earlier action still be pending while a later one is measured. Without it,
--- everything runs, which is what most tests want.
+-- earlier action still be pending while a later one is measured. Each
+-- callback sees the time it fell due (WoW.time), and a timer it schedules
+-- waits for the next flush. Without it, everything pending runs, as the
+-- kit's WoW.flushTimers() does. The kit's WoW.advance(dt) is not the same:
+-- its callbacks all see the end of the step, and that is a different test.
+local kitFlush = WoW.flushTimers
 function WoW.flushTimers(advance)
-    local target = advance and (WoW.time + advance) or nil
+    if advance == nil then return kitFlush() end
+    local target = WoW.time + advance
     local pending = WoW.timers
     WoW.timers = {}
-
-    if not target then
-        for _, t in ipairs(pending) do t.fn() end
-        return
-    end
-
     table.sort(pending, function(a, b) return a.at < b.at end)
     for _, t in ipairs(pending) do
-        if t.at <= target then
+        if t.cancelled then -- dropped, as the kit does
+        elseif t.at <= target then
             WoW.time = t.at          -- callbacks see the time they ran at
-            t.fn()
+            t.fn(t.handle)
         else
             WoW.timers[#WoW.timers + 1] = t
         end
@@ -216,29 +274,26 @@ function WoW.flushTimers(advance)
 end
 
 ------------------------------------------------------------
--- Frames
+-- Frames: protection in combat
+--
+-- The kit models it: a frame built from a secure template is protected, and
+-- so is every frame that parents one; in combat the client REFUSES hide,
+-- move, re-anchor, unclamp, stop-drag and resize on those (silently, as far
+-- as the addon can tell), and the kit records each refusal in WoW.blocked.
+-- Measured on build 69913 (Priestly FOREVER-PROBE section 13; the kit's
+-- WoW.PROTECTED cites the porting guide). This file keeps three records the
+-- tests and the hosts assert on:
+--   WoW.blockedCalls  - each refused call, { frame, method };
+--   WoW.combatWrites  - each refused SetAttribute, { frame, key, value };
+--   WoW.combatTouches - EVERY state write to a protected frame in combat,
+--                       refused or not, { frame, method }.
+-- The last is wider than the client's rule on purpose. The window's contract
+-- is stronger - it touches NOTHING in combat (AGENTS.md, UI) - so a test
+-- asserts it is empty without having to know which methods this build
+-- refuses, and a regression through a method the client refuses but nobody
+-- measured still goes red. Script handlers are not frame state.
 ------------------------------------------------------------
 
--- Protected frames: anything built from a secure template, and every ancestor
--- of one - hiding or moving a parent moves its secure children with it. In
--- combat the client REFUSES those calls (ADDON_ACTION_BLOCKED) instead of
--- throwing, which is invisible to an addon, so the stub records each attempt
--- in WoW.blockedCalls and does nothing. Measured on build 69913: parking the
--- buff window offscreen during combat was blocked at SetClampedToScreen, and
--- hide, move, re-anchor and stop-drag are refused (Priestly FOREVER-PROBE
--- section 13). SetAlpha, SetSize and SetScale are here from the port and were
--- NOT measured: the parking sequence was blocked at its first call. The probe's
--- `sweep` procedure decides them; until then no test should lean on their
--- refusal (r33 audit).
-local PROTECTED_METHODS = {
-    Show = true, Hide = true, SetPoint = true, ClearAllPoints = true,
-    SetClampedToScreen = true, SetAlpha = true, SetSize = true, SetScale = true,
-    StartMoving = true, StopMovingOrSizing = true, SetParent = true,
-}
-
--- Which method names count as writing a protected frame's state in combat
--- (WoW.combatTouches). Wider than PROTECTED_METHODS, which is only what was
--- measured refused; see the loop that installs it in makeFrame.
 local function TOUCHES_FRAME_STATE(name)
     if name == "SetScript" or name == "HookScript" then return false end
     if name == "Show" or name == "Hide" or name == "EnableMouse"
@@ -249,483 +304,296 @@ local function TOUCHES_FRAME_STATE(name)
         or name:match("^Stop") ~= nil or name:match("^Clear") ~= nil
 end
 
--- Widget methods this client has that the stub models as doing nothing.
--- Every one was checked against the build dump before it was added; a method
--- that is NOT there is not a candidate for this list, it is a bug in the
--- caller. Hosts add their own with WoW.allowMethod.
-local KNOWN_METHODS = {}
-for _, name in ipairs({
-    -- Frame behaviour the tests never assert on.
-    "SetMovable", "SetObeyStepOnDrag", "SetScrollChild", "IsProtected",
-    "UnregisterAllEvents", "RegisterForDrag",
-    -- Fonts set from a font OBJECT rather than a file. Recorded nowhere,
-    -- because nothing reads them back; SetFont is modelled properly.
-    "SetFontObject", "SetNormalFontObject",
-    -- Sliders and status bars.
-    "SetValueStep", "SetThumbTexture", "SetOrientation",
-    -- BackdropTemplateMixin. NOT in the dump - it is Lua in FrameXML, not the
-    -- C widget API, so the dump cannot adjudicate it either way. Listed
-    -- because the template is in use and every caller already guards on
-    -- `if f.SetBackdrop then`.
-    "SetBackdropColor", "SetBackdropBorderColor",
-}) do KNOWN_METHODS[name] = true end
+-- SetAttribute is refused below, with its key and value recorded.
+WoW.PROTECTED.SetAttribute = nil
+-- Refused here as before the kit, though nobody has measured them (r33
+-- audit; LibGroupBuffsProbe's sweep decides): SetAlpha, SetScale and
+-- SetParent on a window that parents secure buttons. The kit's list is the
+-- measured one and leaves them out; keeping them refused errs on the strict
+-- side, and the window touches none of them in combat anyway (combatTouches).
+WoW.PROTECTED.SetAlpha, WoW.PROTECTED.SetScale, WoW.PROTECTED.SetParent = true, true, true
 
--- PascalCase members that are NOT methods and must read nil: regions a
--- Blizzard template would have created. `Left` is the one that matters -
--- Tools/PriestlyProbe tests whether a template applied by asking whether
--- `frame.Left` is nil, and a catch-all made that answer yes every time, so
--- the probe could never report a template as missing.
-local ABSENT_MEMBERS = {}
-for _, name in ipairs({ "Left", "Right", "Middle", "Text", "Low", "High" }) do
-    ABSENT_MEMBERS[name] = true
-end
-
-local function makeFrame(name, parent, template)
-    local f = { _attr = {}, _scripts = {}, _name = name, _shown = false, _parent = parent }
-    -- Children as well as regions: a test that walks a window to check what it
-    -- drew stops at the first child frame otherwise, and reports a clean sweep
-    -- of the half it could see.
-    if type(parent) == "table" then
-        parent._children = parent._children or {}
-        parent._children[#parent._children + 1] = f
+-- WowTestKit #81: the kit has no hook on every call to a widget, which
+-- combatTouches needs. Its dispatch asks WoW.PROTECTED[method] and then
+-- WoW.refused(frame, method) before every call, so a frame-state method
+-- reads as "ask" here and the wrapper below records the touch, then refuses
+-- only what the kit's own list refuses.
+local REFUSED = WoW.PROTECTED
+setmetatable(REFUSED, {
+    __index = function(_, k)
+        if type(k) == "string" and TOUCHES_FRAME_STATE(k) then return "touch" end
+    end,
+})
+local kitRefused = WoW.refused
+function WoW.refused(w, what)
+    if WoW.combat and WoW.isProtected(w) then
+        WoW.combatTouches[#WoW.combatTouches + 1] = { frame = w, method = what }
     end
-    if template and tostring(template):find("Secure") then
-        f._protected = true
-        local p = parent
-        while p do p._protected = true; p = p._parent end
-    end
-    local function chain() return f end
-
-    f.GetName = function(self) return self._name end
-    f.SetScript = function(self, ev, fn) self._scripts[ev] = fn return self end
-    f.GetScript = function(self, ev) return self._scripts[ev] end
-    f.HookScript = function(self, ev, fn)
-        local existing = self._scripts[ev]
-        if existing then
-            self._scripts[ev] = function(...) existing(...) fn(...) end
-        else
-            self._scripts[ev] = fn
-        end
-        return self
-    end
-    -- A write to a secure attribute under combat lockdown is refused by the
-    -- client on a protected frame - silently, as far as the addon can tell
-    -- (PORTING-TBC-TO-FOREVER "Secure click-casting": SetAttribute does
-    -- nothing under lockdown). On a frame that is not protected it lands as
-    -- usual. The stub refuses it the same way and records the attempt, so a
-    -- test can assert that nothing tried. Until the r33 audit it stored the
-    -- value as well, so a test reading the attribute back saw a cast the
-    -- client would never have made.
-    f.SetAttribute = function(self, k, v)
-        if WoW.inCombat and self._protected then
-            WoW.combatWrites[#WoW.combatWrites + 1] = { frame = self, key = k, value = v }
-            return self
-        end
-        self._attr[k] = v
-        return self
-    end
-    f.GetAttribute = function(self, k) return self._attr[k] end
-    f.Show = function(self) self._shown = true return self end
-    f.Hide = function(self) self._shown = false return self end
-    -- Frame:SetShown and Texture:SetShown, both in the 70205 dump. LibGlass
-    -- builds the directional edge and shows each part only when it is lit.
-    f.SetShown = function(self, shown) self._shown = shown and true or false return self end
-    f.IsShown = function(self) return self._shown end
-    -- Predicates must be explicit: the catch-all __index below returns a
-    -- function for any unknown method, and a function is truthy, so an
-    -- undefined frame:IsFoo() would silently answer "yes" forever.
-    f.IsMouseOver = function(self) return WoW.mouseOver[self] == true end
-    f.SetClampedToScreen = function(self, v) self._clamped = v return self end
-    -- Recorded rather than left to the catch-all: PROTECTED_METHODS wraps what
-    -- exists, and a method the catch-all swallows can be called in combat
-    -- without the refusal being recorded.
-    -- Whether a frame takes the mouse decides whether a tooltip or a click
-    -- can ever reach it, and the catch-all answered every question about it
-    -- with the frame itself. Wildly's copy of this stub modelled it; the
-    -- shared one did not, which is the drift finally visible from one side.
-    f.EnableMouse = function(self, on) self._mouseEnabled = on and true or false return self end
-    f.IsMouseEnabled = function(self) return self._mouseEnabled == true end
-    f.SetAlpha = function(self, a) self._alpha = a return self end
-    -- Recorded, including the nil that CLEARS it: a backdrop left under the
-    -- glass shows through as a dark square-cornered rectangle, and a no-op
-    -- could not tell the two apart.
-    f.SetVertexColor = function(self, r, g, b, a)
-        self._vertexColor = { r, g, b, a } return self
-    end
-    f.GetVertexColor = function(self)
-        local c = self._vertexColor or { 1, 1, 1, 1 }
-        return c[1], c[2], c[3], c[4]
-    end
-    -- Text alignment, recorded: the catch-all answered GetJustifyH with the
-    -- frame, so a label meant to be centred and one left against an edge
-    -- were indistinguishable.
-    f.SetJustifyH = function(self, justify) self._justifyH = justify return self end
-    f.GetJustifyH = function(self) return self._justifyH or "LEFT" end
-    f.SetJustifyV = function(self, justify) self._justifyV = justify return self end
-    f.GetJustifyV = function(self) return self._justifyV or "MIDDLE" end
-    f.SetBackdrop = function(self, backdrop) self._backdrop = backdrop return self end
-    f.GetBackdrop = function(self) return self._backdrop end
-    -- Frame levels decide what draws over what, and the glass material does
-    -- arithmetic on them: a no-op that returned the frame itself made that a
-    -- "perform arithmetic on a table value" the moment it was called.
-    f.SetFrameLevel = function(self, level) self._level = level return self end
-    f.GetFrameLevel = function(self)
-        if self._level then return self._level end
-        local parent = self._parent
-        return (parent and parent.GetFrameLevel and parent:GetFrameLevel() + 1) or 1
-    end
-    f.SetFrameStrata = function(self, strata) self._strata = strata return self end
-    f.GetFrameStrata = function(self) return self._strata or "MEDIUM" end
-    f.GetAlpha = function(self) return self._alpha or 1 end
-    f.SetSize = function(self, w, h) self._width, self._height = w, h return self end
-    -- Separately, because the catch-all was swallowing these: a height set
-    -- with SetHeight read back as the stand-in, so any assertion comparing
-    -- two such heights compared one constant with itself.
-    f.SetWidth  = function(self, w) self._width  = w return self end
-    f.SetHeight = function(self, h) self._height = h return self end
-    f.SetScale = function(self, s) self._scale = s return self end
-    -- The product up the parent chain, the way the client computes it. Without
-    -- it a frame's own coordinates and UIParent's look like the same space,
-    -- and every comparison between them is right only at scale 1.
-    f.GetEffectiveScale = function(self)
-        local scale = self._scale or 1
-        local p = self._parent
-        while p do
-            scale = scale * (p._scale or 1)
-            p = p._parent
-        end
-        return scale
-    end
-    f.GetScale = function(self) return self._scale or 1 end
-    f.SetParent = function(self, p) self._parent = p return self end
-    f.GetParent = function(self) return self._parent end
-    f.IsVisible = function(self) return self._shown end
-    f.RegisterForClicks = function(self, ...) self._clicks = { ... } return self end
-    -- Recorded, so a test can assert what a font string or texture shows
-    -- rather than only that the call did not throw.
-    f.SetText = function(self, text) self._text = text return self end
-    f.GetText = function(self) return self._text end
-    f.SetTexture = function(self, tex) self._texture = tex return self end
-    -- The glass material's layers. Every one of these was absorbed by the
-    -- catch-all below before it was written down, which is how a missing
-    -- widget method reaches the client: the suite stays green and the frame
-    -- simply does not draw. Recorded, so a test can assert the layer exists
-    -- and what it was given.
-    f.SetTextureSliceMargins = function(self, l, t, r, b)
-        self._slice = { l, t, r, b } return self
-    end
-    f.SetTextureSliceMode = function(self, mode) self._sliceMode = mode return self end
-    f.SetBlendMode = function(self, mode) self._blend = mode return self end
-    f.SetHorizTile = function(self, on) self._horizTile = on and true or false return self end
-    f.SetVertTile = function(self, on) self._vertTile = on and true or false return self end
-    f.SetGradient = function(self, orientation, from, to)
-        self._gradient = { orientation = orientation, from = from, to = to } return self
-    end
-    f.SetDesaturated = function(self, on) self._desaturated = on and true or false return self end
-    -- Recorded because it does not compose with AddMaskTexture: this client
-    -- applies a mask in the texture's UNTRANSFORMED space, so a masked
-    -- texture that is also cropped shows a fraction of its art in one corner.
-    -- Nothing throws; it just draws wrong, which is why the suite has to know.
-    f.SetTexCoord = function(self, ...)
-        self._texCoord = { ... }
-        return self
-    end
-    f.GetTexCoord = function(self)
-        local c = self._texCoord
-        if not c then return nil end
-        return unpack(c)
-    end
-    f.AddMaskTexture = function(self, mask)
-        self._masks = self._masks or {}
-        self._masks[#self._masks + 1] = mask
-        return self
-    end
-    f.RemoveMaskTexture = function(self, mask)
-        for i = #(self._masks or {}), 1, -1 do
-            if self._masks[i] == mask then table.remove(self._masks, i) end
-        end
-        return self
-    end
-    f.SetTextColor = function(self, r, g, b, a) self._textColor = { r, g, b, a } return self end
-    f.GetTextColor = function(self)
-        local c = self._textColor or { 1, 1, 1, 1 }
-        return c[1], c[2], c[3], c[4]
-    end
-    f.SetColorTexture = function(self, r, g, b, a) self._colorTexture = { r, g, b, a } return self end
-    f.GetTexture = function(self) return self._texture end
-    f.StartMoving = function(self) self._moving = true return self end
-    f.StopMovingOrSizing = function(self) self._moving = false return self end
-    f.SetPoint = function(self, point, rel, relPoint, x, y)
-        -- SetPoint(point, x, y) is the short form, and a number in the second
-        -- slot is the only thing that distinguishes it from
-        -- SetPoint(point, relativeTo, relativePoint).
-        if type(rel) == "number" then
-            rel, relPoint, x, y = nil, nil, rel, relPoint
-        end
-        -- A MASK anchored to a texture that has not been placed yet gets no
-        -- rectangle, and this client does not go back and give it one when
-        -- the texture is anchored afterwards: the masked texture then draws
-        -- only where that empty mask is, which looks like a sliver of the art
-        -- in one corner. Nothing throws, so the order is recorded here or no
-        -- test can see it.
-        if self._isMask and type(rel) == "table" and rel._objectType == "Texture"
-            and not (rel._points and #rel._points > 0) then
-            self._anchoredBeforePlaced = true
-        end
-        self._points = self._points or {}
-        self._points[#self._points + 1] = { point, rel, relPoint, x, y }
-        return self
-    end
-    f.ClearAllPoints = function(self) self._points = nil return self end
-    -- Recorded as the two corners it really is, not swallowed by the catch-all:
-    -- a region anchored this way has a size, and a test that cannot derive it
-    -- silently skips the region instead of checking it.
-    f.SetAllPoints = function(self, rel)
-        self._points = { { "TOPLEFT", rel, "TOPLEFT", 0, 0 },
-                         { "BOTTOMRIGHT", rel, "BOTTOMRIGHT", 0, 0 } }
-        return self
-    end
-    -- The client declares `RegisterEvent(eventName:cstring) -> registered:bool`
-    -- and throws on a name it does not know. WoW.badEvents models the throw,
-    -- WoW.refusedEvents a refusal by return value.
-    f.RegisterEvent = function(self, ev)
-        if type(ev) ~= "string" then error("bad argument #1 to 'RegisterEvent'", 2) end
-        if WoW.badEvents[ev] then error("unknown event " .. tostring(ev), 2) end
-        if WoW.refusedEvents[ev] then return false end
-        local set = WoW.events[self]
-        if not set then set = {} WoW.events[self] = set end
-        set[ev] = true
+    if rawget(REFUSED, what) and kitRefused(w, what) then
+        WoW.blockedCalls[#WoW.blockedCalls + 1] = { frame = w, method = what }
         return true
     end
-    f.UnregisterEvent = function(self, ev)
-        local set = WoW.events[self]
-        if set then set[ev] = nil end
-        return self
-    end
-    -- Regions are listed on their parent, as the client's GetRegions() reports
-    -- them (varargs, in creation order), and know their object type.
-    local function region(parent, objectType)
-        local r = makeFrame(nil, parent)
-        r._objectType = objectType
-        parent._regions = parent._regions or {}
-        parent._regions[#parent._regions + 1] = r
-        return r
-    end
-    -- The draw layer is recorded because it decides what covers what, which
-    -- is not a detail: a fill created in the wrong place drew its gloss over
-    -- the class icons and washed them green, in game, with a green suite.
-    f.CreateTexture = function(self, name, layer, _, subLayer)
-        local t = region(self, "Texture")
-        t._drawLayer, t._subLayer = layer, subLayer
-        return t
-    end
-    f.GetDrawLayer = function(self) return self._drawLayer, self._subLayer end
-    -- The template is recorded, and so is any later SetFont: a string left on
-    -- a Blizzard template is a string the addon never styled, and on a glass
-    -- panel that is visible as one line in the wrong typeface.
-    f.CreateFontString = function(self, name, layer, template)
-        local fs = region(self, "FontString")
-        fs._drawLayer, fs._template = layer, template
-        return fs
-    end
-    f.SetFont = function(self, file, size, flags)
-        self._font = { file, size, flags }
-        return true
-    end
-    f.GetFont = function(self)
-        local fnt = self._font
-        if not fnt then return nil end
-        return fnt[1], fnt[2], fnt[3]
-    end
-    f.SetShadowColor  = function(self, r, g, b, a) self._shadowColor = { r, g, b, a or 1 } end
-    f.SetShadowOffset = function(self, x, y) self._shadowOffset = { x, y } end
-    f.GetShadowOffset = function(self)
-        local o = self._shadowOffset
-        if not o then return 0, 0 end
-        return o[1], o[2]
-    end
-    -- Below `region`, which these need: a local declared further down is a
-    -- GLOBAL inside a closure written above it, and would have thrown on the
-    -- first call rather than at load.
-    f.CreateMaskTexture = function(self)
-        local m = region(self, "MaskTexture")
-        m._isMask = true
-        return m
-    end
-    f.SetStatusBarTexture = function(self, tex)
-        if type(tex) == "string" then
-            self._barTexture = region(self, "Texture")
-            self._barTexture._texture = tex
-        else
-            self._barTexture = tex
-        end
-        return self._barTexture
-    end
-    f.GetStatusBarTexture = function(self) return self._barTexture end
-    f.SetStatusBarColor = function(self, r, g, b, a)
-        self._barColor = { r, g, b, a or 1 } return self
-    end
-    f.GetStatusBarColor = function(self)
-        local c = self._barColor or { 1, 1, 1, 1 }
-        return c[1], c[2], c[3], c[4]
-    end
-    f.SetMinMaxValues = function(self, lo, hi) self._range = { lo, hi } return self end
-    f.SetStatusBarDesaturated = function(self, on) self._barDesaturated = on return self end
-    f.GetRegions       = function(self) return unpack(self._regions or {}) end
-    f.GetObjectType    = function(self) return self._objectType or "Frame" end
-    f.CreateAnimationGroup = function() return makeFrame() end
-    f.GetThumbTexture  = function() return makeFrame() end
-    -- The FIRST anchor, which is what the client's GetPoint() returns.
-    f.GetPoint = function(self)
-        local p = self._points and self._points[1]
-        if not p then return "CENTER", nil, "CENTER", 0, 0 end
-        return p[1], p[2], p[3], p[4], p[5]
-    end
-    -- Set WoW.zeroHeights to model a FontString that has not been laid out
-    -- yet, which is what the live client reports inside a scroll child during
-    -- OnShow.
-    f.GetStringHeight = function() return WoW.zeroHeights and 0 or 12 end
-    -- A size that was SET reads back; anything else keeps the old stand-in.
-    -- Layout is arithmetic on these, and a stub that answered 100 for every
-    -- frame made every such assertion a comparison of two constants.
-    f.GetWidth = function(self)
-        if self == UIParent then return WoW.screenWidth end
-        return self._width or 100
-    end
-    -- nil until a test places the frame, which is what the live client returns
-    -- before layout - a case the caller has to handle.
-    f.GetCenter = function(self)
-        local x = WoW.centers[self]
-        if not x then return nil end
-        return x, 300
-    end
-    f.GetHeight = function(self) return self._height or 20 end
-    f.GetChecked = function(self) return self._checked end
-    f.SetChecked = function(self, v) self._checked = v return self end
-    -- The range that was SET, not a constant. Answering 0, 1 for every slider
-    -- made any assertion about a slider's range a comparison of two literals -
-    -- and a fill drawn from it looked right whatever the slider was for.
-    f.GetMinMaxValues = function(self)
-        local r = self._range
-        if not r then return 0, 1 end
-        return r[1], r[2]
-    end
-    f.GetValue = function(self) return self._value or 0 end
-    f.SetValue = function(self, v) self._value = v return self end
-    f.GetID = function() return 1 end
-
-    -- A protected frame in combat: record and refuse, the way the client does.
-    for method in pairs(PROTECTED_METHODS) do
-        local real = f[method]
-        if real then
-            f[method] = function(self, ...)
-                if WoW.inCombat and self._protected then
-                    WoW.blockedCalls[#WoW.blockedCalls + 1] =
-                        { frame = self, method = method }
-                    return self
-                end
-                return real(self, ...)
-            end
-        end
-    end
-
-    -- Every state write to a protected frame in combat, refused or not.
-    -- PROTECTED_METHODS is the MEASURED list of refusals and stays that way;
-    -- this record is wider on purpose. The window's contract is stronger than
-    -- the client's rule - it touches NOTHING in combat (AGENTS.md, UI) - so a
-    -- test asserts this is empty without having to know which methods this
-    -- build refuses, and a regression through a method the client refuses
-    -- but nobody measured (SetShown, SetFrameStrata...) still goes red.
-    -- Script handlers are not frame state and are left out. Methods the
-    -- catch-all below serves (KNOWN_METHODS, WoW.allowMethod) are recorded the
-    -- same way there.
-    for name, fn in pairs(f) do
-        if type(fn) == "function" and TOUCHES_FRAME_STATE(name) then
-            f[name] = function(self, ...)
-                if WoW.inCombat and self._protected then
-                    WoW.combatTouches[#WoW.combatTouches + 1] =
-                        { frame = self, method = name }
-                end
-                return fn(self, ...)
-            end
-        end
-    end
-
-    -- An unknown key is an ERROR, not a silent no-op.
-    --
-    -- The stub is the list of what this client has, and that has to cover
-    -- METHODS as well as globals. A catch-all that hands back a callable for
-    -- anything is how `GameTooltip:SetItemByID` - which does not exist here at
-    -- all - survived a green suite and failed only in game. It is also how
-    -- four assertions in one afternoon came to be unfalsifiable: a frame's
-    -- `iconEdge` answered with a function, so `if not f.iconEdge` was false
-    -- under test and true in the client, and the code the test existed to
-    -- cover never ran.
-    --
-    -- The split is by case, because the client's widget methods are all
-    -- PascalCase and an addon's own fields are not:
-    --
-    --   * a lower-case or underscored key is the ADDON's field. It reads nil,
-    --     because an unset field IS nil and inventing one lets a test assert a
-    --     state the addon is not in.
-    --   * a PascalCase key is a widget method. It must be one this client has.
-    setmetatable(f, {
-        __index = function(_, k)
-            if type(k) ~= "string" then return nil end
-            local first = k:sub(1, 1)
-            if first ~= first:upper() or first == "_" then return nil end
-            if ABSENT_MEMBERS[k] then return nil end
-            if KNOWN_METHODS[k] then
-                if TOUCHES_FRAME_STATE(k) then
-                    return function(self, ...)
-                        if WoW.inCombat and self._protected then
-                            WoW.combatTouches[#WoW.combatTouches + 1] = { frame = self, method = k }
-                        end
-                        return self
-                    end
-                end
-                return chain
-            end
-            error("call to widget method '" .. k .. "', which this stub does "
-                .. "not define. Confirm it exists on this client in the newest "
-                .. "C:/Projects/WoW/References/Forever/api/forever-api-<build>.md, then either "
-                .. "implement it above or add it to KNOWN_METHODS. If it does "
-                .. "NOT exist, the addon is the thing to fix.", 2)
-        end,
-    })
-    return f
-end
-WoW.makeFrame = makeFrame
-
--- Fire a registered event handler on one specific frame.
-function WoW.fire(frame, event, ...)
-    local fn = frame and frame._scripts and frame._scripts.OnEvent
-    if fn then fn(frame, event, ...) end
+    return false
 end
 
--- Fire an event the way the game does: to EVERY frame registered for it. The
--- addon has three event frames (main, instance detector, options registration)
--- and firing only one leaves the others in a state the game never produces -
--- which looks like an addon bug when a test then trips over it.
+-- A write to a secure attribute under combat lockdown is refused by the
+-- client on a protected frame - silently, as far as the addon can tell
+-- (PORTING-TBC-TO-FOREVER "Secure click-casting": SetAttribute does nothing
+-- under lockdown). On a frame that is not protected it lands as usual. The
+-- write is not stored: until the r33 audit it was, so a test reading the
+-- attribute back saw a cast the client would never have made.
+local kitSetAttribute = Methods.SetAttribute
+function Methods.SetAttribute(w, k, v)
+    if WoW.combat and WoW.isProtected(w) then
+        WoW.combatWrites[#WoW.combatWrites + 1] = { frame = w, key = k, value = v }
+        table.insert(WoW.blocked, (w._name or w._type) .. ":SetAttribute")
+        return
+    end
+    return kitSetAttribute(w, k, v)
+end
+
+------------------------------------------------------------
+-- Frames: events
+------------------------------------------------------------
+
+-- The client declares `RegisterEvent(eventName:cstring) -> registered:bool`
+-- and throws on a name it does not know (the kit checks the name against the
+-- pinned build). WoW.badEvents models a throw for a name a test picks,
+-- WoW.refusedEvents a refusal by return value. Each registration is also
+-- kept in WoW.events, which WoW.dispatch reads.
+local kitRegisterEvent = Methods.RegisterEvent
+function Methods.RegisterEvent(w, ev)
+    if type(ev) ~= "string" then error("bad argument #1 to 'RegisterEvent'", 3) end
+    if WoW.badEvents[ev] then error("unknown event " .. tostring(ev), 3) end
+    if WoW.refusedEvents[ev] then return false end
+    if not WoW.KNOWN_EVENTS[ev] then
+        error("Attempt to register unknown event \"" .. tostring(ev) .. "\"", 3)
+    end
+    kitRegisterEvent(w, ev)
+    local set = WoW.events[w]
+    if not set then set = {} WoW.events[w] = set end
+    set[ev] = true
+    return true
+end
+local kitUnregisterEvent = Methods.UnregisterEvent
+function Methods.UnregisterEvent(w, ev)
+    kitUnregisterEvent(w, ev)
+    local set = WoW.events[w]
+    if set then set[ev] = nil end
+end
+local kitUnregisterAll = Methods.UnregisterAllEvents
+function Methods.UnregisterAllEvents(w)
+    kitUnregisterAll(w)
+    WoW.events[w] = nil
+end
+
+-- Fire an event the way the game does: to EVERY frame registered for it
+-- (WoW.events, kept across WoW.reset). Errors are not caught. Returns how
+-- many frames it reached. The kit's WoW.fire(event, ...) is the same over
+-- the frames made since the last kit reset; this one is what the suites and
+-- the hosts call.
 function WoW.dispatch(event, ...)
     local targets = {}
     for frame, events in pairs(WoW.events) do
         if events[event] then targets[#targets + 1] = frame end
     end
     for _, frame in ipairs(targets) do
-        WoW.fire(frame, event, ...)
+        local fn = frame._scripts and frame._scripts.OnEvent
+        if fn then fn(frame, event, ...) end
     end
     return #targets
 end
 
 ------------------------------------------------------------
--- Globals the addon expects at load
+-- Frames: what the tests read back
+--
+-- Each of these calls the kit's model where it has one and also records the
+-- field the tests and the hosts read (the pre-kit stub's names: _colorTexture,
+-- _texture, _moving, _clicks, _mouseEnabled, _slice...), or models a return
+-- the kit leaves out.
 ------------------------------------------------------------
 
--- What each template actually brings with it. Without this the catch-all
--- __index invents `rb.text` as a function, the options panel then calls
--- :SetText on it, and the panel can never be built under test - which is how
--- the whole options UI stayed outside the strict-global net.
+local function wrap(name, after)
+    local kit = Methods[name]
+    Methods[name] = function(w, ...)
+        local r1, r2 = nil, nil
+        if kit then r1, r2 = kit(w, ...) end
+        after(w, ...)
+        return r1, r2
+    end
+end
+
+wrap("SetColorTexture", function(t, r, g, b, a) t._colorTexture = { r, g, b, a } end)
+wrap("SetTexture", function(t, tex) t._texture = tex end)
+function Methods.GetTexture(t) return t._texture end
+wrap("StartMoving", function(w) w._moving = true end)
+wrap("StopMovingOrSizing", function(w) w._moving = false end)
+wrap("RegisterForClicks", function(w, ...) w._clicks = { ... } end)
+-- Whether a frame takes the mouse decides whether a tooltip or a click can
+-- ever reach it. The kit keeps it in _mouse; _mouseEnabled is the hosts' name.
+wrap("EnableMouse", function(w, on) w._mouseEnabled = on and true or false end)
+wrap("SetClampedToScreen", function(w, v) w._clamped = v end)
+function Methods.IsClampedToScreen(w) return w._clamped == true end
+-- The glass material's layers, recorded so a test can assert the layer
+-- exists and what it was given.
+wrap("SetTextureSliceMargins", function(t, l, top, r, b) t._slice = { l, top, r, b } end)
+wrap("SetTextureSliceMode", function(t, mode) t._sliceMode = mode end)
+wrap("SetHorizTile", function(t, on) t._horizTile = on and true or false end)
+wrap("SetVertTile", function(t, on) t._vertTile = on and true or false end)
+-- Recorded because it does not compose with AddMaskTexture: this client
+-- applies a mask in the texture's UNTRANSFORMED space, so a masked texture
+-- that is also cropped shows a fraction of its art in one corner.
+wrap("SetTexCoord", function(t, ...) t._texCoord = { ... } end)
+function Methods.GetTexCoord(t)
+    local c = t._texCoord
+    if not c then return nil end
+    return unpack(c)
+end
+function Methods.GetVertexColor(t)
+    local c = t._vertex or { 1, 1, 1, 1 }
+    return c[1], c[2], c[3], c[4]
+end
+-- The draw layer decides what covers what: a fill created in the wrong place
+-- drew its gloss over the class icons and washed them green, in game, with a
+-- green suite. The kit keeps it as _layer / _sublevel.
+local kitCreateTexture = Methods.CreateTexture
+function Methods.CreateTexture(w, name, layer, template, sublevel)
+    local t = kitCreateTexture(w, name, layer, template, sublevel)
+    t._drawLayer, t._subLayer = layer, sublevel
+    return t
+end
+local kitCreateFontString = Methods.CreateFontString
+function Methods.CreateFontString(w, name, layer, template)
+    local fs = kitCreateFontString(w, name, layer, template)
+    fs._drawLayer, fs._template = layer, template
+    return fs
+end
+function Methods.GetDrawLayer(r) return r._drawLayer, r._subLayer end
+-- WowTestKit #82: the kit's CreateMaskTexture puts the mask in no
+-- list, so a walk of a window's regions (tests/test_ui_window.lua: no sliced
+-- mask small both ways, none anchored before its texture) would never reach
+-- one and pass on nothing. Listed with the frame's regions, as before the
+-- kit; whether the client's GetRegions lists masks is not measured.
+local kitCreateMaskTexture = Methods.CreateMaskTexture
+function Methods.CreateMaskTexture(w, ...)
+    local m = kitCreateMaskTexture(w, ...)
+    m._isMask = true
+    WoW.addRegion(w, m)
+    return m
+end
+-- Whether a size was SET: the kit starts every widget at 0 x 0, so a test
+-- deriving a region's box from its anchors (no size of its own) asks these.
+wrap("SetSize", function(w) w._sizedW, w._sizedH = true, true end)
+wrap("SetWidth", function(w) w._sizedW = true end)
+wrap("SetHeight", function(w) w._sizedH = true end)
+-- Text alignment and shadow, recorded: a label meant to be centred and one
+-- left against an edge are otherwise indistinguishable.
+function Methods.SetJustifyH(fs, justify) fs._justifyH = justify end
+function Methods.GetJustifyH(fs) return fs._justifyH or "LEFT" end
+function Methods.SetJustifyV(fs, justify) fs._justifyV = justify end
+function Methods.GetJustifyV(fs) return fs._justifyV or "MIDDLE" end
+function Methods.SetShadowColor(fs, r, g, b, a) fs._shadowColor = { r, g, b, a or 1 } end
+function Methods.SetShadowOffset(fs, x, y) fs._shadowOffset = { x, y } end
+function Methods.GetShadowOffset(fs)
+    local o = fs._shadowOffset
+    if not o then return 0, 0 end
+    return o[1], o[2]
+end
+-- Set WoW.zeroHeights to model a FontString that has not been laid out yet,
+-- which is what the live client reports inside a scroll child during OnShow.
+function Methods.GetStringHeight() return WoW.zeroHeights and 0 or 12 end
+function Methods.GetStatusBarColor(b)
+    local c = b._color or { 1, 1, 1, 1 }
+    return c[1], c[2], c[3], c[4] or 1
+end
+-- The range that was SET, not a constant: a fill drawn from it looked right
+-- whatever the slider was for while every slider answered 0, 1.
+function Methods.GetMinMaxValues(b)
+    if b._min == nil then return 0, 1 end
+    return b._min, b._max
+end
+-- Scale, and the product up the parent chain the way the client computes it.
+-- Without it a frame's own coordinates and UIParent's look like the same
+-- space, and every comparison between them is right only at scale 1.
+function Methods.SetScale(w, s) w._scale = s end
+function Methods.GetScale(w) return w._scale or 1 end
+function Methods.GetEffectiveScale(w)
+    if w._escale ~= nil then return w._escale end
+    local scale, p = w._scale or 1, w._parent
+    while p do
+        scale = scale * (p._scale or 1)
+        p = p._parent
+    end
+    return scale
+end
+-- The pointer: WoW.mouseOver[frame], or the kit's w._mouseOver.
+local kitIsMouseOver = Methods.IsMouseOver
+function Methods.IsMouseOver(w)
+    if WoW.mouseOver[w] then return true end
+    return kitIsMouseOver(w)
+end
+-- nil until a test places the frame (WoW.centers[frame] = x), which is what
+-- the live client returns before layout - a case the caller has to handle.
+-- The kit's edges (w._left...) answer when a test sets those instead.
+local kitGetCenter = Methods.GetCenter
+function Methods.GetCenter(w)
+    local x = WoW.centers[w]
+    if x then return x, 300 end
+    return kitGetCenter(w)
+end
+-- UIParent is as wide as the screen; the popover's side depends on it.
+local kitGetWidth = Methods.GetWidth
+function Methods.GetWidth(w)
+    if w == UIParent then return WoW.screenWidth end
+    return kitGetWidth(w)
+end
+-- SetPoint(point, x, y) is the short form, and a number in the second slot
+-- is the only thing that distinguishes it from SetPoint(point, relativeTo,
+-- relativePoint): stored as the five-value anchor GetPoint returns.
+-- A MASK anchored to a texture that has not been placed yet gets no
+-- rectangle, and this client does not go back and give it one when the
+-- texture is anchored afterwards: the masked texture then draws only where
+-- that empty mask is, which looks like a sliver of the art in one corner.
+-- Nothing throws, so the order is recorded here or no test can see it.
+local kitSetPoint = Methods.SetPoint
+function Methods.SetPoint(w, point, rel, relPoint, x, y)
+    if type(rel) == "number" then
+        rel, relPoint, x, y = nil, nil, rel, relPoint
+    end
+    if w._isMask and type(rel) == "table" and rel._type == "Texture"
+        and not (rel._points and #rel._points > 0) then
+        w._anchoredBeforePlaced = true
+    end
+    return kitSetPoint(w, point, rel, relPoint, x, y)
+end
+-- Recorded as the two corners it really is: a region anchored this way has
+-- a size, and a test that cannot derive it silently skips the region instead
+-- of checking it. (The kit records { "ALL", rel }.)
+function Methods.SetAllPoints(w, rel)
+    w._points = { { "TOPLEFT", rel, "TOPLEFT", 0, 0 },
+                  { "BOTTOMRIGHT", rel, "BOTTOMRIGHT", 0, 0 } }
+end
+
+-- BackdropTemplate's methods: Lua in FrameXML, not the C widget API, so the
+-- build's method lists can't see them. The window is built with the template.
+Kit.allowMethods({
+    ["Frame:SetBackdrop"] = "BackdropTemplateMixin (Blizzard_SharedXML/Backdrop.lua:336)",
+    ["Frame:GetBackdrop"] = "BackdropTemplateMixin (Blizzard_SharedXML/Backdrop.lua:354)",
+    ["Frame:SetBackdropColor"] = "BackdropTemplateMixin (Blizzard_SharedXML/Backdrop.lua:406)",
+    ["Frame:SetBackdropBorderColor"] = "BackdropTemplateMixin (Blizzard_SharedXML/Backdrop.lua:429)",
+})
+-- Recorded, including the nil that CLEARS it: a backdrop left under the glass
+-- shows through as a dark square-cornered rectangle.
+function Methods.SetBackdrop(w, backdrop) w._backdrop = backdrop end
+function Methods.GetBackdrop(w) return w._backdrop end
+
+-- What each template brings with it. A template's text is a FontString with
+-- the template's font, so SetText works on it as in game.
+local function templateText(w, key, name)
+    local fs = WoW.addRegion(w, WoW.newWidget("FontString", w, name))
+    fs._fontTemplate = "GameFontHighlight"
+    w[key] = fs
+end
 local TEMPLATE_REGIONS = {
     UICheckButtonTemplate               = { "text" },
     InterfaceOptionsCheckButtonTemplate = { "Text" },
@@ -734,25 +602,27 @@ local TEMPLATE_REGIONS = {
     UISliderTemplateWithLabels          = { "Low", "High", "Text" },
     MinimalSliderTemplate               = { "Low", "High" },
     UIPanelButtonTemplate               = { "Text" },
-    UIPanelScrollFrameTemplate          = { "ScrollBar" },
-    ScrollFrameTemplate                 = { "ScrollBar" },
 }
-
-function CreateFrame(frameType, name, parent, template)
-    local f = makeFrame(name, parent, template)
-    if name then _G[name] = f end
-    f._type = frameType
-    f._template = template
-    local regions = template and TEMPLATE_REGIONS[template]
-    if regions then
-        for _, key in ipairs(regions) do
-            f[key] = makeFrame(name and (name .. key) or nil)
-        end
+for template, keys in pairs(TEMPLATE_REGIONS) do
+    WoW.templates[template] = function(w)
+        for _, key in ipairs(keys) do templateText(w, key, w._name and (w._name .. key) or nil) end
     end
-    return f
+end
+-- ScrollFrameTemplate's ScrollBar, the way the kit builds
+-- UIPanelScrollFrameTemplate's.
+WoW.templates.ScrollFrameTemplate = function(sf)
+    sf.ScrollBar = CreateFrame("Slider", sf._name and (sf._name .. "ScrollBar") or nil, sf)
 end
 
-UIParent = nil            -- assigned below, after CreateFrame exists
+-- A plain frame (name, parent, template), for tests that need one.
+function WoW.makeFrame(name, parent, template)
+    return CreateFrame("Frame", name, parent, template)
+end
+
+------------------------------------------------------------
+-- Globals the addon expects at load
+------------------------------------------------------------
+
 UNKNOWNOBJECT = "Unknown"
 BOOKTYPE_SPELL = "spell"
 
@@ -760,43 +630,49 @@ RAID_CLASS_COLORS = setmetatable({}, {
     __index = function() return { r = 0.5, g = 0.5, b = 0.5 } end,
 })
 
-DEFAULT_CHAT_FRAME = {
-    AddMessage = function(_, msg) WoW.messages[#WoW.messages + 1] = msg end,
-}
+-- The chat frame. What it is told goes to WoW.messages, and each line is
+-- checked for a stray "|" the way the kit's print is (done() fails on one).
+DEFAULT_CHAT_FRAME = CreateFrame("ScrollingMessageFrame", nil, UIParent)
+function Methods.AddMessage(_, msg)
+    msg = tostring(msg)
+    if WoW.StrayPipe(msg) then WoW.strays[#WoW.strays + 1] = msg end
+    WoW.messages[#WoW.messages + 1] = msg
+end
 
-GameTooltip = makeFrame("GameTooltip")
+GameTooltip = CreateFrame("GameTooltip", "GameTooltip", UIParent)
+GameTooltip:Hide()
 -- Records what was put in it, so a test can assert what the player is told.
 -- Declared on this client (GameTooltip:GetOwner, 70009 dump). Modelled
 -- because GameTooltip is shared: an addon that redraws a tooltip it opened
--- earlier has to check it still owns it, and a stub that could not answer
--- would make that check untestable.
-GameTooltip.GetOwner = function(self) return self._owner end
-
-GameTooltip.SetOwner = function(self, owner, anchor, xOff, yOff)
-    self._owner, self._anchor, self._lines = owner, anchor, {}
+-- earlier has to check it still owns it.
+function Methods.GetOwner(tt) return tt._owner end
+function Methods.SetOwner(tt, owner, anchor, xOff, yOff)
+    tt._owner, tt._anchor, tt._lines = owner, anchor, {}
     -- The offsets too: ANCHOR_RIGHT measures from the OWNER, and an owner
     -- inset inside a panel puts the tooltip on top of that panel unless the
     -- caller pushes it clear.
-    self._anchorOffset = { xOff or 0, yOff or 0 }
-    return self
+    tt._anchorOffset = { xOff or 0, yOff or 0 }
 end
 -- The colour is kept, not discarded. It was the only thing carrying an item's
 -- quality to the player, and with it thrown away the argument order could be
 -- shuffled - or the colour dropped entirely - and every test stayed green.
-GameTooltip.SetText = function(self, text, r, g, b)
-    self._lines = { text }
-    self._colours = { { r, g, b } }
-    return self
+local kitSetText = Methods.SetText
+function Methods.SetText(w, text, r, g, b, ...)
+    if w._type == "GameTooltip" then
+        w._lines = { text }
+        w._colours = { { r, g, b } }
+        return
+    end
+    return kitSetText(w, text, r, g, b, ...)
 end
-GameTooltip.AddLine = function(self, text, r, g, b)
-    self._lines = self._lines or {}
-    self._lines[#self._lines + 1] = text
-    self._colours = self._colours or {}
-    self._colours[#self._lines] = { r, g, b }
-    return self
+function Methods.AddLine(tt, text, r, g, b)
+    tt._lines = tt._lines or {}
+    tt._lines[#tt._lines + 1] = text
+    tt._colours = tt._colours or {}
+    tt._colours[#tt._lines] = { r, g, b }
 end
-GameTooltip.AddDoubleLine = function(self, left, right)
-    return GameTooltip.AddLine(self, tostring(left) .. "  " .. tostring(right))
+function Methods.AddDoubleLine(tt, left, right)
+    return Methods.AddLine(tt, tostring(left) .. "  " .. tostring(right))
 end
 function WoW.clearTooltip()
     GameTooltip:Hide()
@@ -829,16 +705,6 @@ Settings = {
     OpenToCategory = function(id) WoW.settingsOpenedTo = id end,
 }
 
-C_Timer = {
-    -- Scheduled against the virtual clock, so a timer left over from an
-    -- earlier action can still be pending while a later one is measured.
-    After = function(delay, fn)
-        WoW.timers[#WoW.timers + 1] = { at = WoW.time + (tonumber(delay) or 0), fn = fn }
-    end,
-    NewTimer  = function() return { Cancel = function() end } end,
-    NewTicker = function() return { Cancel = function() end } end,
-}
-
 Enum = {
     SpellBookSpellBank = { Player = 0, Pet = 1 },
     -- The reagent bag sits past the ordinary 0..NUM_BAG_SLOTS range.
@@ -849,25 +715,10 @@ WOW_PROJECT_MAINLINE = 1
 WOW_PROJECT_ID = 1
 NUM_BAG_SLOTS = 4                -- measured on this client
 
-function GetTime() return WoW.time end
-function GetLocale() return WoW.locale end
 function GetBuildInfo() return "1.60.1", WoW.build, "Oct  9 2026", 16001 end
-function InCombatLockdown() return WoW.inCombat end
 -- NOT defined on purpose: MouseIsOver does not exist on this client. The stub
 -- must model the client's absences, not just its presences - defining it here
 -- is what let a call to it survive into a shipped build.
--- Real behaviour, not a no-op: Glass.Bar hooks SetHeight and SetFrameLevel to
--- keep its overlay in step, and a stub that dropped the hook would hide a bar
--- whose shading stopped following it.
-function hooksecurefunc(target, name, hook)
-    if type(target) == "string" then target, name, hook = _G, target, name end
-    local original = target[name]
-    target[name] = function(...)
-        local result = original and original(...)
-        hook(...)
-        return result
-    end
-end
 
 function CreateColor(r, g, b, a)
     return { r = r, g = g, b = b, a = a,
@@ -875,7 +726,6 @@ function CreateColor(r, g, b, a)
 end
 
 function strtrim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
-function strmatch(s, pattern) return string.match(s, pattern) end
 -- The real strsplit KEEPS empty fields: strsplit("-", "a--b") is "a", "", "b",
 -- and a trailing separator yields a trailing "". A gmatch over "[^sep]+" drops
 -- them, which turns a missing field into a shifted one - the kind of bug a
@@ -1214,10 +1064,6 @@ function BuyMerchantItem(index, quantity)
 end
 
 ------------------------------------------------------------
-
-UIParent = makeFrame("UIParent")
-
-------------------------------------------------------------
 -- Strict globals
 --
 -- Everything above is stubbed because it was *verified present* on the live
@@ -1227,9 +1073,9 @@ UIParent = makeFrame("UIParent")
 -- exactly that: still called, nil on this client, and it only surfaced as a
 -- Lua error on mouseover in game.
 --
--- Reading an unstubbed global now fails the test run. To add one: confirm it
--- exists with Tools/PriestlyProbe and stub it, or list it here as deliberately
--- absent.
+-- Reading an unstubbed global fails the test run (the kit's Kit.strict). To
+-- add one: confirm it exists with Tools/PriestlyProbe and stub it, or list it
+-- here as deliberately absent.
 ------------------------------------------------------------
 
 local KNOWN_ABSENT = {
@@ -1242,36 +1088,36 @@ local KNOWN_ABSENT = {
     GetNumTalentTabs = true, GetTalentTabInfo = true, IsSpellKnown = true,
     GetAddOnMetadata = true, InterfaceOptions_AddCategory = true,
     InterfaceOptionsFrame_OpenToCategory = true,
-    loadstring_untainted = true, SecureHandlerWrapScript = true,
+    loadstring_untainted = true,
     -- LibStub itself, and the host table a consuming addon would own.
     LibStub = true, LibGroupBuffs = true,
     -- Lua/runtime names the test files themselves touch.
     arg = true, jit = true,
 }
 
+-- Installs strict globals and forgets the method calls made so far (the
+-- kit's Kit.strict): the stub's own, while it was being built. A host whose
+-- layer builds widgets calls it again at its end.
 function WoW.strictGlobals()
-    setmetatable(_G, {
-        __index = function(_, k)
-            if KNOWN_ABSENT[k] then return nil end
-            error("read of undefined global '" .. tostring(k) ..
-                "' - stub it (only if the probe confirms it exists) or add it to " ..
-                "KNOWN_ABSENT in tests/wow_stubs.lua", 2)
-        end,
-    })
+    Kit.strict(KNOWN_ABSENT)
 end
 
 -- Consulted when a global is READ, so a host can call this after this file
--- has installed strictGlobals - which is the only order available to it.
+-- has installed strict globals - which is the only order available to it.
 function WoW.allowGlobal(...)
     for i = 1, select("#", ...) do KNOWN_ABSENT[(select(i, ...))] = true end
 end
 
--- The same escape hatch for widget methods, for a host that legitimately
--- calls one this library does not. Confirm it in the build dump first: the
--- point of the list is that it is the client's surface, not a way to quiet a
--- failing test.
+-- A widget method the stub models as doing nothing, for a host that calls
+-- one this library does not. Confirm it in the build dump first: the kit's
+-- methods check (Kit.checkMethods) still fails on a method the pinned build
+-- lacks on that widget type. A method the build has needs no allowing: it
+-- already reads as one.
 function WoW.allowMethod(...)
-    for i = 1, select("#", ...) do KNOWN_METHODS[(select(i, ...))] = true end
+    for i = 1, select("#", ...) do
+        local name = select(i, ...)
+        if not Methods[name] then Methods[name] = function() end end
+    end
 end
 
 WoW.reset()

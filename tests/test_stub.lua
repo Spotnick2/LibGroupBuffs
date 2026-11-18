@@ -231,9 +231,9 @@ WoW.makeFrame("StubTestSecure", parent, "SecureActionButtonTemplate")
 local plain = WoW.makeFrame("StubTestPlain")
 WoW.inCombat = true
 parent:SetFrameStrata("HIGH")                 -- not in PROTECTED_METHODS
-parent:SetShown(false)
+parent:SetShown(false)                        -- a hide: the kit refuses it too
 parent:Hide()                                 -- measured refused: refused AND recorded
-parent:SetMovable(true)                       -- served by the catch-all (KNOWN_METHODS)
+parent:SetMovable(true)                       -- in the build, modelled as doing nothing
 parent:SetScript("OnUpdate", function() end) -- a handler is not frame state
 plain:SetFrameStrata("HIGH")
 plain:Hide()
@@ -242,7 +242,10 @@ for _, t in ipairs(WoW.combatTouches) do touched[#touched + 1] = t.method end
 table.sort(touched)
 H.eq(table.concat(touched, ","), "Hide,SetFrameStrata,SetMovable,SetShown",
     "every state write to the protected frame is recorded, whether or not the client refuses it")
-H.eq(#WoW.blockedCalls, 1, "while only the measured refusal is a blocked call")
+-- Two: Hide, measured refused, and SetShown(false), which WowTestKit refuses
+-- as the hide it is (its WoW.PROTECTED). The pre-kit stub let SetShown
+-- through as unmeasured.
+H.eq(#WoW.blockedCalls, 2, "while only the refusals are blocked calls (Hide, and SetShown as a hide)")
 H.eq(parent:GetFrameStrata(), "HIGH", "an unmeasured method still takes effect in the stub")
 H.check(not plain:IsShown(), "and a plain frame is free to change")
 WoW.inCombat = false
@@ -280,10 +283,13 @@ H.check(not pcall(function() return strict:NoSuchWidgetMethod() end),
 local _, why = pcall(function() return strict:NoSuchWidgetMethod() end)
 H.check(tostring(why):find("NoSuchWidgetMethod", 1, true),
     "and the message names it: " .. tostring(why))
-H.check(tostring(why):find("forever%-api"),
-    "and says where to check whether this client has it")
+-- The kit reads a method the pinned build lacks on that widget type as nil,
+-- so the call fails where it is made; its methods check names the build.
+H.check(not Kit.data("widgetMethods")["Frame:NoSuchWidgetMethod"],
+    "because the pinned build's method list has no such method on a Frame")
 
--- The ones it does define still work, and so do the deliberate no-ops.
+-- The ones it does define still work, and so do the build's methods it models
+-- as doing nothing.
 H.check(pcall(function() return strict:SetMovable(true) end),
     "a method this client has, modelled as doing nothing, is fine")
 H.check(pcall(function() return strict:Show() end), "and one the stub implements")

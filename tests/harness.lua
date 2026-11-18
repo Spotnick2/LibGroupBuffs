@@ -1,32 +1,23 @@
 ------------------------------------------------------------
--- harness.lua - tiny assertion harness + addon loader.
+-- harness.lua - the library loader and sample hosts, over WowTestKit's
+-- assertions (check / eq / done are the kit's globals; H.check, H.eq and
+-- H.done are the same functions, under the names these tests use).
 --
 --     local H = dofile("tests/harness.lua")
---     H.loadAddon()
+--     H.loadLibrary()
 --     H.eq(actual, expected, "what this proves")
 --     H.done("test_thing")
 --
 -- Run from the repo root so the relative paths resolve.
 ------------------------------------------------------------
 
-local H = { run = 0, failures = 0 }
+local H = {}
 
-function H.check(cond, msg)
-    H.run = H.run + 1
-    if not cond then
-        H.failures = H.failures + 1
-        print("  FAIL: " .. (msg or "assertion failed"))
-    end
-end
-
-function H.eq(a, b, msg)
-    H.check(a == b, (msg or "values differ") ..
-        "  (expected " .. tostring(b) .. ", got " .. tostring(a) .. ")")
-end
+H.check, H.eq = check, eq
 
 function H.near(a, b, tol, msg)
     tol = tol or 0.001
-    H.check(type(a) == "number" and math.abs(a - b) <= tol,
+    check(type(a) == "number" and math.abs(a - b) <= tol,
         (msg or "values differ") .. "  (expected ~" .. tostring(b) .. ", got " .. tostring(a) .. ")")
 end
 
@@ -308,12 +299,8 @@ function H.secrecy(on)
     WoW.inCombat = on and true or false
 end
 
-function H.done(name)
-    if H.failures > 0 then
-        print(string.format("%s: %d/%d FAILED", name, H.failures, H.run))
-        os.exit(1)
-    end
-    print(string.format("%s: %d tests passed", name, H.run))
-end
+-- Prints "<name>: N passed, M failed" and exits (the kit's done, which also
+-- fails on a stray "|" in any printed line).
+H.done = done
 
 return H

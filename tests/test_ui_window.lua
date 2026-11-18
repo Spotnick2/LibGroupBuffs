@@ -1251,7 +1251,7 @@ H.eq(legacyRow.bg._colorTexture[4], 0,
 -- see them at all. GetWidth() would answer with the stub's stand-in and the
 -- assertion below would be comparing two constants.
 local function Box(r)
-    if r._width and r._height then return r._width, r._height end
+    if r._sizedW and r._sizedH then return r._width, r._height end   -- a size was set
     local pts = r._points
     if not pts or #pts < 2 then return nil end
     -- Which corner is which, rather than which call came first: the sign of an
