@@ -40,7 +40,8 @@
 -- A HOST NOT ON THE KIT YET (no tests/kit.pin in its root) gets the frozen
 -- pre-kit stub, tests/wow_stubs_legacy.lua, unchanged: its local runs against
 -- this checkout keep working until it moves. Remove the legacy file once
--- Priestly, Wildly, Magely and Buffy are all on the kit.
+-- every host is on the kit: Priestly, Wildly, Magely, Buffy and
+-- ForeverCombatAssistant (which loads this stub for its tests only).
 ------------------------------------------------------------
 
 local pinFile = io.open("tests/kit.pin", "rb")

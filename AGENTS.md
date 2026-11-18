@@ -377,8 +377,8 @@ and the like name those sections.
     seam and the returns hosts read. The file starts with `dofile("tests/kit.lua")` relative to
     the current directory, so a host runs it on **its own** `tests/kit.lua` and `kit.pin` (its kit
     commit and build, never this library's). A host with no `tests/kit.pin` yet gets
-    `tests/wow_stubs_legacy.lua`, the frozen pre-kit stub, unchanged; delete it once Priestly,
-    Wildly, Magely and Buffy are all on the kit.
+    `tests/wow_stubs_legacy.lua`, the frozen pre-kit stub, unchanged; delete it once every host is on
+    the kit: Priestly, Wildly, Magely, Buffy and ForeverCombatAssistant (tests only).
     `WoW.build`'s default is the **installed client's** build (`.build.info` in the World of
     Warcraft root names it without launching the game), never a host's `measuredOnBuild`: hosts
     re-probe at different times, and one can be sitting on an older measured build deliberately,
