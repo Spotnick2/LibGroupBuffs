@@ -324,7 +324,7 @@ WoW.PROTECTED.SetAttribute = nil
 -- a strict guess, and the window touches none of them in combat anyway
 -- (combatTouches).
 WoW.PROTECTED.SetParent = true
--- WowTestKit #83: the kit lists the other four from 38c8a6c on. A host still
+-- WowTestKit #83: the kit lists the other four from db287d2 on. A host still
 -- pinned before it gets them here; drop this once every host has bumped.
 if not WoW.PROTECTED.SetFrameStrata then
     WoW.PROTECTED.SetScale, WoW.PROTECTED.SetFrameStrata = true, true
