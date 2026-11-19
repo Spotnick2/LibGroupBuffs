@@ -230,8 +230,9 @@ local parent = WoW.makeFrame("StubTestParent")
 WoW.makeFrame("StubTestSecure", parent, "SecureActionButtonTemplate")
 local plain = WoW.makeFrame("StubTestPlain")
 WoW.inCombat = true
-parent:SetFrameStrata("HIGH")                 -- not in PROTECTED_METHODS
-parent:SetShown(false)                        -- a hide: the kit refuses it too
+parent:SetFrameStrata("HIGH")                 -- refused (70959 sweep, #82)
+parent:SetAlpha(0.5)                          -- allowed (the same sweep)
+parent:SetShown(false)                        -- a hide: refused (the same sweep)
 parent:Hide()                                 -- measured refused: refused AND recorded
 parent:SetMovable(true)                       -- in the build, modelled as doing nothing
 parent:SetScript("OnUpdate", function() end) -- a handler is not frame state
@@ -240,13 +241,13 @@ plain:Hide()
 local touched = {}
 for _, t in ipairs(WoW.combatTouches) do touched[#touched + 1] = t.method end
 table.sort(touched)
-H.eq(table.concat(touched, ","), "Hide,SetFrameStrata,SetMovable,SetShown",
+H.eq(table.concat(touched, ","), "Hide,SetAlpha,SetFrameStrata,SetMovable,SetShown",
     "every state write to the protected frame is recorded, whether or not the client refuses it")
--- Two: Hide, measured refused, and SetShown(false), which WowTestKit refuses
--- as the hide it is (its WoW.PROTECTED). The pre-kit stub let SetShown
--- through as unmeasured.
-H.eq(#WoW.blockedCalls, 2, "while only the refusals are blocked calls (Hide, and SetShown as a hide)")
-H.eq(parent:GetFrameStrata(), "HIGH", "an unmeasured method still takes effect in the stub")
+-- Three, all measured on 70959 (#82): Hide, SetShown(false) and
+-- SetFrameStrata. The pre-kit stub let the last two through as unmeasured.
+H.eq(#WoW.blockedCalls, 3, "while only the refusals are blocked calls (Hide, SetShown, SetFrameStrata)")
+H.eq(parent:GetAlpha(), 0.5, "a write the client allows still takes effect in the stub")
+H.eq(parent:GetFrameStrata(), "MEDIUM", "and a refused one does not")
 H.check(not plain:IsShown(), "and a plain frame is free to change")
 WoW.inCombat = false
 WoW.combatTouches = {}

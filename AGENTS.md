@@ -187,8 +187,9 @@ and the like name those sections.
     `onCloseDeferred`, `onMinimizeDeferred`, `onTick`, `onAppearance` and `setPos(nil)` all fire
     while the fight is on, and `ui:MainFrame()` hands out the protected frame with no guard of
     its own. A host must never hide, move, resize, rescale or re-anchor the main frame or the
-    popover from a hook or a slash command: the client refuses the measured ones silently (hide,
-    move, re-anchor, unclamp, stop-drag; resize and rescale are unmeasured), and the
+    popover from a hook or a slash command: the client refuses them silently (on 70959: show,
+    hide, `SetShown`, move, re-anchor, unclamp, resize, rescale, strata, frame level and
+    `EnableMouse`; `SetAlpha` is allowed; Client Rules below), and the
     `ADDON_ACTION_BLOCKED` names whichever addon's taint the call path carries, which from a
     host's own hook is the host (Wildly #42 is that message from Wildly's pre-library window).
     Read from `MainFrame()` freely; what a host wants of the window it asks for through
@@ -376,8 +377,8 @@ and the like name those sections.
     seam and the returns hosts read. The file starts with `dofile("tests/kit.lua")` relative to
     the current directory, so a host runs it on **its own** `tests/kit.lua` and `kit.pin` (its kit
     commit and build, never this library's). A host with no `tests/kit.pin` yet gets
-    `tests/wow_stubs_legacy.lua`, the frozen pre-kit stub, unchanged; delete it once Priestly,
-    Wildly, Magely and Buffy are all on the kit.
+    `tests/wow_stubs_legacy.lua`, the frozen pre-kit stub, unchanged; delete it once every host is on
+    the kit: Priestly, Wildly, Magely, Buffy and ForeverCombatAssistant (tests only).
     `WoW.build`'s default is the **installed client's** build (`.build.info` in the World of
     Warcraft root names it without launching the game), never a host's `measuredOnBuild`: hosts
     re-probe at different times, and one can be sitting on an older measured build deliberately,
@@ -453,6 +454,20 @@ Full notes in the consuming addon's `docs/FOREVER-PROBE.md`. The ones that bite:
   later is not enough — every touch of client data in combat belongs *inside* the same `pcall`.
 - **`C_Spell.GetSpellInfo(name)` resolves only spells the player knows.** By ID it always works.
   Resolve names *from* IDs, never the reverse.
+- **By ID it works at login too, even from a cold cache**, and `C_Spell.IsSpellDataCached` is not
+  a "no name yet" signal. After a full relaunch all 13 consumers' buff IDs had names at file
+  scope, `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD`, while the flag read false for 12 of them
+  (`/fp steps gb spells`, 70959, enUS, #74). So `RefreshSpells` needs no data request (the r33
+  audit's C1). Another language is unmeasured (Magely#48). Porting guide §3, "Spell names
+  resolve at login".
+- **What a protected frame refuses in combat, measured** (`/fp steps gb sweep`, 70959, #74; one
+  `ADDON_ACTION_BLOCKED` per refusal). On the window, which parents secure buttons, the client
+  refuses `SetScale`, `SetWidth`, `SetHeight`, `SetSize`, `SetFrameStrata`, `SetFrameLevel`,
+  `SetShown`, `EnableMouse`, `Hide`, `Show`, `ClearAllPoints`, `SetPoint` and
+  `SetClampedToScreen`. On a secure row it refuses `SetAttribute` and `SetWidth`. It **allows**
+  `SetAlpha`, any region's show and hide, and LibGlass `SetWash`. `SetParent` is unmeasured. The
+  stub refuses exactly the measured list, plus `SetParent` as a strict guess. Porting guide §3,
+  "Secure click-casting works".
 - **`UnitName` returns only the first name** for anyone but the player: characters have surnames,
   and the surname arrives where the realm normally sits. Use `API.UnitDisplayName`.
 - **`GetInstanceInfo` returns the continent outdoors**, not an empty string.
