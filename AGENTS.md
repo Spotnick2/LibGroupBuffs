@@ -503,7 +503,12 @@ at the commit and client build `tests\kit.pin` names. `tests\run.ps1` puts that 
 `%LOCALAPPDATA%\WowTestKit\<sha>` and hands off to the kit's runner; CI fetches it with
 `tests\fetch_kit.sh`. `tests\kit.lua`, `kit.ps1` and `fetch_kit.sh` are the kit's bootstrap
 copies: never edit them here. A kit need is an issue on the kit, worked around in
-`tests\wow_stubs.lua` with a `-- WowTestKit #N:` comment meanwhile. `tests\run.ps1 -KitDev`
+`tests\wow_stubs.lua` with a `-- WowTestKit #N:` comment meanwhile. The stub runs under each
+**host's** pin, not this repo's, so when the kit takes a workaround over, the stub uses the kit's
+version where the kit has it and keeps its own as a fallback (still under its `-- WowTestKit #N:`
+comment) until every host's pin is past that kit commit; then a follow-up drops the fallbacks.
+Run the hosts' suites against the branch (on their pins) and this suite on the old pin too.
+`tests\run.ps1 -KitDev`
 runs against the `..\WowTestKit` working copy instead of the pin. The kit's build (`build=` in
 the pin) is which API lists the methods and events are checked against; `WoW.build`, what
 `GetBuildInfo` reports, is the stub's own (above). `tests/test_methods.lua` checks every widget

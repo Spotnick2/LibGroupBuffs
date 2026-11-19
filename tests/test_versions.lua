@@ -563,6 +563,13 @@ WoW.flushTimers(1)
 -- Every texture anchored where the divider goes, at ANY header height this
 -- library has shipped: r19 made the header 30px, so a line r10 drew under a
 -- 24px one has to be found where r10 put it AND where it ends up.
+-- What a frame has drawn: its regions and its masks, which the kit keeps
+-- in their own list (WowTestKit #82). A count of regions alone would miss a
+-- mask added where nothing should be.
+local function drawn(frame)
+    return select("#", frame:GetRegions()) + #(frame._maskTextures or {})
+end
+
 local DIV_YS = { -26, -32 }
 local function dividers(pop)
     local found = {}
@@ -592,7 +599,7 @@ H.eq(r10Host.ui.pop._hdiv, nil, "with a divider this copy holds no reference to"
 local r10Lines = dividers(r10Host.ui.pop)
 H.eq(#r10Lines, 1, "r10 drew exactly one divider")
 local r10Line = r10Lines[1]
-local regionsBefore = select("#", r10Host.ui.pop:GetRegions())
+local regionsBefore = drawn(r10Host.ui.pop)
 
 load(CURRENT_FILES, "current")
 H.eq(activeMinor(), CURRENT, "the current copy took over")
@@ -603,7 +610,7 @@ WoW.inCombat = true
 local blockedBefore = #WoW.blockedCalls
 H.check(pcall(r10Host.ui.ApplyAppearance, r10Host.ui), "colouring an r10 window in combat does not throw")
 H.eq(r10Host.ui.pop._hdiv, r10Line, "the newer copy adopts r10's own divider")
-H.eq(select("#", r10Host.ui.pop:GetRegions()), regionsBefore, "and adds no region to the protected popover")
+H.eq(drawn(r10Host.ui.pop), regionsBefore, "and adds no region to the protected popover")
 H.eq(#WoW.blockedCalls, blockedBefore, "with no call the client would refuse")
 H.eq(r10Line._colorTexture and r10Line._colorTexture[1], 0.95,
     "and r10's line takes the colour the addon asked for, not silently the old one")
@@ -711,9 +718,9 @@ H.check(oldBtn.countTxt:GetFont() == "Fonts" .. string.char(92) .. "ARIALN.TTF",
     "and its count is restyled")
 
 -- Once, not on every rebuild: this walks every row and popover row.
-local builtBefore = select("#", oldRow:GetRegions())
+local builtBefore = drawn(oldRow)
 oldHost.ui:Update()
-H.eq(select("#", oldRow:GetRegions()), builtBefore,
+H.eq(drawn(oldRow), builtBefore,
     "a second rebuild adopts nothing further - the pass runs once")
 
 -- In combat it must not touch a thing: rows are secure buttons and resizing
