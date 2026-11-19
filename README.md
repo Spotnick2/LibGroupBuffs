@@ -232,8 +232,8 @@ where a stub more forgiving than the client let broken code pass a green suite.
 
 Your addon's tests can use that stub rather than keeping a copy, so the absences and the combat
 refusals are measured once. It loads WowTestKit through **your** `tests/kit.lua` and `tests/kit.pin`
-(the kit's bootstrap, from your repo's root); without a `tests/kit.pin` it falls back to the frozen
-pre-kit stub, `tests/wow_stubs_legacy.lua`, until you move:
+(the kit's bootstrap, from your repo's root), so adopt the kit first: without a `tests/kit.pin`
+it stops with an error. Then:
 
 ```lua
 dofile(libraryRoot .. "/tests/wow_stubs.lua")
