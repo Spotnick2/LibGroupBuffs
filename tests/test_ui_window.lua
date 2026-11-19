@@ -1397,9 +1397,18 @@ ui:UpdatePopover(ui.rows[1], ui.rows[1]._members, ui.rows[1]._def)
 local walked, both, early = 0, {}, {}
 local sliced, crushed = 0, {}
 
+-- A frame's regions and then its masks: the kit keeps masks in their own
+-- list (WowTestKit #82), and a walk that missed them would pass on nothing.
+local function regionsAndMasks(frame)
+    local all = {}
+    for _, r in ipairs(frame._regions or {}) do all[#all + 1] = r end
+    for _, m in ipairs(frame._maskTextures or {}) do all[#all + 1] = m end
+    return all
+end
+
 local function walk(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
-    for _, r in ipairs(frame._regions or {}) do
+    for _, r in ipairs(regionsAndMasks(frame)) do
         walked = walked + 1
         if r._masks and #r._masks > 0 and r._texCoord then
             both[#both + 1] = name
@@ -1455,7 +1464,7 @@ local MASK_ASSET_PX = 32
 local slicedSmall = {}
 local function checkMasks(frame, name, depth)
     if depth > 4 or type(frame) ~= "table" then return end
-    for _, r in ipairs(frame._regions or {}) do
+    for _, r in ipairs(regionsAndMasks(frame)) do
         if r._isMask and r._slice then
             local w, h = Box(r)
             if w and h and math.max(w, h) < MASK_ASSET_PX then

@@ -139,20 +139,28 @@ table.insert(WoW.onReset, function()
     WoW.SetUnit("player", WoW.playerDefaults)
 end)
 
--- WowTestKit #80: the kit's WoW.reset discards every frame made so far
--- (events and OnUpdate no longer reach them, and each leaves its parent's
--- children). These suites load the library or the host ONCE, at the top of
--- the file, and reset the client's state between sections: the frames built
--- at load must survive, or WoW.dispatch finds nothing to fire at and a window
--- walked after a reset has lost its children. So the kit's reset runs with
--- no frames to discard, and the frames, widgets and recorded method calls
--- are kept.
+-- WoW.reset() here resets the client's STATE only. These suites load the
+-- library or the host ONCE, at the top of the file, and reset between
+-- sections: the frames built at load must survive, or WoW.dispatch finds
+-- nothing to fire at and a window walked after a reset has lost its
+-- children. So the frames, widgets and recorded method calls are kept: the
+-- kit's WoW.reset({ keepFrames = true }) (WowTestKit #80).
 local kitReset = WoW.reset
-function WoW.reset()
-    local frames, widgets, called = WoW.frames, WoW.widgets, WoW.methodsCalled
-    WoW.frames = {}
-    kitReset()
-    WoW.frames, WoW.widgets, WoW.methodsCalled = frames, widgets, called
+-- The kit has the hook list from 38c8a6c on, the commit that also brought
+-- keepFrames (#80), the hook on every call (#81) and the masks list (#82).
+local KIT_HOOKS = type(WoW.onMethodCall) == "table"
+if KIT_HOOKS then
+    function WoW.reset() return kitReset({ keepFrames = true }) end
+else
+    -- WowTestKit #80, for a host still pinned before 38c8a6c: its reset
+    -- discards every frame, so it runs with none to discard. Drop this once
+    -- every host has bumped.
+    function WoW.reset()
+        local frames, widgets, called = WoW.frames, WoW.widgets, WoW.methodsCalled
+        WoW.frames = {}
+        kitReset()
+        WoW.frames, WoW.widgets, WoW.methodsCalled = frames, widgets, called
+    end
 end
 
 -- Who "player" is, and what any unit is when a test does not say. A host sets
@@ -307,41 +315,61 @@ end
 
 -- SetAttribute is refused below, with its key and value recorded.
 WoW.PROTECTED.SetAttribute = nil
--- Beyond the kit's list, on a window that parents secure buttons (the
--- owner's /fp sweep in combat, build 70959): SetScale is REFUSED, as are
--- SetShown and the rest the kit already refuses. SetAlpha is ALLOWED: it took
+-- On a window that parents secure buttons (the owner's /fp sweep in combat,
+-- build 70959), SetScale, SetFrameStrata, SetFrameLevel and EnableMouse are
+-- REFUSED (ADDON_ACTION_BLOCKED for each; #82, porting guide section 3), as
+-- are SetShown and the rest of the kit's list. SetAlpha is ALLOWED: it took
 -- effect with no ADDON_ACTION_BLOCKED, so it is not refused here (the pre-kit
 -- stub refused it, wrongly). SetParent is still unmeasured: refused here as
 -- a strict guess, and the window touches none of them in combat anyway
 -- (combatTouches).
-WoW.PROTECTED.SetScale, WoW.PROTECTED.SetParent = true, true
--- WowTestKit #83: SetFrameStrata, SetFrameLevel and EnableMouse are refused
--- too, measured in the same sweep (ADDON_ACTION_BLOCKED for each; #82, porting
--- guide section 3). The kit's list lacks them; drop this line (and SetScale
--- above) once the pin moves to a kit commit that has them.
-WoW.PROTECTED.SetFrameStrata, WoW.PROTECTED.SetFrameLevel, WoW.PROTECTED.EnableMouse = true, true, true
+WoW.PROTECTED.SetParent = true
+-- WowTestKit #83: the kit lists the other four from db287d2 on. A host still
+-- pinned before it gets them here; drop this once every host has bumped.
+if not WoW.PROTECTED.SetFrameStrata then
+    WoW.PROTECTED.SetScale, WoW.PROTECTED.SetFrameStrata = true, true
+    WoW.PROTECTED.SetFrameLevel, WoW.PROTECTED.EnableMouse = true, true
+end
 
--- WowTestKit #81: the kit has no hook on every call to a widget, which
--- combatTouches needs. Its dispatch asks WoW.PROTECTED[method] and then
--- WoW.refused(frame, method) before every call, so a frame-state method
--- reads as "ask" here and the wrapper below records the touch, then refuses
--- only what the kit's own list refuses.
-local REFUSED = WoW.PROTECTED
-setmetatable(REFUSED, {
-    __index = function(_, k)
-        if type(k) == "string" and TOUCHES_FRAME_STATE(k) then return "touch" end
-    end,
-})
-local kitRefused = WoW.refused
-function WoW.refused(w, what)
-    if WoW.combat and WoW.isProtected(w) then
+-- combatTouches and blockedCalls are filled by the kit's hook on every widget
+-- call (WowTestKit #81), which runs before its combat refusal: a frame-state
+-- write, or a call the kit's list refuses, to a protected frame in combat is
+-- a touch, and the refused ones are blocked calls too. WoW.PROTECTED and
+-- WoW.refused stay the kit's.
+if KIT_HOOKS then
+    table.insert(WoW.onMethodCall, function(w, what)
+        if not (WoW.combat and WoW.isProtected(w)) then return end
+        local refusedHere = WoW.PROTECTED[what]
+        if not (refusedHere or TOUCHES_FRAME_STATE(what)) then return end
         WoW.combatTouches[#WoW.combatTouches + 1] = { frame = w, method = what }
+        if refusedHere then
+            WoW.blockedCalls[#WoW.blockedCalls + 1] = { frame = w, method = what }
+        end
+    end)
+else
+    -- WowTestKit #81, for a host still pinned before 38c8a6c: no hook, so the
+    -- kit's dispatch is used instead. It asks WoW.PROTECTED[method] and then
+    -- WoW.refused(frame, method) before every call, so a frame-state method
+    -- reads as "ask" here and the wrapper records the touch, then refuses
+    -- only what the kit's own list refuses. Drop this once every host has
+    -- bumped.
+    local REFUSED = WoW.PROTECTED
+    setmetatable(REFUSED, {
+        __index = function(_, k)
+            if type(k) == "string" and TOUCHES_FRAME_STATE(k) then return "touch" end
+        end,
+    })
+    local kitRefused = WoW.refused
+    function WoW.refused(w, what)
+        if WoW.combat and WoW.isProtected(w) then
+            WoW.combatTouches[#WoW.combatTouches + 1] = { frame = w, method = what }
+        end
+        if rawget(REFUSED, what) and kitRefused(w, what) then
+            WoW.blockedCalls[#WoW.blockedCalls + 1] = { frame = w, method = what }
+            return true
+        end
+        return false
     end
-    if rawget(REFUSED, what) and kitRefused(w, what) then
-        WoW.blockedCalls[#WoW.blockedCalls + 1] = { frame = w, method = what }
-        return true
-    end
-    return false
 end
 
 -- A write to a secure attribute under combat lockdown is refused by the
@@ -477,16 +505,18 @@ function Methods.CreateFontString(w, name, layer, template)
     return fs
 end
 function Methods.GetDrawLayer(r) return r._drawLayer, r._subLayer end
--- WowTestKit #82: the kit's CreateMaskTexture puts the mask in no
--- list, so a walk of a window's regions (tests/test_ui_window.lua: no sliced
--- mask small both ways, none anchored before its texture) would never reach
--- one and pass on nothing. Listed with the frame's regions, as before the
--- kit; whether the client's GetRegions lists masks is not measured.
+-- A frame's masks are in w._maskTextures (WowTestKit #82), not its regions:
+-- whether the client's GetRegions lists them is not measured. A test that
+-- walks a window's masks walks that list (tests/test_ui_window.lua).
 local kitCreateMaskTexture = Methods.CreateMaskTexture
 function Methods.CreateMaskTexture(w, ...)
     local m = kitCreateMaskTexture(w, ...)
     m._isMask = true
-    WoW.addRegion(w, m)
+    -- WowTestKit #82, for a host still pinned before 38c8a6c: that kit lists
+    -- a mask nowhere, so it goes in the regions, as before the kit. Drop
+    -- this once every host has bumped.
+    local listed = w._maskTextures
+    if not (listed and listed[#listed] == m) then WoW.addRegion(w, m) end
     return m
 end
 -- Whether a size was SET: the kit starts every widget at 0 x 0, so a test
