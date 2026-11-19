@@ -37,17 +37,17 @@
 -- this repo's pin; in a host, the HOST's own tests/kit.lua and kit.pin. So a
 -- host chooses its kit commit and build, never this library.
 --
--- A HOST NOT ON THE KIT YET (no tests/kit.pin in its root) gets the frozen
--- pre-kit stub, tests/wow_stubs_legacy.lua, unchanged: its local runs against
--- this checkout keep working until it moves. Remove the legacy file once
--- every host is on the kit: Priestly, Wildly, Magely, Buffy and
--- ForeverCombatAssistant (which loads this stub for its tests only).
+-- A repo with no tests/kit.pin is refused with the reason. Every host is on
+-- the kit (Priestly, Wildly, Magely, Buffy and ForeverCombatAssistant), so the
+-- frozen pre-kit fallback is gone; a new host adopts the kit first
+-- (WowTestKit's docs/ADOPTING.md).
 ------------------------------------------------------------
 
 local pinFile = io.open("tests/kit.pin", "rb")
 if not pinFile then
-    local here = (debug.getinfo(1, "S").source:match("^@(.*)[/\\][^/\\]*$") or "tests")
-    return dofile(here .. "/wow_stubs_legacy.lua")
+    error("LibGroupBuffs tests/wow_stubs.lua runs on WowTestKit: this repo has no "
+        .. "tests/kit.pin (run from the repo's root, after adopting the kit: "
+        .. "WowTestKit docs/ADOPTING.md)", 0)
 end
 pinFile:close()
 
