@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 36
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 37
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -1308,6 +1308,14 @@ function Engine.New(host)
         then
             Fail("def " .. def.id .. ": groupScope must be \"raid\", \"party\" or nil")
         end
+        -- Raid assignments (r37, the Assign section): which slot a def is,
+        -- by its snglID or assignSlot. Checked here so a typo is a load error.
+        if def.assign ~= nil and def.assign ~= "owner" and def.assign ~= "targets" then
+            Fail("def " .. def.id .. ": assign must be \"owner\", \"targets\" or nil")
+        end
+    end
+    if host.assignments ~= nil and type(host.assignments) ~= "table" then
+        Fail("assignments must be the handle GB.Assignments returned, or nil")
     end
     -- The names in a def are the host's own literals right now, so that is
     -- what their provenance is. Stamped HERE rather than left to the first
@@ -1333,6 +1341,8 @@ function Engine.New(host)
         membersFor = OptionalFunction(host, "membersFor"),
         learnDuration = OptionalFunction(host, "learnDuration"),
         learnedDuration = OptionalFunction(host, "learnedDuration"),
+        -- The raid's assignments (r37), or nil for an engine that has none.
+        assignments = host.assignments,
         -- [unitKey] = { [defId] = { exp, dur, spell, stamp } }. Per engine:
         -- def ids are only unique within one addon.
         cache = {},
@@ -1835,14 +1845,22 @@ end
 -- a row wired to a spell the character does not know is a dead click. The
 -- addon's toggle and its extra visibility rule layer on top of availability,
 -- never instead of it.
+--
+-- With assignments (r37), availability still comes first; then the raid's
+-- word replaces the addon's own: a buff assigned to me has a row whatever my
+-- toggle or mode says, one somebody else has (or an assignOnly def with no
+-- targets) has none, and anything unassigned keeps exactly the rule above.
 function Methods:ActiveDefs(groups, ord)
-    local out = {}
+    local out, assigned = {}, self.assignments
     for _, d in ipairs(self.defs) do
-        if (d.hasSingle or d.hasGroup)
-            and (not self.isBuffEnabled or self.isBuffEnabled(d.id))
-            and (not self.isVisible or self.isVisible(d, groups, ord))
-        then
-            out[#out + 1] = d
+        if d.hasSingle or d.hasGroup then
+            local rule = assigned and assigned:RowRule(d)
+            if rule == "force" or (rule == nil
+                and (not self.isBuffEnabled or self.isBuffEnabled(d.id))
+                and (not self.isVisible or self.isVisible(d, groups, ord)))
+            then
+                out[#out + 1] = d
+            end
         end
     end
     return out
@@ -1852,7 +1870,24 @@ end
 -- it (Thorns goes on tanks). Called ONCE per row; the result drives the stats,
 -- the targets, the popover and the clicks alike, so they cannot disagree. An
 -- empty list means no row. The input list is never modified.
+--
+-- A targets def with a list assigned to me (r37) covers exactly the listed
+-- players, and skips the addon's own filter: a druid in Thorns mode "self"
+-- still keeps Thorns on the non-tank the raid asked for. Pets never count.
 function Methods:MembersFor(def, members)
+    local assigned = self.assignments
+    local names = assigned and assigned:TargetNames(def)
+    if names then
+        local out = {}
+        for _, m in ipairs(members) do
+            local class = m.class
+            if not (type(class) == "string" and class:find("^PET")) then
+                local name = lib.AssignImpl.NameOf(m.unit)
+                if name and names[name] then out[#out + 1] = m end
+            end
+        end
+        return out
+    end
     if not self.membersFor then return members end
     local out = self.membersFor(def, members)
     if type(out) ~= "table" then
@@ -4269,7 +4304,17 @@ local function Rebuild(self)
     -- Priestly's "show Shadow Protection when somebody has it" walks the whole
     -- roster looking for one, immediately before these rows ask about the same
     -- members (#6).
-    local defs = preview and engine.defs or engine:ActiveDefs(groups, ord)
+    local defs
+    if preview then
+        -- Every def, as before, except those that only exist when assigned
+        -- (r37): an unassigned priest's preview has no Fear Ward row.
+        defs = {}
+        for _, d in ipairs(engine.defs) do
+            if not d.assignOnly then defs[#defs + 1] = d end
+        end
+    else
+        defs = engine:ActiveDefs(groups, ord)
+    end
     if #defs == 0 then self:Close(); return end
 
     ApplyLook(self)
@@ -4756,6 +4801,1083 @@ end
 
 end -- Visibility
 
+do -- Assign ==================================================================
+
+-- ============================================================================
+-- Raid buff assignments (#92): who casts each raid-wide buff, and who a
+-- caster keeps a single-target buff on. Shared by every host on the client and
+-- by every client in the group, whichever of the four addons each one runs.
+--
+-- WHAT IS ASSIGNED. The slot table below is protocol data, the same in every
+-- copy: a standalone Priestly must be able to draw and edit a mage's slot. A
+-- host's def opts in with `assign = "owner"` or `assign = "targets"`, and is
+-- matched to its slot by `assignSlot or snglID`. `assignOnly = true` gives a
+-- def no row until the player has targets for it (Fear Ward).
+--
+-- STATE. One record per slot, { ver, writer, value }, kept for the whole
+-- group session, clears included, so an old value can never come back.
+-- Records order by (ver, writer, value): every client keeps the same winner
+-- whatever order messages arrive in. A local edit takes
+-- max(server time, current ver + 1), so it beats everything its editor has
+-- seen, and after a /reload everything older than the current server second.
+--
+-- AN OWNER COUNTS ONLY WHILE LIVE: in the group, connected, heard from within
+-- PEER_TTL (not counted down while chat is locked down), and still able to
+-- cast the slot's spell (the group form for the raid-wide ones). Otherwise the
+-- slot acts unowned and other casters get their rows back; the record stays,
+-- so the claim resumes when the owner does.
+--
+-- PROTOCOL v1, prefix "LibGroupBuffs" on the selected group's channel (the
+-- home group if any, else the instance group; RAID, PARTY or INSTANCE_CHAT):
+--     1^H^<class>^<known spell ids, csv>^<digest>      hello
+--     1^A^<slot key>^<ver>^<writer>^<value>            one record
+-- A hello goes out on joining, on entering the world, when what the player
+-- can cast changes, to answer a new peer, and every HELLO_PERIOD. A peer whose
+-- digest differs from ours schedules ONE repair a few seconds later, which
+-- sends every record the channel has not already carried during the wait, so
+-- a joiner in a full raid is answered about once, not by everyone.
+--
+-- MEASURED (NodeRadar FOREVER-PROBE.md, porting guide): PARTY and RAID arrive
+-- in about 0.25 s, the throttle allows about 10 then 1 a second and DROPS what
+-- it refuses (result 3), 256 bytes arrive cut to 255 with no error, the
+-- sender reads "Name Surname" = GetUnitName(unit, false), and our own
+-- messages come back to us. Not measured: a raid instance, a boss fight,
+-- INSTANCE_CHAT.
+--
+-- UPGRADES. lib.assign is the client's state and keeps its identity; every
+-- frame script and timer calls lib.AssignImpl.<name> when it runs. The
+-- functions take the client as their first argument and reach the game only
+-- through its `env` (default: the real API), so the tests run several
+-- clients side by side on a simulated channel.
+--
+-- EVENTS. This section is the one exception to "events are the host's
+-- policy" (AGENTS.md): one anonymous frame, created when the first host opts
+-- in, registered through that host's instance so a refusal reaches its
+-- reporter. The library still never prints.
+-- ============================================================================
+
+local PREFIX, PROTO, SEP = "LibGroupBuffs", "1", "^"
+local MAX_BYTES = 255
+local HELLO_PERIOD, HELLO_JITTER, PEER_TTL = 60, 10, 180
+-- A version counts VER_SCALE steps per server second: max(server seconds x
+-- VER_SCALE, current + 1). Edits within one second take the next steps, so a
+-- version stays inside its second unless a slot sees VER_SCALE edits in it,
+-- and an edit made in a later second (after a /reload, say) beats every
+-- earlier one. One more than a day ahead of the server is refused, so every
+-- accepted record can still be beaten by a later edit; ~1.8e12 is an exact
+-- integer in Lua 5.1's doubles (2^53).
+local VER_SCALE, VER_AHEAD, VER_DIGITS = 1000, 86400, 16
+local BUCKET, REFILL, BACKOFF = 10, 1, 2
+local PRIO_EDIT, PRIO_HELLO, PRIO_REPAIR = 1, 2, 3
+local HOME = LE_PARTY_CATEGORY_HOME or 1
+local INSTANCE = LE_PARTY_CATEGORY_INSTANCE or 2
+
+-- The v1 slot table. `needs` is the spell an owner must know (the group form
+-- for the raid-wide buffs); a slot with `choices` is owned with one of them.
+-- `label` names the slot in the panel.
+local SLOTS = {
+    { key = 1243,  class = "PRIEST", kind = "owner",   needs = 21562, label = 21562 }, -- Prayer of Fortitude
+    { key = 14752, class = "PRIEST", kind = "owner",   needs = 27681, label = 27681 }, -- Prayer of Spirit
+    { key = 976,   class = "PRIEST", kind = "owner",   needs = 27683, label = 27683 }, -- Prayer of Shadow Protection
+    { key = 6346,  class = "PRIEST", kind = "targets", needs = 6346,  label = 6346  }, -- Fear Ward
+    { key = 1126,  class = "DRUID",  kind = "owner",   needs = 21849, label = 21849 }, -- Gift of the Wild
+    { key = 467,   class = "DRUID",  kind = "targets", needs = 467,   label = 467   }, -- Thorns
+    { key = 1459,  class = "MAGE",   kind = "owner",   needs = 23028, label = 23028 }, -- Arcane Brilliance
+    { key = 1008,  class = "MAGE",   kind = "owner",   choices = { 1008, 604 }, label = 1008 }, -- Amplify / Dampen
+}
+local SLOT_BY_KEY, CLASS_ORDER = {}, { "PRIEST", "DRUID", "MAGE" }
+for _, slot in ipairs(SLOTS) do SLOT_BY_KEY[slot.key] = slot end
+lib.ASSIGN_SLOTS = SLOTS
+
+lib.AssignImpl = lib.AssignImpl or {}
+lib.AssignHandle = lib.AssignHandle or {}
+lib.AssignHandleMeta = lib.AssignHandleMeta or {}
+lib.AssignHandleMeta.__index = lib.AssignHandle
+local AI, Handle = lib.AssignImpl, lib.AssignHandle
+
+-- ─── The game, behind one table ─────────────────────────────────────────────
+
+-- Everything that can be secret is read inside a pcall, comparisons included:
+-- on this client a secret value throws when it is compared, not only read.
+local function ReadName(unit)
+    local n = GetUnitName(unit, false)
+    if type(n) == "string" and n ~= "" and n ~= UNKNOWNOBJECT then return n end
+    return nil
+end
+
+local function NameOf(unit)
+    if not unit then return nil end
+    local ok, n = pcall(ReadName, unit)
+    if ok then return n end
+    return nil
+end
+AI.NameOf = NameOf
+
+local PARTY_UNITS = { "player", "party1", "party2", "party3", "party4" }
+
+local DEFAULT_ENV = {}
+function DEFAULT_ENV.now() return GetTime() end
+function DEFAULT_ENV.serverNow()
+    local ok, t = pcall(GetServerTime)
+    if ok and type(t) == "number" then return math.floor(t) end
+    return math.floor(GetTime())
+end
+function DEFAULT_ENV.send(msg, channel)
+    return C_ChatInfo.SendAddonMessage(PREFIX, msg, channel)
+end
+function DEFAULT_ENV.lockdown()
+    local f = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
+    if not f then return false end
+    local ok, v = pcall(f)
+    return ok and v == true
+end
+function DEFAULT_ENV.combat() return InCombatLockdown() and true or false end
+function DEFAULT_ENV.after(delay, fn) C_Timer.After(delay, fn) end
+function DEFAULT_ENV.random() return math.random() end
+function DEFAULT_ENV.category()
+    if IsInGroup(HOME) then return HOME end
+    if IsInGroup(INSTANCE) then return INSTANCE end
+    return nil
+end
+function DEFAULT_ENV.channel(category)
+    if category == INSTANCE then return "INSTANCE_CHAT" end
+    if IsInRaid(category) then return "RAID" end
+    return "PARTY"
+end
+-- name -> { unit, class, online, pet = false }, and the player's own name.
+function DEFAULT_ENV.roster()
+    local out, units = {}, PARTY_UNITS
+    if IsInRaid() then
+        units = {}
+        for i = 1, GetNumGroupMembers() do units[i] = "raid" .. i end
+    end
+    for _, unit in ipairs(units) do
+        if UnitExists(unit) then
+            local name = NameOf(unit)
+            if name then
+                local _, class = UnitClass(unit)
+                out[name] = { unit = unit, class = class, online = UnitIsConnected(unit) and true or false }
+            end
+        end
+    end
+    return out, NameOf("player")
+end
+function DEFAULT_ENV.knows(spellID) return lib.API.KnowsSpell(spellID) end
+function DEFAULT_ENV.myClass()
+    local _, class = UnitClass("player")
+    return class
+end
+
+local function Env(c) return c.env or DEFAULT_ENV end
+
+-- ─── Records ────────────────────────────────────────────────────────────────
+
+-- Whether record a is newer than b. A total order: every client keeps the
+-- same winner, even for an equal version and writer with different values.
+local function Newer(a, b)
+    if not b then return true end
+    if not a then return false end
+    if a.ver ~= b.ver then return a.ver > b.ver end
+    if a.writer ~= b.writer then return a.writer > b.writer end
+    return a.value > b.value
+end
+AI.Newer = Newer
+
+local function Split(s, sep)
+    local out, start = {}, 1
+    while true do
+        local i = s:find(sep, start, true)
+        if not i then out[#out + 1] = s:sub(start); return out end
+        out[#out + 1] = s:sub(start, i - 1)
+        start = i + 1
+    end
+end
+
+local function Names(value)
+    if value == "" then return {} end
+    return Split(value, ",")
+end
+
+-- One checksum over the canonical full records, other classes and clears
+-- included. "0" for none. A checksum can collide: repair is a convergence
+-- mechanism, not a proof.
+local function Digest(records)
+    local keys = {}
+    for k in pairs(records) do keys[#keys + 1] = k end
+    if #keys == 0 then return "0" end
+    table.sort(keys)
+    local h = 5381
+    for _, k in ipairs(keys) do
+        local r = records[k]
+        local s = k .. "|" .. r.ver .. "|" .. r.writer .. "|" .. r.value .. "\n"
+        for i = 1, #s do h = (h * 33 + s:byte(i)) % 4294967296 end
+    end
+    return string.format("%08x", h)
+end
+AI.Digest = Digest
+
+local function EncodeRecord(key, r)
+    return table.concat({ PROTO, "A", key, tostring(r.ver), r.writer, r.value }, SEP)
+end
+AI.EncodeRecord = EncodeRecord
+
+-- A key names a slot ("1243") or a caster's list on one ("467:Name Surname").
+local function ParseKey(key)
+    local id, caster = key:match("^(%d+):(.+)$")
+    if id then
+        local slot = SLOT_BY_KEY[tonumber(id)]
+        if slot and slot.kind == "targets" then return slot, caster end
+        return nil
+    end
+    local slot = SLOT_BY_KEY[tonumber(key) or -1]
+    if slot and slot.kind == "owner" and tostring(slot.key) == key then return slot end
+    return nil
+end
+
+local function ValidName(name)
+    return name ~= "" and not name:find("[%^,:|]")
+end
+
+-- Whether a value is well formed for its slot. Every client applies the same
+-- rule, so no client can hold a record the others refuse.
+local function ValidValue(slot, value)
+    if value == "" then return true end
+    if slot.kind == "targets" then
+        for _, name in ipairs(Names(value)) do
+            if not ValidName(name) then return false end
+        end
+        return true
+    end
+    local owner, choice = value:match("^([^,]+),(%d+)$")
+    if slot.choices then
+        if not owner then return false end
+        choice = tonumber(choice)
+        for _, id in ipairs(slot.choices) do
+            if id == choice then return ValidName(owner) end
+        end
+        return false
+    end
+    return ValidName(value)
+end
+
+-- An owner slot's value: the owner, and the chosen spell for a slot with
+-- choices.
+local function ParseOwner(slot, value)
+    if value == "" then return nil end
+    if slot.choices then
+        local owner, choice = value:match("^([^,]+),(%d+)$")
+        return owner, tonumber(choice)
+    end
+    return value, nil
+end
+
+-- ─── The client ─────────────────────────────────────────────────────────────
+
+-- Fills in whatever a client lacks, so an upgrade adds fields without
+-- dropping the state an older copy built.
+function AI.Fill(c)
+    c.records = c.records or {}
+    c.peers = c.peers or {}
+    c.queue = c.queue or {}
+    c.seq = c.seq or 0
+    c.subs = c.subs or {}
+    c.roster = c.roster or {}
+    c.mySpells = c.mySpells or {}
+    c.spellList = c.spellList or ""
+    c.otherVersions = c.otherVersions or {}
+    c.gen = c.gen or 0
+    c.effective = c.effective or ""
+    -- Diagnostics for the in-game check: what the client answered each send
+    -- with (by result code), and what arrived on our prefix.
+    c.stats = c.stats or { results = {}, received = 0, accepted = 0 }
+    return c
+end
+
+function AI.NewClient(env)
+    return AI.Fill({ env = env })
+end
+
+function AI.Wipe(c)
+    c.records, c.peers, c.queue = {}, {}, {}
+    c.repair, c.blockedUntil = nil, nil
+    c.pending = nil
+    c.otherVersions = {}
+    c.gen = c.gen + 1
+end
+
+local function Report(c, text)
+    local sub = c.subs[1]
+    if sub and sub.report then sub.report(text, "assign") end
+end
+
+-- A peer's age stands still while chat is locked down: nobody can say hello
+-- then, so a fight longer than PEER_TTL must not expire everyone at unlock.
+-- Sampled on ADDON_RESTRICTION_STATE_CHANGED, combat and every check. During
+-- that event's dispatch the client still reports no lockdown (the restriction
+-- is "Activating", enforced only once dispatch ends), so the event's own state
+-- is kept in c.chatRestricted and counts as locked.
+function AI.LockClock(c)
+    local env = Env(c)
+    local now = env.now()
+    if c.chatRestricted or env.lockdown() then
+        c.lockedAt = c.lockedAt or now
+    elseif c.lockedAt then
+        local from = c.lockedAt
+        c.lockedAt = nil
+        for _, peer in pairs(c.peers) do
+            if peer.seen < from then peer.seen = peer.seen + (now - from) else peer.seen = now end
+        end
+    end
+end
+
+-- Whether `name` is in the group now and can cast `spell`.
+local function Capable(c, name, spell)
+    if not name or not spell then return false end
+    if name == c.me then return c.mySpells[spell] == true end
+    local member, peer = c.roster[name], c.peers[name]
+    if not member or not member.online or not peer or not peer.spells[spell] then return false end
+    AI.LockClock(c)
+    return c.lockedAt ~= nil or Env(c).now() - peer.seen <= PEER_TTL
+end
+AI.Capable = Capable
+
+-- The live owner of an owner slot, and the chosen spell, or nil.
+function AI.Owner(c, slot)
+    local rec = c.records[tostring(slot.key)]
+    if not rec then return nil end
+    local owner, choice = ParseOwner(slot, rec.value)
+    if owner and Capable(c, owner, choice or slot.needs) then return owner, choice end
+    return nil
+end
+
+-- The recorded owner whether live or not, for the panel's "away".
+function AI.RecordedOwner(c, slot)
+    local rec = c.records[tostring(slot.key)]
+    if not rec then return nil end
+    return ParseOwner(slot, rec.value)
+end
+
+-- A caster's target list on a targets slot (names, possibly empty).
+function AI.Targets(c, slot, caster)
+    local rec = caster and c.records[slot.key .. ":" .. caster]
+    if not rec then return {} end
+    return Names(rec.value)
+end
+
+-- What the hosts' windows depend on, as one string: when it changes, they
+-- are told. It covers capability loss, expiry and return, not only records.
+local function Effective(c)
+    local parts = {}
+    for _, slot in ipairs(SLOTS) do
+        if slot.kind == "owner" then
+            local owner, choice = AI.Owner(c, slot)
+            parts[#parts + 1] = tostring(owner) .. "," .. tostring(choice)
+        else
+            parts[#parts + 1] = table.concat(AI.Targets(c, slot, c.me), ",")
+        end
+    end
+    return table.concat(parts, ";")
+end
+
+function AI.Changed(c)
+    local now = Effective(c)
+    if now ~= c.effective then
+        c.effective = now
+        for _, sub in ipairs(c.subs) do
+            if sub.onChanged then
+                local ok, err = pcall(sub.onChanged)
+                if not ok and sub.report then sub.report("assignment update failed: " .. tostring(err), "assign") end
+            end
+        end
+    end
+    AI.PanelRefresh(c)
+end
+
+-- Applies a record if it beats the stored one. Returns whether it did.
+function AI.Apply(c, key, rec)
+    if c.repair then
+        local seen = c.repair.seen[key]
+        if Newer(rec, seen) then c.repair.seen[key] = rec end
+    end
+    if not Newer(rec, c.records[key]) then return false end
+    c.records[key] = rec
+    return true
+end
+
+-- ─── Sending ────────────────────────────────────────────────────────────────
+
+-- One entry per key: a newer record replaces an older one, and the entry
+-- keeps the more urgent of the two priorities.
+local function Enqueue(c, qkey, prio, msg, rec)
+    local old = c.queue[qkey]
+    if old and rec and old.rec and Newer(old.rec, rec) then return end
+    c.seq = c.seq + 1
+    c.queue[qkey] = { qkey = qkey, prio = old and math.min(old.prio, prio) or prio, seq = c.seq,
+                      msg = msg, rec = rec }
+end
+
+local function NextEntry(c)
+    local best
+    for _, e in pairs(c.queue) do
+        if not best or e.prio < best.prio or (e.prio == best.prio and e.seq < best.seq) then best = e end
+    end
+    return best
+end
+
+function AI.HelloMessage(c)
+    return table.concat({ PROTO, "H", c.myClass or "", c.spellList, Digest(c.records) }, SEP)
+end
+
+function AI.SchedulePump(c, delay)
+    local env = Env(c)
+    local at = env.now() + delay
+    if c.pumpAt and c.pumpAt <= at then return end
+    c.pumpAt = at
+    env.after(delay, function() return lib.AssignImpl.Pump(c) end)
+end
+
+-- Sends what the token bucket allows. A throttle or lockdown answer keeps the
+-- message and backs off; the measured throttle drops what it refuses, so a
+-- message is only taken off the queue once the client accepted it.
+function AI.Pump(c)
+    c.pumpAt = nil
+    if not c.group or not c.channel then c.queue = {}; return end
+    local env = Env(c)
+    local now = env.now()
+    c.tokens = math.min(BUCKET, (c.tokens or BUCKET) + (now - (c.refilled or now)) * REFILL)
+    c.refilled = now
+    if c.blockedUntil and now < c.blockedUntil then return AI.SchedulePump(c, c.blockedUntil - now) end
+    if env.lockdown() then return AI.SchedulePump(c, BACKOFF) end
+    while c.tokens >= 1 do
+        local e = NextEntry(c)
+        if not e then return end
+        local msg = e.msg or AI.HelloMessage(c)
+        local ok, res = pcall(env.send, msg, c.channel)
+        local code = ok and tostring(res) or "error"
+        c.stats.results[code] = (c.stats.results[code] or 0) + 1
+        if ok and (res == 0 or res == nil or res == true) then
+            c.queue[e.qkey] = nil
+            c.tokens = c.tokens - 1
+            if e.rec and c.repair then
+                local key = e.qkey:sub(3)
+                if Newer(e.rec, c.repair.seen[key]) then c.repair.seen[key] = e.rec end
+            end
+        elseif ok and (res == 3 or res == 8 or res == 11) then
+            c.blockedUntil = now + BACKOFF
+            return AI.SchedulePump(c, BACKOFF)
+        else
+            c.queue[e.qkey] = nil
+            if not (ok and res == 5) and not c.sendFailed then
+                c.sendFailed = true
+                Report(c, "an assignment message could not be sent (" .. tostring(res) .. ")")
+            end
+        end
+    end
+    if next(c.queue) then AI.SchedulePump(c, 1 / REFILL) end
+end
+
+function AI.SendHello(c)
+    if not c.group or not c.me then return end
+    Enqueue(c, "H", PRIO_HELLO)
+    AI.SchedulePump(c, 0)
+end
+
+-- Soon, not now: a burst of roster events or new peers sends one hello.
+function AI.HelloSoon(c)
+    if c.helloSoon or not c.group then return end
+    c.helloSoon = true
+    local env = Env(c)
+    env.after(1 + env.random() * 2, function() return lib.AssignImpl.HelloSoonFire(c) end)
+end
+
+function AI.HelloSoonFire(c)
+    c.helloSoon = nil
+    AI.SendHello(c)
+end
+
+function AI.StartHelloLoop(c)
+    c.helloGen = (c.helloGen or 0) + 1
+    local gen, env = c.helloGen, Env(c)
+    env.after(HELLO_PERIOD + (env.random() * 2 - 1) * HELLO_JITTER,
+        function() return lib.AssignImpl.HelloTick(c, gen) end)
+end
+
+function AI.HelloTick(c, gen)
+    if gen ~= c.helloGen or not c.group then return end
+    AI.Expire(c)
+    AI.SendHello(c)
+    AI.StartHelloLoop(c)
+    AI.Changed(c)
+end
+
+-- ─── Repair ─────────────────────────────────────────────────────────────────
+
+function AI.ScheduleRepair(c)
+    if c.repair then return end
+    c.repair = { seen = {}, gen = c.gen }
+    local env = Env(c)
+    env.after(1 + env.random() * 4, function() return lib.AssignImpl.RepairFire(c) end)
+end
+
+function AI.RepairFire(c)
+    local rep = c.repair
+    c.repair = nil
+    if not rep or rep.gen ~= c.gen or not c.group then return end
+    local mine, differs = Digest(c.records), false
+    for name, peer in pairs(c.peers) do
+        if peer.digest ~= mine and c.roster[name] then differs = true; break end
+    end
+    if not differs then return end
+    for key, rec in pairs(c.records) do
+        if Newer(rec, rep.seen[key]) then
+            Enqueue(c, "A:" .. key, PRIO_REPAIR, EncodeRecord(key, rec), rec)
+        end
+    end
+    AI.SchedulePump(c, 0)
+end
+
+-- ─── Receiving ──────────────────────────────────────────────────────────────
+
+local function Plain(text, channel, sender)
+    return type(text) == "string" and type(channel) == "string" and type(sender) == "string"
+        and #text <= MAX_BYTES and channel ~= "" and sender ~= ""
+end
+
+function AI.Receive(c, text, channel, sender)
+    -- No payload was measured secret, but a comparison on one would throw:
+    -- the type and size checks run protected, and only plain strings go on.
+    c.stats.received = c.stats.received + 1
+    local ok, plain = pcall(Plain, text, channel, sender)
+    if not ok or not plain then return end
+    if not c.group or channel ~= c.channel or sender == c.me then return end
+    local member = c.roster[sender]
+    if not member then return end
+    c.stats.accepted = c.stats.accepted + 1
+    local f = Split(text, SEP)
+    if f[1] ~= PROTO then
+        c.otherVersions[sender] = f[1]
+        return
+    end
+    if f[2] == "H" and #f == 5 then
+        if f[3] ~= member.class then return end
+        local spells = {}
+        for id in f[4]:gmatch("%d+") do spells[tonumber(id)] = true end
+        local isNew = c.peers[sender] == nil
+        c.peers[sender] = { class = f[3], spells = spells, digest = f[5], seen = Env(c).now() }
+        if isNew then AI.HelloSoon(c) end
+        if f[5] ~= Digest(c.records) then AI.ScheduleRepair(c) end
+        AI.Changed(c)
+    elseif f[2] == "A" and #f == 6 then
+        local key, ver, writer, value = f[3], AI.ParseVersion(c, f[4]), f[5], f[6]
+        local slot = ParseKey(key)
+        if not slot or not ver or not ValidName(writer) or not ValidValue(slot, value) then return end
+        if AI.Apply(c, key, { ver = ver, writer = writer, value = value }) then AI.Changed(c) end
+    end
+end
+
+-- A version as sent: decimal digits with no sign, point or leading zero, and
+-- no more than VER_AHEAD past the server's clock. Anything else is refused.
+function AI.ParseVersion(c, text)
+    if type(text) ~= "string" or #text > VER_DIGITS or not text:match("^[1-9]%d*$") then return nil end
+    local ver = tonumber(text)
+    if not ver or ver > (Env(c).serverNow() + VER_AHEAD) * VER_SCALE then return nil end
+    return ver
+end
+
+-- ─── Group and capability ───────────────────────────────────────────────────
+
+function AI.Expire(c)
+    local env = Env(c)
+    AI.LockClock(c)
+    if c.lockedAt then return end
+    local now = env.now()
+    for name, peer in pairs(c.peers) do
+        if not c.roster[name] or now - peer.seen > PEER_TTL then c.peers[name] = nil end
+    end
+end
+
+-- The selected group decides everything: records, peers, timers and the
+-- queue belong to it, and a change of selected group starts them again.
+function AI.RosterChanged(c)
+    local env = Env(c)
+    local category = env.category()
+    if category ~= c.group then
+        AI.Wipe(c)
+        c.group = category
+        c.helloGen = (c.helloGen or 0) + 1
+        if category then
+            c.channel = env.channel(category)
+            c.roster, c.me = env.roster()
+            AI.StartHelloLoop(c)
+            AI.HelloSoon(c)
+        else
+            c.channel, c.roster = nil, {}
+        end
+    elseif category then
+        c.channel = env.channel(category)
+        c.roster, c.me = env.roster()
+    end
+    AI.Expire(c)
+    AI.Changed(c)
+end
+
+-- What the player can cast, from their own spellbook (never from their own
+-- echo). A change goes out in a hello.
+function AI.SpellsChanged(c)
+    local env = Env(c)
+    c.myClass = env.myClass()
+    local known, list = {}, {}
+    for _, slot in ipairs(SLOTS) do
+        if slot.class == c.myClass then
+            for _, id in ipairs(slot.choices or { slot.needs }) do
+                if not known[id] and env.knows(id) then known[id] = true; list[#list + 1] = id end
+            end
+        end
+    end
+    table.sort(list)
+    local text = table.concat(list, ",")
+    c.mySpells = known
+    if text ~= c.spellList then
+        c.spellList = text
+        AI.HelloSoon(c)
+    end
+    AI.Changed(c)
+end
+
+-- ─── Edits ──────────────────────────────────────────────────────────────────
+
+-- Writes one record and sends it. Refused out of a group, in combat (the
+-- panel is read-only there), and when the message would not fit: 256 bytes
+-- arrive cut to 255 with no error, so an edit that cannot be sent whole is
+-- not applied either. Returns ok, why.
+function AI.Edit(c, key, value)
+    local env = Env(c)
+    if not c.group or not c.me then return false, "group" end
+    if env.combat() then return false, "combat" end
+    local slot = ParseKey(key)
+    if not slot or not ValidValue(slot, value) then return false, "invalid" end
+    local cur = c.records[key]
+    local ver = env.serverNow() * VER_SCALE
+    if cur and cur.ver >= ver then ver = cur.ver + 1 end
+    if ver > (env.serverNow() + VER_AHEAD) * VER_SCALE then return false, "version" end
+    local rec = { ver = ver, writer = c.me, value = value }
+    local msg = EncodeRecord(key, rec)
+    if #msg > MAX_BYTES then return false, "size" end
+    c.records[key] = rec
+    Enqueue(c, "A:" .. key, PRIO_EDIT, msg, rec)
+    AI.SchedulePump(c, 0)
+    AI.Changed(c)
+    return true
+end
+
+function AI.SetOwner(c, slot, owner, choice)
+    local value = ""
+    if owner then value = slot.choices and (owner .. "," .. tostring(choice)) or owner end
+    return AI.Edit(c, tostring(slot.key), value)
+end
+
+function AI.SetTargets(c, slot, caster, names)
+    return AI.Edit(c, slot.key .. ":" .. caster, table.concat(names or {}, ","))
+end
+
+function AI.Pending(c, key)
+    local e = c.queue["A:" .. key]
+    return e ~= nil and e.prio == PRIO_EDIT
+end
+
+-- ─── The live client ────────────────────────────────────────────────────────
+
+lib.assign = AI.Fill(lib.assign or {})
+
+-- UNIT_CONNECTION: a member going offline or back changes who is a live
+-- owner without any roster event. ADDON_RESTRICTION_STATE_CHANGED: chat
+-- locking and unlocking, for the peer clock.
+local EVENTS = { "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE", "GROUP_JOINED", "GROUP_LEFT",
+                 "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+                 "UNIT_CONNECTION", "ADDON_RESTRICTION_STATE_CHANGED" }
+
+function AI.OnEvent(c, event, ...)
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, text, channel, sender = ...
+        if prefix == PREFIX then return AI.Receive(c, text, channel, sender) end
+    elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
+        AI.LockClock(c)
+        AI.PanelRefresh(c)
+    elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        local kind, state = ...
+        local E = rawget(_G, "Enum")
+        local types = E and E.AddOnRestrictionType
+        local states = E and E.AddOnRestrictionState
+        local CHAT = types and types.Chat or 5
+        local INACTIVE = states and states.Inactive or 0
+        if kind == CHAT and type(state) == "number" then
+            c.chatRestricted = state ~= INACTIVE or nil
+            AI.LockClock(c)
+            AI.Changed(c)
+        end
+    else
+        local wasGroup = c.group
+        AI.RosterChanged(c)
+        if event == "PLAYER_ENTERING_WORLD" and wasGroup and c.group == wasGroup then AI.HelloSoon(c) end
+    end
+end
+
+-- Started by the first host to opt in; later hosts subscribe to the same one.
+function AI.Start(c, inst)
+    if c.frame then return end
+    local frame = CreateFrame("Frame")
+    c.frame = frame
+    frame:SetScript("OnEvent", function(_, event, ...) return lib.AssignImpl.OnEvent(lib.assign, event, ...) end)
+    inst.RegisterEvents(frame, unpack(EVENTS))
+    local ok, res = pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
+    -- 0 registered, 1 already registered (by this very prefix, so fine).
+    if not ok or (res ~= 0 and res ~= 1 and res ~= nil and res ~= true) then
+        inst.report("assignments are off: the client refused the message prefix (" .. tostring(res) .. ")", "assign")
+    end
+    AI.RosterChanged(c)
+end
+
+-- ─── The host's handle ──────────────────────────────────────────────────────
+
+local function SlotFor(def)
+    if type(def) ~= "table" or (def.assign ~= "owner" and def.assign ~= "targets") then return nil end
+    local slot = SLOT_BY_KEY[def.assignSlot or def.snglID]
+    if slot and slot.kind == def.assign then return slot end
+    return nil
+end
+AI.SlotFor = SlotFor
+
+-- What the engine does with a def's row: "force" (the raid asked me), "hide"
+-- (somebody else has it, or an assignOnly def with nothing to do), or nil
+-- for today's rule.
+function Handle:RowRule(def)
+    local c, slot = self.client, SlotFor(def)
+    if not slot then return nil end
+    if slot.kind == "owner" then
+        local owner, choice = AI.Owner(c, slot)
+        if owner == c.me and owner ~= nil then
+            if slot.choices and choice ~= def.snglID then return "hide" end
+            return "force"
+        end
+        if owner then return "hide" end
+        return def.assignOnly and "hide" or nil
+    end
+    if #AI.Targets(c, slot, c.me) > 0 then return "force" end
+    return def.assignOnly and "hide" or nil
+end
+
+-- The names a targets def is assigned to for me, as a set, or nil.
+function Handle:TargetNames(def)
+    local c, slot = self.client, SlotFor(def)
+    if not slot or slot.kind ~= "targets" then return nil end
+    local names = AI.Targets(c, slot, c.me)
+    if #names == 0 then return nil end
+    local set = {}
+    for _, n in ipairs(names) do set[n] = true end
+    return set
+end
+
+function Handle:Owner(def)
+    local slot = SlotFor(def)
+    if not slot or slot.kind ~= "owner" then return nil end
+    return AI.Owner(self.client, slot)
+end
+
+function Handle:IsMine(def)
+    local owner = self:Owner(def)
+    return owner ~= nil and owner == self.client.me
+end
+
+function Handle:SpellsChanged() return AI.SpellsChanged(self.client) end
+function Handle:Open() return AI.TogglePanel(self.client) end
+
+-- ─── The panel ──────────────────────────────────────────────────────────────
+--
+-- An ordinary frame parented to UIParent, with no secure child: the measured
+-- companion-pane shape, free to show, hide and change in combat. Editing is
+-- refused in combat anyway, and the menus only write assignment data.
+
+local PANEL_W, LINE_H, PAD = 320, 20, 10
+local FONT_FILE = "Fonts\\ARIALN.TTF"
+local GREY = "|cff888888"
+
+local function Text(fs, size, justify)
+    local file = GlassFontFile(FONT_FILE)
+    if not fs:SetFont(file, size, "") and file ~= FONT_FILE then fs:SetFont(FONT_FILE, size, "") end
+    fs:SetShadowColor(0, 0, 0, 0.9)
+    fs:SetShadowOffset(1, -1)
+    if justify then fs:SetJustifyH(justify) end
+    return fs
+end
+
+local function SpellLabel(id)
+    return lib.API.SpellName(id) or ("spell " .. tostring(id))
+end
+
+local function SlotLabel(slot)
+    if slot.choices then
+        local names = {}
+        for _, id in ipairs(slot.choices) do names[#names + 1] = SpellLabel(id) end
+        return table.concat(names, " / ")
+    end
+    return SpellLabel(slot.label)
+end
+
+local function ClassHex(class)
+    local col = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    if not col then return "|cffcccccc" end
+    return string.format("|cff%02x%02x%02x", math.floor(col.r * 255 + 0.5),
+        math.floor(col.g * 255 + 0.5), math.floor(col.b * 255 + 0.5))
+end
+
+-- The player and every live peer of `class` who can cast `spell`, by name.
+local function Casters(c, class, spell)
+    local out = {}
+    local function consider(name, cls)
+        if cls == class and Capable(c, name, spell) then out[#out + 1] = name end
+    end
+    if c.me then consider(c.me, c.myClass) end
+    for name, peer in pairs(c.peers) do
+        if name ~= c.me then consider(name, peer.class) end
+    end
+    table.sort(out)
+    return out
+end
+AI.Casters = Casters
+
+local function SlotCasters(c, slot)
+    if slot.choices then
+        local seen, out = {}, {}
+        for _, id in ipairs(slot.choices) do
+            for _, name in ipairs(Casters(c, slot.class, id)) do
+                if not seen[name] then seen[name] = true; out[#out + 1] = name end
+            end
+        end
+        table.sort(out)
+        return out
+    end
+    return Casters(c, slot.class, slot.needs)
+end
+
+function AI.BuildPanel(c)
+    if c.panel then return c.panel end
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetSize(PANEL_W, 80)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(fr) fr:StartMoving() end)
+    f:SetScript("OnDragStop", function(fr) fr:StopMovingOrSizing() end)
+    f.glass = GlassInst().Apply(f, "large")
+    f.title = Text(f:CreateFontString(nil, "OVERLAY"), 14, "LEFT")
+    f.title:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -PAD)
+    f.title:SetText("Buff assignments")
+    local close = CreateFrame("Button", nil, f)
+    close:SetSize(18, 18)
+    close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+    close.label = Text(close:CreateFontString(nil, "OVERLAY"), 14, "CENTER")
+    close.label:SetPoint("CENTER", close, "CENTER", 0, 0)
+    close.label:SetText("\195\151")
+    close:SetScript("OnClick", function() return lib.AssignImpl.TogglePanel(lib.assign, false) end)
+    f.closeBtn = close
+    f.note = Text(f:CreateFontString(nil, "OVERLAY"), 11, "LEFT")
+    f.note:SetWidth(PANEL_W - 2 * PAD)
+    f.lines = {}
+    f:Hide()
+    c.panel = f
+    return f
+end
+
+local function Line(f, i)
+    local b = f.lines[i]
+    if b then return b end
+    b = CreateFrame("Button", nil, f)
+    b:SetSize(PANEL_W - 2 * PAD, LINE_H)
+    b.label = Text(b:CreateFontString(nil, "OVERLAY"), 12, "LEFT")
+    b.label:SetPoint("LEFT", b, "LEFT", 0, 0)
+    b.value = Text(b:CreateFontString(nil, "OVERLAY"), 12, "RIGHT")
+    b.value:SetPoint("RIGHT", b, "RIGHT", 0, 0)
+    b:SetScript("OnClick", function(btn) return lib.AssignImpl.LineClick(lib.assign, btn) end)
+    f.lines[i] = b
+    return b
+end
+
+local function OwnerText(c, slot)
+    local owner, choice = AI.Owner(c, slot)
+    local key = tostring(slot.key)
+    local text
+    if owner then
+        text = owner .. (choice and (" - " .. SpellLabel(choice)) or "")
+    else
+        local recorded = AI.RecordedOwner(c, slot)
+        text = GREY .. "Nobody" .. (recorded and (" (" .. recorded .. " away)") or "") .. "|r"
+    end
+    if AI.Pending(c, key) then text = text .. GREY .. " (sending)|r" end
+    return text
+end
+
+local function TargetsText(c, slot, caster)
+    local names = AI.Targets(c, slot, caster)
+    local text = #names > 0 and table.concat(names, ", ") or (GREY .. "No targets|r")
+    if AI.Pending(c, slot.key .. ":" .. caster) then text = text .. GREY .. " (sending)|r" end
+    return text
+end
+
+function AI.PanelRefresh(c)
+    local f = c.panel
+    if not f or not f:IsShown() then return end
+    local n, y = 0, -(PAD + 22)
+    local function add(label, value, slot, caster)
+        n = n + 1
+        local b = Line(f, n)
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y)
+        b.label:SetText(label)
+        b.value:SetText(value)
+        b._slotKey, b._caster = slot and slot.key, caster
+        b:Show()
+        y = y - LINE_H
+    end
+    if c.group then
+        for _, class in ipairs(CLASS_ORDER) do
+            local any = false
+            for _, slot in ipairs(SLOTS) do
+                if slot.class == class then
+                    local hex = ClassHex(class)
+                    local casters = SlotCasters(c, slot)
+                    if slot.kind == "owner" then
+                        if #casters > 0 or AI.RecordedOwner(c, slot) then
+                            any = true
+                            add(hex .. SlotLabel(slot) .. "|r", OwnerText(c, slot), slot)
+                        end
+                    else
+                        for _, caster in ipairs(casters) do
+                            any = true
+                            add(hex .. SlotLabel(slot) .. "|r  " .. caster, TargetsText(c, slot, caster), slot, caster)
+                        end
+                    end
+                end
+            end
+            if any then y = y - 6 end
+        end
+    end
+    for i = n + 1, #f.lines do f.lines[i]:Hide() end
+    local note
+    if not c.group then note = "Join a group to assign buffs."
+    elseif n == 0 then note = "Nobody here runs a buff addon that shares assignments yet."
+    elseif Env(c).combat() then note = "In combat: edits wait, and buff windows update after combat."
+    else note = "Click a line to change it. Anyone can change any assignment." end
+    f.note:ClearAllPoints()
+    f.note:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, y - 4)
+    f.note:SetText(GREY .. note .. "|r")
+    f:SetHeight(-y + 4 + 30)
+end
+
+function AI.TogglePanel(c, show)
+    local f = AI.BuildPanel(c)
+    if show == nil then show = not f:IsShown() end
+    if show then f:Show(); AI.PanelRefresh(c) else f:Hide() end
+    return show
+end
+
+local function Say(c, text)
+    local f = c.panel
+    if f and f:IsShown() then f.note:SetText(GREY .. text .. "|r") end
+end
+
+function AI.LineClick(c, btn)
+    local slot = btn._slotKey and SLOT_BY_KEY[btn._slotKey]
+    if not slot then return end
+    if Env(c).combat() then return Say(c, "Edits wait until combat ends.") end
+    if not (MenuUtil and MenuUtil.CreateContextMenu) then return Say(c, "This client has no menus to edit with.") end
+    local key, caster = btn._slotKey, btn._caster
+    if slot.kind == "owner" then
+        MenuUtil.CreateContextMenu(btn, function(_, root) return lib.AssignImpl.OwnerMenu(lib.assign, root, key) end)
+    else
+        local set = {}
+        for _, name in ipairs(AI.Targets(c, slot, caster)) do set[name] = true end
+        c.pending = { key = key, caster = caster, set = set }
+        MenuUtil.CreateContextMenu(btn, function(_, root) return lib.AssignImpl.TargetsMenu(lib.assign, root) end)
+    end
+end
+
+local function Scroll(root)
+    if root.SetScrollMode then root:SetScrollMode(20 * 20) end
+end
+
+function AI.OwnerMenu(c, root, key)
+    local slot = SLOT_BY_KEY[key]
+    Scroll(root)
+    root:CreateTitle(SlotLabel(slot))
+    local function isOwner(data)
+        local owner, choice = AI.RecordedOwner(c, slot)
+        return owner == data.owner and choice == data.choice
+    end
+    local function set(data)
+        local ok, why = AI.SetOwner(c, slot, data.owner, data.choice)
+        if not ok then Say(c, why == "size" and "That name is too long to send." or "Not changed (" .. tostring(why) .. ").") end
+    end
+    root:CreateRadio("Nobody", isOwner, set, { owner = nil })
+    for _, id in ipairs(slot.choices or { slot.needs }) do
+        if slot.choices then root:CreateTitle(SpellLabel(id)) end
+        for _, name in ipairs(Casters(c, slot.class, id)) do
+            root:CreateRadio(name, isOwner, set, { owner = name, choice = slot.choices and id or nil })
+        end
+    end
+end
+
+function AI.TargetsMenu(c, root)
+    local p = c.pending
+    if not p then return end
+    local slot = SLOT_BY_KEY[p.key]
+    Scroll(root)
+    root:CreateTitle(SlotLabel(slot) .. ": " .. p.caster)
+    local names = {}
+    for name, member in pairs(c.roster) do
+        if member.online ~= nil then names[#names + 1] = name end
+    end
+    for name in pairs(p.set) do
+        if not c.roster[name] then names[#names + 1] = name end
+    end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        root:CreateCheckbox(name, function(n) return p.set[n] == true end,
+            function(n) p.set[n] = (not p.set[n]) or nil end, name)
+    end
+    root:CreateDivider()
+    root:CreateButton("Apply", function() return lib.AssignImpl.ApplyTargets(lib.assign) end)
+    root:CreateButton("Clear", function()
+        p.set = {}
+        return lib.AssignImpl.ApplyTargets(lib.assign)
+    end)
+end
+
+-- Checks the roster again: somebody may have left while the menu was open.
+function AI.ApplyTargets(c)
+    local p = c.pending
+    if not p then return end
+    local slot = SLOT_BY_KEY[p.key]
+    local names = {}
+    for name in pairs(p.set) do
+        if c.roster[name] then names[#names + 1] = name end
+    end
+    table.sort(names)
+    local ok, why = AI.SetTargets(c, slot, p.caster, names)
+    if not ok then
+        Say(c, why == "size" and "Too many names to send in one message: remove some." or "Not changed (" .. tostring(why) .. ").")
+    end
+end
+
+-- Internals for the tests only.
+lib._assignTest = { SLOTS = SLOTS, PREFIX = PREFIX, PEER_TTL = PEER_TTL, HELLO_PERIOD = HELLO_PERIOD,
+                    MAX_BYTES = MAX_BYTES, DEFAULT_ENV = DEFAULT_ENV, VER_AHEAD = VER_AHEAD,
+                    VER_SCALE = VER_SCALE }
+
+end -- Assign
+
 do -- New =====================================================================
 
 -- lib:New(opts): the per-addon entry point. LibGlass-1.0's shape, so one rule
@@ -4921,13 +6043,44 @@ function impl.EventFailures(inst)
     return lib.API.eventFailuresByOwner[inst.owner]
 end
 
+-- The raid's buff assignments (r37, the Assign section), shared by every host
+-- on the client: the first call starts the client's one comms frame through
+-- this instance, so a refused event reaches its reporter. One handle per
+-- host; a second call returns the same one.
+--
+--     local assign = GB.Assignments({ onChanged = function() ... end })
+--     GB.Engine({ ..., assignments = assign })
+--     assign:SpellsChanged()   -- after the engine's RefreshSpells
+--     assign:Open()            -- toggles the panel
+local function NewAssignments(arg)
+    local inst, spec = arg.inst, arg.spec
+    if type(spec) ~= "table" then error(MAJOR .. ": Assignments needs a spec table", 0) end
+    if spec.onChanged ~= nil and type(spec.onChanged) ~= "function" then
+        error(MAJOR .. ": Assignments: onChanged must be a function or nil", 0)
+    end
+    local c = lib.assign
+    for _, h in ipairs(c.subs) do
+        if h.owner == inst.owner then return h end
+    end
+    local h = setmetatable({ owner = inst.owner, report = inst.report, onChanged = spec.onChanged, client = c },
+        lib.AssignHandleMeta)
+    c.subs[#c.subs + 1] = h
+    lib.AssignImpl.Start(c, inst)
+    lib.AssignImpl.SpellsChanged(c)
+    return h
+end
+
+function impl.Assignments(inst, spec)
+    return Construct(NewAssignments, { inst = inst, spec = spec })
+end
+
 function impl.TimerColor(_, pct) return lib.UI.TimerColor(pct) end
 function impl.Pct(_, rem, dur) return lib.UI.Pct(rem, dur) end
 function impl.FmtTime(_, s) return lib.UI.FmtTime(s) end
 
 -- The functions an instance carries. A newer copy appends; it never removes.
 local FUNCTIONS = { "Engine", "UI", "Settings", "Visibility", "RegisterEvents", "EventFailures",
-                    "TimerColor", "Pct", "FmtTime" }
+                    "TimerColor", "Pct", "FmtTime", "Assignments" }
 
 -- Give an instance every function it lacks. Never overwrites: a function an
 -- older copy bound already dispatches through lib.impl, and a host may have

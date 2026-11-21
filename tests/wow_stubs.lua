@@ -1102,6 +1102,75 @@ function BuyMerchantItem(index, quantity)
 end
 
 ------------------------------------------------------------
+-- Addon messages, groups and menus (r37's assignments)
+--
+-- Signatures from the 71037 dump (forever-api-1.60.1.71037.md:745-764 and
+-- 5215): SendAddonMessage(prefix, message, chatType?, target?) ->
+-- SendAddonMessageResult (0 Success, 3 AddonMessageThrottle, 5 NotInGroup,
+-- 8 ChannelThrottle, 11 AddOnMessageLockdown), RegisterAddonMessagePrefix ->
+-- RegisterAddonMessagePrefixResult (0 Success, 1 DuplicatePrefix),
+-- InChatMessagingLockdown -> bool, GetServerTime -> number. IsInGroup is
+-- listed with no signature; Retail's optional category is what Blizzard's own
+-- shipped code passes (Blizzard_CooldownBroadcaster.lua:148), which is also
+-- where LE_PARTY_CATEGORY_HOME and _INSTANCE are read unguarded. MenuUtil is
+-- Blizzard Lua (Blizzard_Menu/MenuUtil.lua): only CreateContextMenu and the
+-- element calls the panel makes are modelled, and a test reads what was built
+-- from WoW.menus.
+------------------------------------------------------------
+
+LE_PARTY_CATEGORY_HOME, LE_PARTY_CATEGORY_INSTANCE = 1, 2
+
+C_ChatInfo = C_ChatInfo or {}
+function C_ChatInfo.RegisterAddonMessagePrefix(prefix)
+    if WoW.prefixes[prefix] then return 1 end
+    WoW.prefixes[prefix] = true
+    return 0
+end
+function C_ChatInfo.SendAddonMessage(prefix, message, chatType, target)
+    WoW.addonSent[#WoW.addonSent + 1] = { prefix = prefix, message = message, chatType = chatType, target = target }
+    return WoW.sendResult
+end
+function C_ChatInfo.InChatMessagingLockdown() return WoW.chatLockdown == true end
+function GetServerTime() return WoW.serverTime or (1800000000 + math.floor(WoW.time or 0)) end
+function IsInGroup(category)
+    if category == LE_PARTY_CATEGORY_INSTANCE then return WoW.instanceGroup == true end
+    return WoW.inRaid == true or (WoW.groupMembers or 0) > 0
+end
+
+local function MenuDescription()
+    local d = { elements = {} }
+    local function add(kind, text, a, b, data)
+        local e = { kind = kind, text = text, a = a, b = b, data = data }
+        d.elements[#d.elements + 1] = e
+        return e
+    end
+    function d:CreateTitle(text) return add("title", text) end
+    function d:CreateButton(text, callback, data) return add("button", text, callback, nil, data) end
+    function d:CreateRadio(text, isSelected, setSelected, data) return add("radio", text, isSelected, setSelected, data) end
+    function d:CreateCheckbox(text, isSelected, setSelected, data) return add("checkbox", text, isSelected, setSelected, data) end
+    function d:CreateDivider() return add("divider") end
+    function d:SetScrollMode(extent) d.scrollExtent = extent end
+    return d
+end
+
+MenuUtil = {}
+function MenuUtil.CreateContextMenu(ownerRegion, generator)
+    local root = MenuDescription()
+    root.owner = ownerRegion
+    generator(ownerRegion, root)
+    WoW.menus[#WoW.menus + 1] = root
+    return root
+end
+
+local resetBeforeChat = WoW.reset
+function WoW.reset(...)
+    local r = resetBeforeChat(...)
+    WoW.prefixes, WoW.addonSent, WoW.menus = {}, {}, {}
+    WoW.sendResult, WoW.chatLockdown, WoW.instanceGroup, WoW.serverTime = 0, false, false, nil
+    return r
+end
+
+------------------------------------------------------------
 -- Strict globals
 --
 -- Everything above is stubbed because it was *verified present* on the live

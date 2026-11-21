@@ -1150,7 +1150,7 @@ GB.Pct = hostPct                                         -- a host's override
 local impl, instances, shared, mt = lib.impl, lib.instances, lib.shared, lib.instanceMT
 
 load(NextCopy(CURRENT + 1, {
-    { '"TimerColor", "Pct", "FmtTime" }', '"TimerColor", "Pct", "FmtTime", "Probe" }' },
+    { '"FmtTime", "Assignments" }', '"FmtTime", "Assignments", "Probe" }' },
     { 'function impl.TimerColor(', 'function impl.Probe(inst) return "next:" .. inst.owner end\n\nfunction impl.TimerColor(' },
     { '\nlib.ready = MINOR', COUNTED .. '\nlib.ready = MINOR' },
 }), "next")
