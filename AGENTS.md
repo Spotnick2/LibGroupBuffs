@@ -363,6 +363,31 @@ and the like name those sections.
   say nothing. A regression drops the marker, and the latch with it, so the next fix is announced
   again. Each scope names its own marker's build. `svBrokenSince` / `svBrokenOnBuild` are
   accepted and **unused**; hosts may drop them.
+- `Assign` (r37, #92) — **raid buff assignments**, shared by every host on the client and every
+  client in the group. The design and its review are the section's header comment; the rules
+  that bite:
+  - **The slot table (`SLOTS`) is protocol data, identical in every copy.** It is not addon
+    policy: a standalone Priestly has to draw and edit a mage's slot. A host's def opts in with
+    `assign = "owner" | "targets"`, matched by `assignSlot or snglID`. `assignOnly` defs have no
+    row without targets.
+  - **`lib.assign` is the client's state.** The functions in `lib.AssignImpl` take the client as
+    their first argument and reach the game only through `c.env` (default: the real API), which
+    is how `tests/test_assign.lua` runs 40 clients on a simulated channel. Every frame script,
+    timer and menu callback calls `lib.AssignImpl.<name>` when it runs.
+  - **The one exception to "events are the host's policy":** one anonymous comms frame, created
+    by the first host's `GB.Assignments`. Its events are registered through that instance, so a
+    refusal reaches its reporter. Host callbacks (`onChanged`) are wrapped in `pcall` here,
+    unlike the window's: one host's error must not stop another's, and the error goes to that
+    host's `report(text, "assign")`.
+  - **Records order totally** by `(ver, writer, value)`, and clears are records: never "fix" a
+    divergence by deleting a record. `ver` is `max(GetServerTime(), current + 1)`.
+  - **Measured transport limits are load-bearing:** a throttled send is dropped (result 3), so
+    an entry leaves the queue only on success. A 256th byte is cut silently, so an edit that
+    would not fit is refused before it is applied. Raid instances, boss fights and
+    INSTANCE_CHAT are not measured yet (Buffy's in-game check).
+  - **The engine seam:** `ActiveDefs` asks `assignments:RowRule(def)` ("force", "hide" or nil
+    for the old rule) after the spell gate. `MembersFor` uses `assignments:TargetNames(def)`,
+    which **bypasses** the host's `membersFor`. Preview skips `assignOnly` defs.
 - Planned, not yet present: the options-panel widgets (`SafeFrame`, `MakeCheckButton`, tabs).
 - `LibStub/` — bundled, unmodified, public domain.
 - `tests/` — Lua 5.1, no game client. Two files are also used by consumers, `dofile`d from their

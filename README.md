@@ -208,6 +208,29 @@ Panels, icon decoration, headers, and row fills use that window's material. The 
 mutates its style. Hosts that omit both fields keep the shared Clean material and existing
 opacity behavior, including objects built by an older library before an upgrade.
 
+### Raid buff assignments (r37)
+
+Who casts each raid-wide buff (the Prayers, Gift of the Wild, Arcane Brilliance, and one mage
+for Amplify *or* Dampen Magic). It also covers who a druid keeps Thorns on and who a priest
+keeps Fear Ward on. Assignments are shared over addon messages by every addon on this library,
+so a Priestly priest and a Buffy priest see the same thing. Anyone can change any assignment,
+and the last write wins. Nothing is saved: a `/reload` asks the group.
+
+```lua
+local assign = GB.Assignments({ onChanged = function() vis:ContentChanged() end })
+local engine = GB.Engine({ ..., assignments = assign })   -- defs opt in, below
+assign:SpellsChanged()   -- after engine:RefreshSpells()
+assign:Open()            -- toggles the assignment panel (a slash command, say)
+```
+
+A def opts in with `assign = "owner"` (or `"targets"` for Thorns and Fear Ward); Dampen adds
+`assignSlot = 1008` to share Amplify's slot, and `assignOnly = true` keeps a def rowless until
+the player has targets for it. Then:
+- A buff assigned to the player has a row whatever the host's toggle or mode says.
+- One assigned to somebody else has none.
+- A target list covers exactly the listed players.
+- Unassigned buffs keep the host's own rules.
+
 Addons built against r25 and earlier reach the library through `lib.API`, `lib.Engine.New`,
 `lib.UI.New`, `lib.Settings.New`, `lib.Visibility.New` and `lib.Status`. Those stay, unchanged:
 the newest copy loaded serves every addon, including ones that have not moved yet.
