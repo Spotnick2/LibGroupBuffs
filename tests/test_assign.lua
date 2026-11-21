@@ -859,6 +859,8 @@ do
     H.eq(h:Owner(fortDef), nil, "so nothing is owned")
     H.check(h:Open() == false, "Open toggles the panel closed")
     H.eq(#said, 0, "nothing was reported (" .. table.concat(said, "; ") .. ")")
+    H.check((c.stats.results["0"] or 0) >= 2, "the diagnostics count the accepted sends by result code")
+    H.check(c.stats.received >= 3 and c.stats.accepted >= 3, "and what arrived on the prefix (three messages)")
 end
 
 ------------------------------------------------------------

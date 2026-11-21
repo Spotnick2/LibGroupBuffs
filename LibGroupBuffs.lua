@@ -5079,6 +5079,9 @@ function AI.Fill(c)
     c.otherVersions = c.otherVersions or {}
     c.gen = c.gen or 0
     c.effective = c.effective or ""
+    -- Diagnostics for the in-game check: what the client answered each send
+    -- with (by result code), and what arrived on our prefix.
+    c.stats = c.stats or { results = {}, received = 0, accepted = 0 }
     return c
 end
 
@@ -5221,6 +5224,8 @@ function AI.Pump(c)
         if not e then return end
         local msg = e.msg or AI.HelloMessage(c)
         local ok, res = pcall(env.send, msg, c.channel)
+        local code = ok and tostring(res) or "error"
+        c.stats.results[code] = (c.stats.results[code] or 0) + 1
         if ok and (res == 0 or res == nil or res == true) then
             c.queue[e.qkey] = nil
             c.tokens = c.tokens - 1
@@ -5312,11 +5317,13 @@ end
 function AI.Receive(c, text, channel, sender)
     -- No payload was measured secret, but a comparison on one would throw:
     -- the type and size checks run protected, and only plain strings go on.
+    c.stats.received = c.stats.received + 1
     local ok, plain = pcall(Plain, text, channel, sender)
     if not ok or not plain then return end
     if not c.group or channel ~= c.channel or sender == c.me then return end
     local member = c.roster[sender]
     if not member then return end
+    c.stats.accepted = c.stats.accepted + 1
     local f = Split(text, SEP)
     if f[1] ~= PROTO then
         c.otherVersions[sender] = f[1]
