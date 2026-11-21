@@ -234,7 +234,7 @@ do
     H.eq(cora.client.records["1243"].value, "", "and is kept as a record")
 
     -- A stale replay of the old assignment cannot bring it back.
-    local stale = AI.EncodeRecord("1243", { ver = sim.server + 1, writer = "Cora Leaf", value = "Bren Holt" })
+    local stale = AI.EncodeRecord("1243", { ver = (sim.server + 1) * T.VER_SCALE, writer = "Cora Leaf", value = "Bren Holt" })
     AI.Receive(alia.client, stale, "RAID", "Bren Holt")
     H.eq(OwnerSeenBy(alia, FORT), nil, "a stale record loses to the newer clear")
 end
@@ -356,35 +356,48 @@ do
     end
     H.check((Digests(sim)), "and everyone agrees")
 
-    -- A burst of four edits in one second pushes the version ahead of the
-    -- server's clock. After a reload, an edit at once starts below it; when the
-    -- burst's record comes back, the fresh edit is put back on top (#93 review).
+    -- A burst of four edits in one second stays inside that second's
+    -- versions, so an edit after a reload (which takes at least a second of
+    -- loading screen) beats all of it, from whichever peer it comes back
+    -- (#93 reviews).
     sim:run(5)
+    local second = sim.server + math.floor(sim.t)
     for _, owner in ipairs({ "Alia Dawn", "Bren Holt", "Alia Dawn", "Bren Holt" }) do
         AI.SetOwner(b.client, SPIRIT, owner)
     end
     local top = b.client.records["14752"].ver
+    H.check(top < (second + 1) * T.VER_SCALE, "a burst keeps its versions inside its second")
     sim:run(0.5)
+    -- A peer holds a different, also-higher record of the same second.
+    AI.Receive(c.client, AI.EncodeRecord("14752", { ver = top + 1, writer = "Cora Leaf", value = "Cora Leaf" }),
+        "RAID", "Cora Leaf")
+    sim:run(1)
     b:boot()
     AI.SetOwner(b.client, SPIRIT, "Alia Dawn")
-    local mine = b.client.records["14752"].ver
-    H.check(mine < top, "the reloaded edit's version is below the burst's last")
+    H.check(b.client.records["14752"].ver > top + 1, "the reloaded edit's version is above all of them")
     sim:run(T.HELLO_PERIOD + 20)
     H.check((Digests(sim)), "the clients converge")
     for _, m in ipairs({ a, b, c }) do
         H.eq(OwnerSeenBy(m, SPIRIT), "Alia Dawn", m.name .. ": on the edit made after the reload")
     end
-    H.check(b.client.records["14752"].ver > top, "which went back on top of the burst")
-    H.check(b.client.synced and next(b.client.fresh) == nil, "and the client counts as synced")
 
-    -- Once synced, a newer record from somebody else is not overridden.
-    AI.SetOwner(a.client, SPIRIT, "Bren Holt")
-    sim:run(5)
-    H.eq(OwnerSeenBy(b, SPIRIT), "Bren Holt", "a later edit by another player wins as usual")
+    -- Somebody who saw that edit and changes the slot again wins, even if the
+    -- reloaded client has not caught up with the group yet.
+    sim:run(2)
+    b:boot()
+    sim:run(1.5)
+    AI.SetOwner(b.client, SPIRIT, "Bren Holt")
+    sim:run(1)
+    H.eq(OwnerSeenBy(a, SPIRIT), "Bren Holt", "Alia has the reloaded client's edit")
+    AI.SetOwner(a.client, SPIRIT, "Alia Dawn")
+    sim:run(T.HELLO_PERIOD + 20)
+    for _, m in ipairs({ a, b, c }) do
+        H.eq(OwnerSeenBy(m, SPIRIT), "Alia Dawn", m.name .. ": the later edit stands")
+    end
 
     -- The same version and writer with different values: one winner everywhere.
-    local x = AI.EncodeRecord("976", { ver = sim.server + 999, writer = "Alia Dawn", value = "Alia Dawn" })
-    local y = AI.EncodeRecord("976", { ver = sim.server + 999, writer = "Alia Dawn", value = "Bren Holt" })
+    local x = AI.EncodeRecord("976", { ver = (sim.server + 999) * T.VER_SCALE, writer = "Alia Dawn", value = "Alia Dawn" })
+    local y = AI.EncodeRecord("976", { ver = (sim.server + 999) * T.VER_SCALE, writer = "Alia Dawn", value = "Bren Holt" })
     AI.Receive(a.client, x, "RAID", "Cora Leaf"); AI.Receive(a.client, y, "RAID", "Cora Leaf")
     AI.Receive(c.client, y, "RAID", "Bren Holt"); AI.Receive(c.client, x, "RAID", "Bren Holt")
     H.eq(a.client.records["976"].value, c.client.records["976"].value, "equal version and writer: same winner either order")
@@ -494,7 +507,7 @@ do
     local b = Member(sim, "Bren Holt", "PRIEST", PRIEST)
     RosterAll(sim)
     sim:run(5)
-    local rec = AI.EncodeRecord("1243", { ver = sim.server + 50, writer = "Bren Holt", value = "Bren Holt" })
+    local rec = AI.EncodeRecord("1243", { ver = (sim.server + 50) * T.VER_SCALE, writer = "Bren Holt", value = "Bren Holt" })
     AI.Receive(a.client, rec, "RAID", "Somebody Else")
     H.eq(a.client.records["1243"], nil, "a sender outside the group is ignored")
     AI.Receive(a.client, rec, "PARTY", "Bren Holt")
@@ -514,21 +527,22 @@ do
     -- Versions: plain decimal integers, at most a day past the server clock,
     -- so any accepted record can be beaten by the next edit (#93 review).
     for _, bad in ipairs({ "1e9", "0x10", "-5", "1.5", "0123", " 99", "99999999999999999999",
-                           tostring(sim.server + T.VER_AHEAD + 10) }) do
+                           tostring((sim.server + T.VER_AHEAD + 10) * T.VER_SCALE) }) do
         AI.Receive(a.client, "1^A^1243^" .. bad .. "^Bren Holt^Bren Holt", "RAID", "Bren Holt")
         H.eq(a.client.records["1243"], nil, "version " .. bad .. " is refused")
     end
     AI.Receive(a.client, rec, "RAID", "Bren Holt")
     H.eq(a.client.records["1243"].value, "Bren Holt", "a good record from a member is kept")
-    local edge = AI.EncodeRecord("1243", { ver = sim.server + math.floor(sim.t) + T.VER_AHEAD, writer = "Bren Holt",
+    local edge = AI.EncodeRecord("1243", { ver = (sim.server + math.floor(sim.t) + T.VER_AHEAD) * T.VER_SCALE, writer = "Bren Holt",
                                            value = "Bren Holt" })
     AI.Receive(a.client, edge, "RAID", "Bren Holt")
-    H.check(a.client.records["1243"].ver == sim.server + math.floor(sim.t) + T.VER_AHEAD, "the furthest version is kept")
+    H.check(a.client.records["1243"].ver == (sim.server + math.floor(sim.t) + T.VER_AHEAD) * T.VER_SCALE, "the furthest version is kept")
     local ok, why = AI.SetOwner(a.client, FORT, "Alia Dawn")
     H.check(not ok and why == "version", "an edit that would pass the limit waits")
     sim:run(1)
+    local furthest = a.client.records["1243"].ver
     H.check(AI.SetOwner(a.client, FORT, "Alia Dawn"), "and goes through a second later, on top")
-    H.check(a.client.records["1243"].ver == sim.server + math.floor(sim.t) + T.VER_AHEAD, "at the limit")
+    H.eq(a.client.records["1243"].ver, furthest + 1, "one step above it")
     AI.Receive(a.client, nil, "RAID", "Bren Holt")
     AI.Receive(a.client, string.rep("x", 300), "RAID", "Bren Holt")
     H.check(true, "a nil or oversized payload is dropped quietly")
@@ -822,7 +836,7 @@ do
     H.eq(c.peers["Cora Leaf"], nil, "another prefix is not ours")
     local before = changed
     WoW.dispatch("CHAT_MSG_ADDON", "LibGroupBuffs",
-        AI.EncodeRecord("1243", { ver = GetServerTime() + 5, writer = "Cora Leaf", value = "Bren Holt" }), "RAID", "Cora Leaf")
+        AI.EncodeRecord("1243", { ver = (GetServerTime() + 5) * T.VER_SCALE, writer = "Cora Leaf", value = "Bren Holt" }), "RAID", "Cora Leaf")
     H.check(changed > before, "the host hears about an owner change")
     local fortDef = { id = "fort", snglID = 1243, assign = "owner" }
     H.eq(h:Owner(fortDef), "Bren Holt", "and reads it")
@@ -878,7 +892,7 @@ do
 
     -- A member disconnecting is a UNIT_CONNECTION, not a roster event (#93 review).
     WoW.dispatch("CHAT_MSG_ADDON", "LibGroupBuffs",
-        AI.EncodeRecord("1243", { ver = GetServerTime() + 50, writer = "Bren Holt", value = "Bren Holt" }), "RAID", "Bren Holt")
+        AI.EncodeRecord("1243", { ver = (GetServerTime() + 50) * T.VER_SCALE, writer = "Bren Holt", value = "Bren Holt" }), "RAID", "Bren Holt")
     H.eq(h:Owner(fortDef), "Bren Holt", "Bren owns Fortitude again")
     WoW.units.raid2.connected = false
     before = changed
@@ -888,12 +902,21 @@ do
     WoW.units.raid2.connected = true
     WoW.dispatch("UNIT_CONNECTION", "raid2", true)
     H.eq(h:Owner(fortDef), "Bren Holt", "and counts again on reconnecting")
-    WoW.chatLockdown = true
+    -- The client reports no lockdown while it dispatches the activation
+    -- ("Activating", enforced once dispatch ends), so the event's state counts.
+    WoW.chatLockdown = false
+    WoW.dispatch("ADDON_RESTRICTION_STATE_CHANGED", 0, 1)
+    H.eq(c.lockedAt, nil, "a combat restriction is not the chat one")
     WoW.dispatch("ADDON_RESTRICTION_STATE_CHANGED", 5, 1)
-    H.check(c.lockedAt ~= nil, "a restriction change starts the peer clock's pause")
+    H.check(c.lockedAt ~= nil, "the chat restriction activating starts the peer clock's pause")
+    AI.Changed(c)
+    H.check(c.lockedAt ~= nil, "and a check during that dispatch keeps it")
+    WoW.chatLockdown = true
+    WoW.dispatch("ADDON_RESTRICTION_STATE_CHANGED", 5, 2)
+    H.check(c.lockedAt ~= nil, "active: still paused")
     WoW.chatLockdown = false
     WoW.dispatch("ADDON_RESTRICTION_STATE_CHANGED", 5, 0)
-    H.eq(c.lockedAt, nil, "and its end resumes it")
+    H.eq(c.lockedAt, nil, "inactive resumes it")
 
     -- In combat the panel is read-only.
     WoW.inCombat = true
