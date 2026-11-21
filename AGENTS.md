@@ -380,7 +380,14 @@ and the like name those sections.
     unlike the window's: one host's error must not stop another's, and the error goes to that
     host's `report(text, "assign")`.
   - **Records order totally** by `(ver, writer, value)`, and clears are records: never "fix" a
-    divergence by deleting a record. `ver` is `max(GetServerTime(), current + 1)`.
+    divergence by deleting a record. `ver` is `max(GetServerTime(), current + 1)`. On receipt
+    it must be a plain decimal integer at most a day (`VER_AHEAD`) past the server clock, so
+    the next edit can always beat it. An edit made before the client has the group's state
+    (no peer's digest has matched yet, after joining or a `/reload`) is kept in `c.fresh` and
+    put back on top, once, if an older record with a higher version arrives (`AI.Rebase`).
+  - **Liveness:** an owner counts while in the roster, online (`UNIT_CONNECTION` refreshes
+    it) and heard within `PEER_TTL`. A peer's age stands still while chat is locked down
+    (`AI.LockClock`, sampled on `ADDON_RESTRICTION_STATE_CHANGED`, combat and every check).
   - **Measured transport limits are load-bearing:** a throttled send is dropped (result 3), so
     an entry leaves the queue only on success. A 256th byte is cut silently, so an edit that
     would not fit is refused before it is applied. Raid instances, boss fights and

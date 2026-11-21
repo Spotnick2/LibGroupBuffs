@@ -4859,6 +4859,14 @@ do -- Assign ==================================================================
 local PREFIX, PROTO, SEP = "LibGroupBuffs", "1", "^"
 local MAX_BYTES = 255
 local HELLO_PERIOD, HELLO_JITTER, PEER_TTL = 60, 10, 180
+-- A version is a server time in seconds, nudged up by bursts of edits. One
+-- more than a day ahead of the server is refused, so every accepted record
+-- can still be beaten by a later edit (and stays an exact integer in Lua 5.1).
+local VER_AHEAD, VER_DIGITS = 86400, 12
+-- An edit made after joining or a /reload, before this client has the
+-- group's state, is put back on top if an older-but-higher record arrives
+-- (once, and only within this long).
+local FRESH_TTL = HELLO_PERIOD + HELLO_JITTER + 30
 local BUCKET, REFILL, BACKOFF = 10, 1, 2
 local PRIO_EDIT, PRIO_HELLO, PRIO_REPAIR = 1, 2, 3
 local HOME = LE_PARTY_CATEGORY_HOME or 1
@@ -5079,6 +5087,7 @@ function AI.Fill(c)
     c.otherVersions = c.otherVersions or {}
     c.gen = c.gen or 0
     c.effective = c.effective or ""
+    c.fresh = c.fresh or {}
     -- Diagnostics for the in-game check: what the client answered each send
     -- with (by result code), and what arrived on our prefix.
     c.stats = c.stats or { results = {}, received = 0, accepted = 0 }
@@ -5094,6 +5103,7 @@ function AI.Wipe(c)
     c.repair, c.blockedUntil = nil, nil
     c.pending = nil
     c.otherVersions = {}
+    c.synced, c.fresh = nil, {}
     c.gen = c.gen + 1
 end
 
@@ -5102,13 +5112,31 @@ local function Report(c, text)
     if sub and sub.report then sub.report(text, "assign") end
 end
 
+-- A peer's age stands still while chat is locked down: nobody can say hello
+-- then, so a fight longer than PEER_TTL must not expire everyone at unlock.
+-- Sampled on ADDON_RESTRICTION_STATE_CHANGED, combat and every check.
+function AI.LockClock(c)
+    local env = Env(c)
+    local now = env.now()
+    if env.lockdown() then
+        c.lockedAt = c.lockedAt or now
+    elseif c.lockedAt then
+        local from = c.lockedAt
+        c.lockedAt = nil
+        for _, peer in pairs(c.peers) do
+            if peer.seen < from then peer.seen = peer.seen + (now - from) else peer.seen = now end
+        end
+    end
+end
+
 -- Whether `name` is in the group now and can cast `spell`.
 local function Capable(c, name, spell)
     if not name or not spell then return false end
     if name == c.me then return c.mySpells[spell] == true end
     local member, peer = c.roster[name], c.peers[name]
     if not member or not member.online or not peer or not peer.spells[spell] then return false end
-    return Env(c).now() - peer.seen <= PEER_TTL or Env(c).lockdown()
+    AI.LockClock(c)
+    return c.lockedAt ~= nil or Env(c).now() - peer.seen <= PEER_TTL
 end
 AI.Capable = Capable
 
@@ -5336,25 +5364,52 @@ function AI.Receive(c, text, channel, sender)
         local isNew = c.peers[sender] == nil
         c.peers[sender] = { class = f[3], spells = spells, digest = f[5], seen = Env(c).now() }
         if isNew then AI.HelloSoon(c) end
-        if f[5] ~= Digest(c.records) then AI.ScheduleRepair(c) end
+        if f[5] ~= Digest(c.records) then
+            AI.ScheduleRepair(c)
+        else
+            -- Somebody holds exactly what we hold: we have the group's state.
+            c.synced, c.fresh = true, {}
+        end
         AI.Changed(c)
     elseif f[2] == "A" and #f == 6 then
-        local key, ver, writer, value = f[3], tonumber(f[4]), f[5], f[6]
+        local key, ver, writer, value = f[3], AI.ParseVersion(c, f[4]), f[5], f[6]
         local slot = ParseKey(key)
-        if not slot or not ver or ver ~= math.floor(ver) or not ValidName(writer)
-            or not ValidValue(slot, value)
-        then
-            return
+        if not slot or not ver or not ValidName(writer) or not ValidValue(slot, value) then return end
+        if AI.Apply(c, key, { ver = ver, writer = writer, value = value }) then
+            AI.Rebase(c, key)
+            AI.Changed(c)
         end
-        if AI.Apply(c, key, { ver = ver, writer = writer, value = value }) then AI.Changed(c) end
     end
+end
+
+-- A version as sent: decimal digits with no sign, point or leading zero, and
+-- no more than VER_AHEAD past the server's clock. Anything else is refused.
+function AI.ParseVersion(c, text)
+    if type(text) ~= "string" or #text > VER_DIGITS or not text:match("^[1-9]%d*$") then return nil end
+    local ver = tonumber(text)
+    if not ver or ver > Env(c).serverNow() + VER_AHEAD then return nil end
+    return ver
+end
+
+-- An edit of ours made before we had the group's state lost to a record that
+-- is older but carries a higher version (a burst of edits before a /reload).
+-- Put ours back on top, once.
+function AI.Rebase(c, key)
+    local fresh = c.fresh[key]
+    if not fresh then return end
+    c.fresh[key] = nil
+    if Env(c).now() - fresh.at > FRESH_TTL then return end
+    local cur = c.records[key]
+    if cur and cur.writer == c.me and cur.value == fresh.value then return end
+    AI.Write(c, key, fresh.value)
 end
 
 -- ─── Group and capability ───────────────────────────────────────────────────
 
 function AI.Expire(c)
     local env = Env(c)
-    if env.lockdown() then return end
+    AI.LockClock(c)
+    if c.lockedAt then return end
     local now = env.now()
     for name, peer in pairs(c.peers) do
         if not c.roster[name] or now - peer.seen > PEER_TTL then c.peers[name] = nil end
@@ -5421,16 +5476,26 @@ function AI.Edit(c, key, value)
     if env.combat() then return false, "combat" end
     local slot = ParseKey(key)
     if not slot or not ValidValue(slot, value) then return false, "invalid" end
+    local ok, why = AI.Write(c, key, value)
+    if not ok then return false, why end
+    if not c.synced then c.fresh[key] = { value = value, at = env.now() } end
+    AI.Changed(c)
+    return true
+end
+
+-- Stamps, stores and queues one record of ours: Edit's, and Rebase's.
+function AI.Write(c, key, value)
+    local env = Env(c)
     local cur = c.records[key]
     local ver = env.serverNow()
     if cur and cur.ver >= ver then ver = cur.ver + 1 end
+    if ver > env.serverNow() + VER_AHEAD then return false, "version" end
     local rec = { ver = ver, writer = c.me, value = value }
     local msg = EncodeRecord(key, rec)
     if #msg > MAX_BYTES then return false, "size" end
     c.records[key] = rec
     Enqueue(c, "A:" .. key, PRIO_EDIT, msg, rec)
     AI.SchedulePump(c, 0)
-    AI.Changed(c)
     return true
 end
 
@@ -5453,15 +5518,23 @@ end
 
 lib.assign = AI.Fill(lib.assign or {})
 
+-- UNIT_CONNECTION: a member going offline or back changes who is a live
+-- owner without any roster event. ADDON_RESTRICTION_STATE_CHANGED: chat
+-- locking and unlocking, for the peer clock.
 local EVENTS = { "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE", "GROUP_JOINED", "GROUP_LEFT",
-                 "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }
+                 "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+                 "UNIT_CONNECTION", "ADDON_RESTRICTION_STATE_CHANGED" }
 
 function AI.OnEvent(c, event, ...)
     if event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
         if prefix == PREFIX then return AI.Receive(c, text, channel, sender) end
     elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
+        AI.LockClock(c)
         AI.PanelRefresh(c)
+    elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        AI.LockClock(c)
+        AI.Changed(c)
     else
         local wasGroup = c.group
         AI.RosterChanged(c)
@@ -5820,7 +5893,8 @@ end
 
 -- Internals for the tests only.
 lib._assignTest = { SLOTS = SLOTS, PREFIX = PREFIX, PEER_TTL = PEER_TTL, HELLO_PERIOD = HELLO_PERIOD,
-                    MAX_BYTES = MAX_BYTES, DEFAULT_ENV = DEFAULT_ENV }
+                    MAX_BYTES = MAX_BYTES, DEFAULT_ENV = DEFAULT_ENV, VER_AHEAD = VER_AHEAD,
+                    FRESH_TTL = FRESH_TTL }
 
 end -- Assign
 
