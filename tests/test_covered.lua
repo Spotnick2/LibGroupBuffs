@@ -201,6 +201,36 @@ H.eq(state, UNKNOWN, "BuffRem: nothing cached")
 H.eq(E:CoverOf("party3", fort), nil, "CoverOf: nil, it cannot be known")
 H.secrecy(false)
 
+-- Two covering auras up: the longer one is remembered, so coverage does not
+-- end mid-fight when the shorter one runs out (Codex round 1 on #95).
+fort = setup()
+WoW.SetAura("player", "Might of Stormwind", 7200, 300, MIGHT)
+WoW.SetAura("player", "Warchief's Blessing", 7200, 3000, WARCHIEF)
+cover, coverRem = E:CoverOf("player", fort)
+H.eq(cover, "Warchief's Blessing", "the longer-lasting cover is the answer")
+H.eq(coverRem, 3000, "with its time")
+H.secrecy(true)
+WoW.time = WoW.time + 600                        -- the shorter one has run out
+H.eq(E:CoverOf("player", fort), "Warchief's Blessing", "coverage outlives the shorter aura")
+H.eq(E:PickTarget(members(), fort, false), "party1", "and the member is still skipped")
+H.secrecy(false)
+
+-- A def an older copy refreshed: coveredBy is there, coverNames is not.
+fort = setup()
+fort.coverNames, fort.coverSingles, fort.coverByID = nil, nil, nil
+WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
+H.eq(E:CoverOf("player", fort), "Might of Stormwind", "CoverOf resolves the names itself")
+fort.coverNames, fort.coverSingles, fort.coverByID = nil, nil, nil
+H.eq(E:AuraEventIsRelevant("party1", { addedAuras = { { name = "Warchief's Blessing" } } }), true,
+    "and so does the aura event filter")
+fort.coverNames, fort.coverSingles, fort.coverByID = nil, nil, nil
+E.allNames = { "Power Word: Fortitude", "Prayer of Fortitude" }   -- the old copy's union
+E:BeginAuraPass()
+H.eq(E:CoverOf("player", fort), "Might of Stormwind", "inside such a pass the read goes live")
+WoW.ClearAuras("player")
+H.eq(E:CoverOf("player", fort), false, "and a live absence is an absence")
+E:EndAuraPass()
+
 -- A buff seen missing but whose cover was never looked at (an engine an older
 -- copy filled before the pull) is UNKNOWN, not MISSING.
 fort = setup()
@@ -251,7 +281,9 @@ WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
 ui:Update()
 local row = H.ActiveRows(ui)[1]
 H.check(row, "a Fortitude row")
-H.check(row:GetAttribute("unit1") ~= "player", "the row's click is not wired at the covered member")
+H.eq(row:GetAttribute("unit1"), "party1", "the row's click is wired at the next member, not the covered one")
+H.eq(row:GetAttribute("spell1"), "Power Word: Fortitude", "and armed")
+row:SetAttribute("unit1", "player")              -- stale wiring, for PreClick to fix
 H.runScript(row, "PreClick", "LeftButton")
 H.eq(row:GetAttribute("unit1"), "party1", "PreClick aims at the next member who needs it")
 

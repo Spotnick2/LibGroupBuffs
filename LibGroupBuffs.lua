@@ -1413,6 +1413,41 @@ local function Resolve(id, current, status)
     return current, status or "unknown"
 end
 
+-- Covering auras (r38, #95) by name, resolved from their IDs like the buff's
+-- own. By ID a name resolves whether or not the player knows the spell, which
+-- a world buff never is. There is no English fallback: an ID this client does
+-- not have covers nothing. A name resolved once is remembered, as the buff's
+-- own names are, and several IDs sharing one name (a buff's variants) count
+-- once. `coverSingles` holds each name as a one-name list, for CoverOf.
+local function ResolveCovers(d)
+    if not d.coveredBy then
+        d.coverNames, d.coverByID, d.coverSingles = nil, nil, nil
+        return
+    end
+    local byID = d.coverByID or {}
+    d.coverByID = byID
+    local list, singles, seen = {}, {}, {}
+    for _, id in ipairs(d.coveredBy) do
+        byID[id] = lib.API.SpellName(id) or byID[id]
+        local nm = byID[id]
+        if nm and not seen[nm] then
+            seen[nm] = true
+            list[#list + 1] = nm
+            singles[#singles + 1] = { nm }
+        end
+    end
+    d.coverNames, d.coverSingles = list, singles
+end
+
+-- The covering names, resolved now if no refresh by this copy has: a def an
+-- older copy refreshed carries `coveredBy` but none of what it derives. Until
+-- the host's next RefreshSpells the pass union lacks them, so their reads go
+-- live (API.PassCovers): slower, never wrong.
+local function CoverNames(d)
+    if d.coveredBy and not d.coverSingles then ResolveCovers(d) end
+    return d.coverNames
+end
+
 function Methods:RefreshSpells()
     local API = lib.API
     for _, d in ipairs(self.defs) do
@@ -1421,28 +1456,7 @@ function Methods:RefreshSpells()
         d.names = { d.sngl, d.grp }
         d.hasSingle = API.KnowsSpell(d.snglID) and true or false
         d.hasGroup = (d.grpID and API.KnowsSpell(d.grpID)) and true or false
-        -- Covering auras (r38, #95) by name, resolved from their IDs like the
-        -- buff's own. By ID a name resolves whether or not the player knows
-        -- the spell, which a world buff never is. There is no English
-        -- fallback: an ID this client does not have covers nothing. A name
-        -- resolved once is remembered, as the buff's own names are, and
-        -- several IDs sharing one name (a buff's variants) count once.
-        if d.coveredBy then
-            local byID = d.coverByID or {}
-            d.coverByID = byID
-            local list, seen = {}, {}
-            for _, id in ipairs(d.coveredBy) do
-                byID[id] = API.SpellName(id) or byID[id]
-                local nm = byID[id]
-                if nm and not seen[nm] then
-                    seen[nm] = true
-                    list[#list + 1] = nm
-                end
-            end
-            d.coverNames = list
-        else
-            d.coverNames, d.coverByID = nil, nil
-        end
+        ResolveCovers(d)
     end
     -- Every name anybody is tracking, in one list. An aura pass walks a unit
     -- once against this rather than once per buff, so it has to be rebuilt
@@ -1713,22 +1727,37 @@ end
 -- closed and this character was never looked at. Combat follows BuffRem's
 -- rules: the last thing seen carries forward, and a covering aura whose own
 -- clock runs out during the fight stops covering.
+--
+-- With two covering auras up, the one that lasts longest is the answer, and
+-- the one remembered: remembering the first would end the coverage mid-fight
+-- when it ran out, with the other still up.
 function Methods:CoverOf(unit, def)
-    local names = def.coverNames
+    local names = CoverNames(def)
     if not names or #names == 0 then return false end
     if not unit or not UnitExists(unit) then return false end
-    local key = lib.API.UnitKey(unit)
+    local API = lib.API
+    local key = API.UnitKey(unit)
     self.coverCache = self.coverCache or {}
-    local status, rem, _, exp, matched = lib.API.ReadBuff(unit, names, self.auraPass)
 
-    if status == "HAS" then
-        if rem == math.huge then rem = PERMANENT end
+    -- One read per name, each answered by the pass's single walk when one
+    -- is open. ReadBuff stops at the first name it finds.
+    local status, best, bestRem, bestExp = "NONE", nil, -1, 0
+    for _, single in ipairs(def.coverSingles) do
+        local st, rem, _, exp, matched = API.ReadBuff(unit, single, self.auraPass)
+        if st == "HAS" then
+            if rem == math.huge then rem = PERMANENT end
+            if rem > bestRem then best, bestRem, bestExp = matched, rem, exp or 0 end
+        elseif st == "BLOCKED" then
+            status = "BLOCKED"
+        end
+    end
+    if best then
         if key then
             local e = self.coverCache[key] or {}
             self.coverCache[key] = e
-            e[def.id] = { name = matched, exp = exp or 0, stamp = GetTime() }
+            e[def.id] = { name = best, exp = bestExp, stamp = GetTime() }
         end
-        return matched, rem
+        return best, bestRem
     end
     if status == "NONE" then
         if key then
@@ -2108,7 +2137,7 @@ function Methods:AuraEventIsRelevant(unit, updateInfo)
                 for _, d in ipairs(defs) do
                     if nm == d.sngl or nm == d.grp then return true end
                     -- A covering aura landing changes who counts as missing.
-                    local covers = d.coverNames
+                    local covers = CoverNames(d)
                     if covers then
                         for i = 1, #covers do
                             if nm == covers[i] then return true end
@@ -3854,7 +3883,9 @@ end
 function Methods:PopRowPreClick(pr)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
-    -- Block a cast at somebody offline or dead.
+    -- Block a cast at somebody offline or dead. A member a stronger aura
+    -- covers (#95) is NOT blocked here: this is the player's own choice of
+    -- target, and whether the group form bounces off them is unmeasured.
     if not self.engine:IsValidTarget(pr._unit) then
         pr:SetAttribute("spell1", nil)
         pr:SetAttribute("spell2", nil)
