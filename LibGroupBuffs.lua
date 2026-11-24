@@ -1794,6 +1794,13 @@ function Methods:CoverOf(unit, def)
 
     if not cached then return nil end
     if cached.none or not cachedRem then return false end
+    -- The remembered aura's own read came back and said it is gone, while
+    -- another name's was refused: the memory is contradicted and dropped, and
+    -- what is left cannot be known.
+    if not refused[cached.name] then
+        entries[def.id] = nil
+        return nil
+    end
     return cached.name, (cachedRem == math.huge) and PERMANENT or cachedRem
 end
 
@@ -3269,7 +3276,14 @@ function Methods:ApplyPopRowVisuals(pr)
     -- aura's time, in its own colour, and the row's tooltip names it.
     local cover, coverRem = engine:CoverOf(unit, def)
     if cover == nil and not has then state = S.UNKNOWN end
+    local was = pr._cover
     pr._cover = cover or nil
+    -- The row's own tooltip, open under the cursor, says what the cover
+    -- was when the mouse arrived, and OnEnter does not fire again while the
+    -- mouse rests there: redraw it when that changes.
+    if was ~= pr._cover and lib.API.IsMouseOver(pr) then
+        if pr._cover then self:PopRowEnter(pr) else self:PopRowLeave() end
+    end
     -- The range dot describes the spell the LEFT click casts: a group spell
     -- can reach further than the single form, so the single spell's range
     -- would mark members out of reach that the group spell lands on fine.

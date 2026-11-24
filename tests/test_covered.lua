@@ -269,6 +269,23 @@ WoW.time = WoW.time + 250
 H.eq(E:CoverOf("player", fort), false, "so coverage ends when it really runs out")
 H.secrecy(false)
 
+-- The remembered aura's own read says it is gone while the other name's is
+-- refused: the memory is dropped, not reported (Codex round 4).
+fort = setup()
+WoW.SetAura("player", "Warchief's Blessing", 7200, 3000, WARCHIEF)
+E:CoverOf("player", fort)                        -- remembers Warchief's
+WoW.ClearAuras("player")
+WoW.SetAura("player", "Renew", 15, 10)
+lib.API.ReadBuff = function(unit, names, pass)
+    if names[1] == "Might of Stormwind" then return "BLOCKED" end
+    return realRead(unit, names, pass)
+end
+H.eq(E:CoverOf("player", fort), nil, "a contradicted memory is not reported; the rest is unknown")
+lib.API.ReadBuff = realRead
+H.secrecy(true)
+H.eq(E:CoverOf("player", fort), nil, "and cannot resurface once every read is refused")
+H.secrecy(false)
+
 -- Clearing coveredBy takes effect before the next refresh.
 fort = setup()
 WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
@@ -361,7 +378,24 @@ H.runScript(pr, "OnEnter")
 local text = WoW.tooltipText()
 H.check(text:find("Might of Stormwind", 1, true) and text:find("Power Word: Fortitude", 1, true),
     "the popover row's tooltip names the aura and the buff it blocks: " .. text)
+-- The cover goes while the cursor rests on the row (Codex round 4).
+WoW.mouseOver[pr] = true
+WoW.ClearAuras("player")
+ui:RefreshTimers()
+H.eq(pr.timeTxt:GetText(), "MISS", "the row turns to MISS")
+H.eq(WoW.tooltipText(), "", "and its stale tooltip goes with the cover")
+WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
+ui:RefreshTimers()
+H.check(WoW.tooltipText():find("Might of Stormwind", 1, true),
+    "and comes back, redrawn, when the cover does: " .. WoW.tooltipText())
+WoW.mouseOver[pr] = nil
 H.runScript(pr, "OnLeave")
+WoW.ClearAuras("player")
+ui:RefreshTimers()
+H.eq(WoW.tooltipText(), "", "with the mouse elsewhere nothing is drawn")
+WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
+ui:RefreshTimers()
+H.eq(WoW.tooltipText(), "", "not even when the cover comes back")
 WoW.clearTooltip()
 H.runScript(ui.popRows[2], "OnEnter")
 H.eq(WoW.tooltipText(), "", "a member who is not covered gets no such tooltip")
