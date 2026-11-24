@@ -1444,7 +1444,8 @@ end
 -- the host's next RefreshSpells the pass union lacks them, so their reads go
 -- live (API.PassCovers): slower, never wrong.
 local function CoverNames(d)
-    if d.coveredBy and not d.coverSingles then ResolveCovers(d) end
+    if not d.coveredBy then return nil end   -- cleared since the last refresh
+    if not d.coverSingles then ResolveCovers(d) end
     return d.coverNames
 end
 
@@ -1740,41 +1741,56 @@ function Methods:CoverOf(unit, def)
     self.coverCache = self.coverCache or {}
 
     -- One read per name, each answered by the pass's single walk when one
-    -- is open. ReadBuff stops at the first name it finds.
+    -- is open. ReadBuff stops at the first name it finds. Remaining times
+    -- are compared raw: a permanent aura (math.huge) outlasts any timed one,
+    -- which the clamped PERMANENT would not.
     local status, best, bestRem, bestExp = "NONE", nil, -1, 0
     for _, single in ipairs(def.coverSingles) do
         local st, rem, _, exp, matched = API.ReadBuff(unit, single, self.auraPass)
         if st == "HAS" then
-            if rem == math.huge then rem = PERMANENT end
             if rem > bestRem then best, bestRem, bestExp = matched, rem, exp or 0 end
         elseif st == "BLOCKED" then
             status = "BLOCKED"
         end
     end
-    if best then
-        if key then
-            local e = self.coverCache[key] or {}
-            self.coverCache[key] = e
-            e[def.id] = { name = best, exp = bestExp, stamp = GetTime() }
+
+    local entries = self.coverCache[key or ""]
+    local cached = key and entries and entries[def.id]
+    -- What the cache still vouches for: name and remaining, or nil.
+    local cachedRem
+    if cached and cached.name then
+        if cached.exp == 0 then
+            cachedRem = math.huge
+        elseif cached.exp - GetTime() > 0 then
+            cachedRem = cached.exp - GetTime()
         end
-        return best, bestRem
+    end
+
+    if best then
+        -- A read that was refused for some names proves only what it saw. A
+        -- longer cover remembered from before is not contradicted by it.
+        if status == "BLOCKED" and cachedRem and cachedRem > bestRem then
+            best, bestRem = cached.name, cachedRem
+            cached.stamp = GetTime()
+        elseif key then
+            entries = entries or {}
+            self.coverCache[key] = entries
+            entries[def.id] = { name = best, exp = bestExp, stamp = GetTime() }
+        end
+        return best, (bestRem == math.huge) and PERMANENT or bestRem
     end
     if status == "NONE" then
         if key then
-            local e = self.coverCache[key] or {}
-            self.coverCache[key] = e
-            e[def.id] = { none = true, stamp = GetTime() }
+            entries = entries or {}
+            self.coverCache[key] = entries
+            entries[def.id] = { none = true, stamp = GetTime() }
         end
         return false
     end
 
-    local cached = key and self.coverCache[key] and self.coverCache[key][def.id]
     if not cached then return nil end
-    if cached.none then return false end
-    if cached.exp == 0 then return cached.name, PERMANENT end
-    local r = cached.exp - GetTime()
-    if r > 0 then return cached.name, r end
-    return false
+    if cached.none or not cachedRem then return false end
+    return cached.name, (cachedRem == math.huge) and PERMANENT or cachedRem
 end
 
 -- BuffRem with the covering aura beside it: rem, dur, state, spell, basis,

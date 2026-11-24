@@ -215,6 +215,48 @@ H.eq(E:CoverOf("player", fort), "Warchief's Blessing", "coverage outlives the sh
 H.eq(E:PickTarget(members(), fort, false), "party1", "and the member is still skipped")
 H.secrecy(false)
 
+-- A permanent cover outlasts a timed one, even one longer than the clamped
+-- PERMANENT (Codex round 2).
+fort = setup()
+WoW.SetAura("player", "Might of Stormwind", 0, nil, MIGHT)             -- permanent
+WoW.SetAura("player", "Warchief's Blessing", 20000, 15000, WARCHIEF)   -- timed, > 9999
+cover, coverRem = E:CoverOf("player", fort)
+H.eq(cover, "Might of Stormwind", "the permanent cover wins")
+H.eq(coverRem, lib.Engine.PERMANENT, "reported as PERMANENT")
+H.secrecy(true)
+WoW.time = WoW.time + 16000                      -- the timed one has run out
+H.eq(E:CoverOf("player", fort), "Might of Stormwind", "and is what combat remembers")
+H.secrecy(false)
+
+-- A read refused for one name proves only what it saw: a longer cover
+-- remembered from before stands (Codex round 2). The stub's walk blocks
+-- every name at once, so the partial refusal is staged on ReadBuff.
+fort = setup()
+WoW.SetAura("player", "Might of Stormwind", 7200, 300, MIGHT)
+WoW.SetAura("player", "Warchief's Blessing", 7200, 3000, WARCHIEF)
+E:CoverOf("player", fort)                        -- remembers Warchief's, 3000
+local realRead = lib.API.ReadBuff
+lib.API.ReadBuff = function(unit, names, pass)
+    if names[1] == "Warchief's Blessing" then return "BLOCKED" end
+    return realRead(unit, names, pass)
+end
+cover, coverRem = E:CoverOf("player", fort)
+H.eq(cover, "Warchief's Blessing", "a partly refused read keeps the longer remembered cover")
+H.eq(coverRem, 3000, "with its time")
+lib.API.ReadBuff = realRead
+H.secrecy(true)
+WoW.time = WoW.time + 600
+H.eq(E:CoverOf("player", fort), "Warchief's Blessing", "and it is still remembered afterwards")
+H.secrecy(false)
+
+-- Clearing coveredBy takes effect before the next refresh.
+fort = setup()
+WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
+fort.coveredBy = nil
+H.eq(E:CoverOf("player", fort), false, "a cleared list covers nothing at once")
+H.eq(E:AuraEventIsRelevant("party1", { addedAuras = { { name = "Might of Stormwind" } } }), false,
+    "and the event filter stops matching it")
+
 -- A def an older copy refreshed: coveredBy is there, coverNames is not.
 fort = setup()
 fort.coverNames, fort.coverSingles, fort.coverByID = nil, nil, nil
