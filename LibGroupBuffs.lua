@@ -1745,12 +1745,15 @@ function Methods:CoverOf(unit, def)
     -- are compared raw: a permanent aura (math.huge) outlasts any timed one,
     -- which the clamped PERMANENT would not.
     local status, best, bestRem, bestExp = "NONE", nil, -1, 0
+    local refused
     for _, single in ipairs(def.coverSingles) do
         local st, rem, _, exp, matched = API.ReadBuff(unit, single, self.auraPass)
         if st == "HAS" then
             if rem > bestRem then best, bestRem, bestExp = matched, rem, exp or 0 end
         elseif st == "BLOCKED" then
             status = "BLOCKED"
+            refused = refused or {}
+            refused[single[1]] = true
         end
     end
 
@@ -1768,8 +1771,9 @@ function Methods:CoverOf(unit, def)
 
     if best then
         -- A read that was refused for some names proves only what it saw. A
-        -- longer cover remembered from before is not contradicted by it.
-        if status == "BLOCKED" and cachedRem and cachedRem > bestRem then
+        -- longer cover remembered from before stands only if its OWN read
+        -- was the one refused; one read afresh says what it says.
+        if refused and cachedRem and refused[cached.name] and cachedRem > bestRem then
             best, bestRem = cached.name, cachedRem
             cached.stamp = GetTime()
         elseif key then

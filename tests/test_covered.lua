@@ -249,6 +249,26 @@ WoW.time = WoW.time + 600
 H.eq(E:CoverOf("player", fort), "Warchief's Blessing", "and it is still remembered afterwards")
 H.secrecy(false)
 
+-- But only when that aura's OWN read was refused: read afresh with less time,
+-- it is what the read says (Codex round 3).
+fort = setup()
+WoW.SetAura("player", "Might of Stormwind", 7200, 300, MIGHT)
+WoW.SetAura("player", "Warchief's Blessing", 7200, 3000, WARCHIEF)
+E:CoverOf("player", fort)                        -- remembers Warchief's, 3000
+WoW.ClearAuras("player")
+WoW.SetAura("player", "Warchief's Blessing", 7200, 200, WARCHIEF)   -- now 200 left
+lib.API.ReadBuff = function(unit, names, pass)
+    if names[1] == "Might of Stormwind" then return "BLOCKED" end
+    return realRead(unit, names, pass)
+end
+cover, coverRem = E:CoverOf("player", fort)
+lib.API.ReadBuff = realRead
+H.eq(coverRem, 200, "a fresh read of the remembered aura replaces its old time")
+H.secrecy(true)
+WoW.time = WoW.time + 250
+H.eq(E:CoverOf("player", fort), false, "so coverage ends when it really runs out")
+H.secrecy(false)
+
 -- Clearing coveredBy takes effect before the next refresh.
 fort = setup()
 WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
