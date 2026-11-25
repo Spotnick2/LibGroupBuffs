@@ -1100,10 +1100,33 @@ local function startFeed()
         return false
     end
     feed = CreateFrame("Frame")
-    Probe:RegisterEvents(feed, ui:RefusalEvents())
+    local events = ui:RefusalEvents()
+    -- A host already forwards UNIT_AURA to AuraEventIsRelevant, which clears
+    -- a member's refusals on an aura removed or changed: how often that
+    -- happens at a camp is what this measures (#97).
+    events[#events + 1] = "UNIT_AURA"
+    Probe:RegisterEvents(feed, events)
     feed:SetScript("OnEvent", function(_, event, ...)
-        local ok, err = pcall(ui.RefusalEvent, ui, event, ...)
-        if not ok then say("MEMORY RefusalEvent threw on " .. event .. ": " .. tostring(err)) end
+        if event == "UNIT_AURA" then
+            local unit, info = ...
+            local before = refusalSig()
+            local ok, err = pcall(engine.AuraEventIsRelevant, engine, unit, info)
+            if not ok then say("MEMORY AuraEventIsRelevant threw: " .. tostring(err)) end
+            if before ~= "none" then
+                local okS, shape = pcall(function()
+                    if not info then return "no info" end
+                    return "full=" .. Show(info.isFullUpdate)
+                        .. " added=" .. #(info.addedAuras or {})
+                        .. " updated=" .. #(info.updatedAuraInstanceIDs or {})
+                        .. " removed=" .. #(info.removedAuraInstanceIDs or {})
+                end)
+                say("MEMORY UNIT_AURA " .. Show(unit) .. " " .. (okS and shape or "THREW")
+                    .. " with refusals " .. before)
+            end
+        else
+            local ok, err = pcall(ui.RefusalEvent, ui, event, ...)
+            if not ok then say("MEMORY RefusalEvent threw on " .. event .. ": " .. tostring(err)) end
+        end
         local sig = refusalSig()
         if sig ~= lastRefusals then
             lastRefusals = sig
@@ -1138,7 +1161,7 @@ Probe:Steps("memory", {
       button = "Done", run = function() return memoryState("after the third click") end },
     { text = "Hover the Fortitude row so its popover opens, then hover YOUR line in it. Press Shot while its tooltip shows.",
       button = "Shot", screenshot = "refused member tooltip", run = function() return memoryState("tooltip") end },
-    { text = "Wait about 30 seconds without clicking: the step completes when nothing is on record any more.",
+    { text = "Wait about 30 seconds without clicking or moving: the step completes when nothing is on record any more. (An aura change on either of you clears it sooner; the log says which.)",
       timeout = 90, wait = noRefusals },
     { text = "Reading the row after the lapse.", auto = true, run = function() return memoryState("after the lapse") end },
     { text = "Type /reload to save the results.", reload = true },

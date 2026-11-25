@@ -346,38 +346,51 @@ and the like name those sections.
     and whether Prayer of Fortitude or other buffs bounce too are **unmeasured**: #95.
 - **Refusal memory** (r39, #97) — for a blocker `coveredBy` can't describe: Camp Benefits
   (1229741) is one aura whose parts and values depend on the camp and the level, and the client
-  exposes neither. **Opt-in per host**: it registers `ui:RefusalEvents()` on its own frame and
-  forwards each one with all its arguments to `ui:RefusalEvent(event, ...)` (guard with
-  `if ui.RefusalEvents`). A host that forwards nothing learns nothing. Rules:
+  exposes neither; and whether a world buff refuses Fortitude depends on the rank, which a
+  name-matched cover can't say. **Opt-in per host**: it registers `ui:RefusalEvents()` on its own
+  frame and forwards each one with all its arguments to `ui:RefusalEvent(event, ...)` (guard with
+  `if ui.RefusalEvents`; forward `PLAYER_REGEN_*` and `PLAYER_ENTERING_WORLD` too, alongside the
+  host's own handling, and from a vararg handler that no preview mode or early return skips). A
+  host that forwards nothing learns nothing. Rules:
   - **The evidence** (measured, #97 runs #646/#518, build 71037): out of combat, in one frame,
     `UNIT_SPELLCAST_SENT("player", name, castGUID, spellID)`, then `UNIT_SPELLCAST_FAILED("player",
     castGUID, spellID)`, then `UI_ERROR_MESSAGE(57, SPELL_FAILED_AURA_BOUNCED)`. Type 57 is the
     generic `ERR_SPELL_FAILED_S` (also "Interrupted", "Can't do that while moving"), so **the
     message is the test**, compared with the client's own global. An out-of-range cast fails
-    during the click with no SENT (error 402).
+    during the click with no SENT (error 402). `C_Spell.GetSpellInfo(name).spellID` is the rank a
+    cast by that name sends (1245 for Fortitude at level 36, #516).
   - **Learned only from the window's own out-of-combat clicks.** `RowPreClick` and
-    `PopRowPreClick` call `Engine:NoteAttempt(def, unit, spell, button)` after aiming; only a
-    single-form cast is noted. SENT arrives **after PostClick** has re-aimed (0.06-0.16 s), so the
-    attempt is the snapshot. SENT must come within `ATTEMPT_WINDOW` (1 s), name the attempt's
-    spell, and its target name must resolve to **exactly one** roster unit (pets included) with
-    the attempt's GUID; FAILED must carry SENT's castGUID and spell, and the error follow it. Both
-    mouse edges run PreClick and the client's rule for which one acts can't be computed there, so
-    a second edge (or another button) naming a different member, spell or nothing **spoils** the
-    attempt; an edge after SENT is ignored. A secret payload throws inside a pcall and drops the
-    attempt. Nothing is learned in combat (SENT's target can be secret, #646).
+    `PopRowPreClick` call `Engine:NoteAttempt(def, unit, spell, button)` after aiming, which
+    snapshots the member's **GUID** (never the token fallback of `API.UnitKey`) and the **rank**
+    by name; only a single-form cast is noted. SENT arrives **after PostClick** has re-aimed
+    (0.06-0.16 s), so the snapshot is the evidence. SENT must come within `ATTEMPT_WINDOW` (1 s),
+    carry that rank, and its target name must resolve to **exactly one** roster member (pets
+    included, raid aliases of one GUID allowed) whose GUID is readable and the attempt's; FAILED
+    must carry SENT's castGUID and rank, and the error follow it. Which mouse edge casts can't be
+    computed in PreClick, so a second edge (or another button) naming a different member, rank or
+    nothing **spoils** the attempt; once an attempt is answered (or a FAILED with no SENT ends
+    it), the same button notes nothing more for 1 s, so its trailing edge can't pair with an
+    action-bar cast. A secret payload throws inside a pcall and drops the attempt. Nothing is
+    learned in combat (SENT's target can be secret, #646).
   - **The record**: `Engine:RefusalOf(unit, def)` → `{ spellID, reason = "stronger-effect",
     retryAt }` or nil; `GroupStat` adds `byUnit[unit].refused` and `nRefused`. **No count or state
-    changes**: `nMiss`, `allHave`, `state` and `CoverOf` still answer from the auras. Only
-    `PickCandidate` skips a refused member, in every branch, and **only for a single-form cast**;
-    the group form, `PickRaidTarget` and the popover's manual click are untouched. The popover
-    row's tooltip says it was refused and for how long.
-  - **30 s, never extended** by a second bounce. Cleared early when `GroupStat` or the picker sees
-    the buff on the member, when the member loses an aura or gets a full update
-    (`AuraEventIsRelevant`), on combat entry and exit and a world transition (forwarded events),
-    and on `RefreshSpells`. Not saved: `/reload` forgets. State is `engine.refusals`, made on first
-    use, so an engine an older copy built works unchanged.
-  - Prayer of Fortitude on a refused member (level 48) is **unmeasured**; so is whether a
-    `SPELLS_CHANGED` or an aura removal fires often enough at a camp to cut the 30 s short.
+    changes**: `nMiss`, `allHave`, `state` and `CoverOf` still answer from the auras. Only the
+    pick **PreClick makes out of combat** (and the click hint, which mirrors it) skips a refused
+    member: `PickTarget(members, def, anyValid, st, useRefusals)`, in every branch, and only for a
+    single-form cast. The aim wired between clicks (`Update`, `PostClick`) ignores refusals,
+    because a click in combat uses it and combat forgets them: a row disarmed or aimed past a
+    member would stay so all fight. The group form, `PickRaidTarget` and the popover's manual
+    click are untouched. The popover row's tooltip says it was refused and for how long.
+  - **30 s, never extended** by a second bounce of the same rank, and applied only to the rank it
+    was learned from (a new rank is a fresh start; `RefreshSpells` itself clears nothing). Cleared
+    early when `GroupStat` or the pick sees the buff on the member; on a non-empty
+    `removedAuraInstanceIDs` or `updatedAuraInstanceIDs`, or a full update, for that member
+    (`AuraEventIsRelevant`); when they leave the roster (`PruneCache`, which the hosts call on
+    roster updates); on combat entry and exit and a world transition (forwarded events). Not saved:
+    `/reload` forgets. State is `engine.refusals`, made on first use, so an engine an older copy
+    built works unchanged.
+  - **Unmeasured**: Prayer of Fortitude on a refused member (level 48); how often a camp member's
+    auras update, which would cut the 30 s short (`/fp steps gb memory` logs it).
 - `Engine:RefreshSpells` resolves names from IDs, and records **per form** how each was arrived at
   — `resolved` (the client answered), `remembered` (it did not, but an earlier refresh did) or
   `fallback` (never has: this is the host's English literal) or `unknown`. The fallback stays,

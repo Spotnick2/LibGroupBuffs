@@ -968,12 +968,21 @@ C_Secrets = {
 -- C_Spell / C_SpellBook
 ------------------------------------------------------------
 
+-- By name, the highest rank the player knows, as the client answers
+-- (measured on 71037, #97: "Power Word: Fortitude" -> 1245 at level 36, the
+-- rank a cast by that name sends). With no known rank, any one, which the
+-- callers below then refuse.
 local function findSpell(spell)
     if type(spell) == "number" then return WoW.spells[spell], spell end
+    local best, bestID, any, anyID
     for id, info in pairs(WoW.spells) do
-        if info.name == spell then return info, id end
+        if info.name == spell then
+            if WoW.knownSpells[id] and (not bestID or id > bestID) then best, bestID = info, id end
+            any, anyID = any or info, anyID or id
+        end
     end
-    return nil, nil
+    if best then return best, bestID end
+    return any, anyID
 end
 
 C_Spell = {
@@ -985,7 +994,7 @@ C_Spell = {
         local info, id = findSpell(spell)
         if not info then return nil end
         if type(spell) ~= "number" and not WoW.knownSpells[id] then return nil end
-        return { name = info.name, iconID = info.iconID, castTime = 0 }
+        return { name = info.name, iconID = info.iconID, castTime = 0, spellID = id }
     end,
     GetSpellTexture = function(spell)
         local info, id = findSpell(spell)

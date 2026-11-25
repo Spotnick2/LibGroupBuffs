@@ -495,7 +495,7 @@ H.eq(#WoW.messages, 0, "nothing to chat")
 -- memory (#97, r39): the probe window opts in like a host, and a refused
 -- click on its Fortitude row is learned and logged.
 rawset(_G, "SPELL_FAILED_AURA_BOUNCED", "A more powerful spell is already active")
-WoW.DefineSpell(1245, "Power Word: Fortitude")
+WoW.Know(1245, "Power Word: Fortitude")   -- the rank a cast by name sends
 clearLog()
 drive("memory", { skip = { [8] = true } })
 H.check(logHas("MEMORY start: refusals none"), "the memory procedure starts with nothing on record")
