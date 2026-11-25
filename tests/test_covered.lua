@@ -388,6 +388,19 @@ WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
 ui:RefreshTimers()
 H.check(WoW.tooltipText():find("Might of Stormwind", 1, true),
     "and comes back, redrawn, when the cover does: " .. WoW.tooltipText())
+-- The same, when a rebuild of the open popover is what notices (Codex round 5):
+-- it resets the row, so the row's last state cannot tell the tooltip is stale.
+WoW.ClearAuras("player")
+ui:Update()
+H.eq(pr._unit, "player", "after a rebuild the row is still the covered member")
+H.eq(pr.timeTxt:GetText(), "MISS", "a rebuild turns the row to MISS")
+H.eq(WoW.tooltipText(), "", "and drops its stale tooltip")
+ui:RefreshTimers()
+H.eq(WoW.tooltipText(), "", "which a later tick does not bring back")
+WoW.SetAura("player", "Might of Stormwind", 7200, 5000, MIGHT)
+ui:Update()
+H.check(WoW.tooltipText():find("Might of Stormwind", 1, true),
+    "a rebuild redraws it when the cover is back: " .. WoW.tooltipText())
 WoW.mouseOver[pr] = nil
 H.runScript(pr, "OnLeave")
 WoW.ClearAuras("player")

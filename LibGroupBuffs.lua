@@ -3264,6 +3264,18 @@ function Methods:ApplyRowVisuals(r, st)
     end
 end
 
+-- What a popover row's tooltip says, as a key: nil when it shows nothing.
+-- PopRowEnter records the key it drew, so a refresh can tell it is stale.
+local function PopRowTipKey(pr)
+    local unit = pr._unit
+    if not unit then return nil end
+    if not UnitIsConnected(unit) then return "offline:" .. unit end
+    if pr._cover and pr._def then
+        return "cover:" .. unit .. ":" .. tostring(pr._def.id) .. ":" .. pr._cover
+    end
+    return nil
+end
+
 function Methods:ApplyPopRowVisuals(pr)
     if not pr._active then return end
     local engine = self.engine
@@ -3276,13 +3288,15 @@ function Methods:ApplyPopRowVisuals(pr)
     -- aura's time, in its own colour, and the row's tooltip names it.
     local cover, coverRem = engine:CoverOf(unit, def)
     if cover == nil and not has then state = S.UNKNOWN end
-    local was = pr._cover
     pr._cover = cover or nil
-    -- The row's own tooltip, open under the cursor, says what the cover
-    -- was when the mouse arrived, and OnEnter does not fire again while the
-    -- mouse rests there: redraw it when that changes.
-    if was ~= pr._cover and lib.API.IsMouseOver(pr) then
-        if pr._cover then self:PopRowEnter(pr) else self:PopRowLeave() end
+    -- The row's own tooltip, open under the cursor, says what was true when
+    -- the mouse arrived, and OnEnter does not fire again while the mouse
+    -- rests there: redraw it when that changes. Compared with what the
+    -- tooltip shows, not with the row's last state, since a rebuild of the
+    -- open popover resets the row (#95).
+    if lib.API.IsMouseOver(pr) and PopRowTipKey(pr) ~= pr._tipKey then
+        self:PopRowLeave()
+        self:PopRowEnter(pr)
     end
     -- The range dot describes the spell the LEFT click casts: a group spell
     -- can reach further than the single form, so the single spell's range
@@ -3942,6 +3956,7 @@ function Methods:PopRowPostClick(pr)
 end
 
 function Methods:PopRowEnter(pr)
+    pr._tipKey = PopRowTipKey(pr)
     if pr._unit and not UnitIsConnected(pr._unit) then
         OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 0.6, 0.6, 0.6)
@@ -3959,7 +3974,8 @@ function Methods:PopRowEnter(pr)
     end
 end
 
-function Methods:PopRowLeave()
+function Methods:PopRowLeave(pr)
+    if pr then pr._tipKey = nil end
     ReleaseTooltip()
 end
 
