@@ -45,7 +45,7 @@ local procs = {}
 for key, proc in pairs(FP.procedures or {}) do
     if tostring(key):find("LibGroupBuffsProbe", 1, true) then procs[tostring(key):match("/(.*)$") or key] = proc end
 end
-for _, name in ipairs({ "bg", "sweep", "spells", "look" }) do
+for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal" }) do
     local proc = procs[name]
     H.check(proc ~= nil, "procedure '" .. name .. "' is registered")
     if proc then
@@ -369,6 +369,127 @@ H.check(logHas("SPELLS PLAYER_ENTERING_WORLD+5s "), "and again five seconds afte
 H.check(relaunch.wait(), "after which the relaunch check completes")
 H.check(select(1, relaunch.check()), "and passes when every id resolved at both phases")
 drive("spells")
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+------------------------------------------------------------
+-- camp and refusal (#95, #97): the cast watch and fresh waits
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "FORT_GROUP" })
+H.Party3()
+clearLog()
+drive("camp")
+drive("refusal")
+H.check(logHas("AURAS camp begin"), "the camp procedure samples the auras")
+H.check(logHas("GetGameMessageInfo(57)="), "the refusal procedure looks up error 57's name")
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+-- A second run of a procedure, with no /reload between, waits for new casts
+-- (Codex review of fd7386a): the baseline goes when the step is left.
+T.watching(true)
+local castStep = stepWhere("camp", "on YOURSELF")
+H.check(castStep and castStep.wait and castStep.leave, "a cast step is a wait that can be left")
+castStep.leave("done")      -- drive() above polled it; the panel leaves a step before entering it again
+local function succeed() H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 1245) end
+H.check(not castStep.wait(), "it does not complete before a cast")
+succeed()
+H.check(castStep.wait(), "a cast completes it")
+castStep.leave("done")
+H.check(not castStep.wait(), "run again, the first run's cast does not complete it")
+succeed()
+H.check(castStep.wait(), "a new cast does")
+castStep.leave("stopped")
+-- Only a Fortitude result completes a step: walking out of range or fighting
+-- raises UI errors of their own, and other spells get cast (Codex review of
+-- f9db8fd).
+local errStep = stepWhere("refusal", "Ordinary failure")
+H.check(errStep and errStep.wait and errStep.leave, "the refusal steps wait the same way")
+errStep.leave("done")
+H.check(not errStep.wait(), "not before a result")
+H.runScript(T.castWatch, "OnEvent", "UI_ERROR_MESSAGE", 50, "You are moving")
+H.runScript(T.castWatch, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+H.check(not errStep.wait(), "a UI error alone does not complete it")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-9", 585)
+H.check(not errStep.wait(), "nor does another spell's cast")
+H.check(logHas("spell=585 (not Fortitude)"), "which is logged as not Fortitude")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_FAILED", "player", "Cast-10", 2791)
+H.check(errStep.wait(), "a Fortitude rank's failure does")
+errStep.leave("done")
+H.check(not errStep.wait(), "and a second run waits for a new one")
+H.check(logHas("UI_ERROR_MESSAGE type=57"), "the error is still logged with its type")
+H.check(logHas("UNIT_SPELLCAST_SUCCEEDED castGUID="), "a cast by its castGUID's shape, not its value")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", "Sten Thornbeard", "Cast-2", 1245)
+H.check(logHas("resolves to party1"), "SENT's target resolves to the member's unit token")
+H.check(not logHas("Sten Thornbeard"), "and the name itself is never logged")
+
+-- Buffy's rows are followed too (run #646 was on a mage, where the probe
+-- window has none): a click logs the aim, and SENT is matched against it.
+local brow = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+brow:SetScript("PreClick", function() end)
+brow:SetScript("PostClick", function() end)
+brow:SetAttribute("unit1", "party1")
+brow:SetAttribute("spell1", "Power Word: Fortitude")
+rawset(_G, "Buffy", { ui = { rows = { brow }, popRows = {} } })
+T.watching(true)
+clearLog()
+T.hookRows()
+H.check(brow._probeHooked, "a row of Buffy's window is hooked")
+local function sent(name, guid) H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", name, guid, 1245) end
+WoW.now = 100
+H.runScript(brow, "PreClick", "LeftButton", false)
+H.check(logHas("PreClick buffy-row1") and logHas('unit1="party1"'), "its click logs where the library aimed it")
+sent("Sten Thornbeard", "Cast-3")
+H.check(logHas('aimed="party1" aimAge=0.000 match=yes'), "and SENT's target is matched against that aim")
+H.runScript(brow, "PreClick", "LeftButton", false)
+sent("Mirel Dawnsong", "Cast-4")
+H.check(logHas("match=NO"), "a cast that went to someone else does not match")
+
+-- A click's aim is consumed by one SENT, so an action-bar cast after it is
+-- never compared with it (Codex review of f9db8fd).
+clearLog()
+H.runScript(brow, "PreClick", "LeftButton", false)
+sent("Sten Thornbeard", "Cast-5")
+sent("Sten Thornbeard", "Cast-6")
+H.check(logHas("aimed=nil match=no aim"), "a second cast after one click has no aim")
+-- PostClick does not bring a consumed aim back.
+clearLog()
+H.runScript(brow, "PreClick", "LeftButton", false)
+sent("Sten Thornbeard", "Cast-7")
+H.runScript(brow, "PostClick", "LeftButton", false)
+sent("Sten Thornbeard", "Cast-8")
+H.check(logHas("aimed=nil match=no aim"), "nor after its PostClick")
+-- An aim no cast used lapses after a second, and when the step is left.
+clearLog()
+H.runScript(brow, "PreClick", "LeftButton", false)
+WoW.now = 101.5
+sent("Sten Thornbeard", "Cast-11")
+H.check(logHas("aimed=nil match=no aim"), "an aim older than a second is not used")
+clearLog()
+H.runScript(brow, "PreClick", "LeftButton", false)
+stepWhere("refusal", "Ordinary failure").leave("skipped")
+sent("Sten Thornbeard", "Cast-12")
+H.check(logHas("aimed=nil match=no aim"), "nor one from a step that was left")
+-- A row click in combat that sends nothing: leaving the row step drops its
+-- aim, so the action-bar fallback, its own step, is not matched to it, even
+-- within the second (Codex review of 2ca7a8c).
+local rowStep = stepWhere("refusal", "left-click Buffy's Fortitude row once")
+local fallback = stepWhere("refusal", "from your action bar; else press Skip")
+H.check(rowStep and rowStep.leave and fallback and fallback.wait, "the combat row click and its fallback are separate steps")
+clearLog()
+WoW.now = 102
+H.runScript(brow, "PreClick", "LeftButton", false)
+H.runScript(brow, "PostClick", "LeftButton", false)
+rowStep.leave("done")
+sent("Sten Thornbeard", "Cast-14")
+H.check(logHas("aimed=nil match=no aim") and not logHas("match=yes"), "the fallback cast is not matched to the click that sent nothing")
+-- The action-bar case: no click on a row, no aim.
+clearLog()
+sent("Sten Thornbeard", "Cast-13")
+H.check(logHas("resolves to party1") and logHas("aimed=nil match=no aim"), "an action-bar cast resolves but has no row aim")
+WoW.now = nil
+rawset(_G, "Buffy", nil)
+T.watching(false)
 H.eq(#WoW.messages, 0, "nothing to chat")
 
 -- Every widget method the probe, the window it drives and ForeverProbe's

@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 37
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 38
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -1313,6 +1313,18 @@ function Engine.New(host)
         if def.assign ~= nil and def.assign ~= "owner" and def.assign ~= "targets" then
             Fail("def " .. def.id .. ": assign must be \"owner\", \"targets\" or nil")
         end
+        -- Auras that cover this buff (r38, #95): a stronger buff the client
+        -- refuses to cast over. See Methods:CoverOf.
+        if def.coveredBy ~= nil then
+            if type(def.coveredBy) ~= "table" then
+                Fail("def " .. def.id .. ": coveredBy must be a list of spell IDs or nil")
+            end
+            for _, id in ipairs(def.coveredBy) do
+                if type(id) ~= "number" then
+                    Fail("def " .. def.id .. ": coveredBy must list spell IDs (numbers)")
+                end
+            end
+        end
     end
     if host.assignments ~= nil and type(host.assignments) ~= "table" then
         Fail("assignments must be the handle GB.Assignments returned, or nil")
@@ -1346,6 +1358,11 @@ function Engine.New(host)
         -- [unitKey] = { [defId] = { exp, dur, spell, stamp } }. Per engine:
         -- def ids are only unique within one addon.
         cache = {},
+        -- [unitKey] = { [defId] = { name, exp, stamp } or { none, stamp } }:
+        -- the covering aura last seen (r38). Apart from `cache`, so a buff's
+        -- own entry keeps its shape. An engine an older copy built gets it
+        -- on first use.
+        coverCache = {},
     }, lib.EngineMeta)
 end
 
@@ -1396,6 +1413,42 @@ local function Resolve(id, current, status)
     return current, status or "unknown"
 end
 
+-- Covering auras (r38, #95) by name, resolved from their IDs like the buff's
+-- own. By ID a name resolves whether or not the player knows the spell, which
+-- a world buff never is. There is no English fallback: an ID this client does
+-- not have covers nothing. A name resolved once is remembered, as the buff's
+-- own names are, and several IDs sharing one name (a buff's variants) count
+-- once. `coverSingles` holds each name as a one-name list, for CoverOf.
+local function ResolveCovers(d)
+    if not d.coveredBy then
+        d.coverNames, d.coverByID, d.coverSingles = nil, nil, nil
+        return
+    end
+    local byID = d.coverByID or {}
+    d.coverByID = byID
+    local list, singles, seen = {}, {}, {}
+    for _, id in ipairs(d.coveredBy) do
+        byID[id] = lib.API.SpellName(id) or byID[id]
+        local nm = byID[id]
+        if nm and not seen[nm] then
+            seen[nm] = true
+            list[#list + 1] = nm
+            singles[#singles + 1] = { nm }
+        end
+    end
+    d.coverNames, d.coverSingles = list, singles
+end
+
+-- The covering names, resolved now if no refresh by this copy has: a def an
+-- older copy refreshed carries `coveredBy` but none of what it derives. Until
+-- the host's next RefreshSpells the pass union lacks them, so their reads go
+-- live (API.PassCovers): slower, never wrong.
+local function CoverNames(d)
+    if not d.coveredBy then return nil end   -- cleared since the last refresh
+    if not d.coverSingles then ResolveCovers(d) end
+    return d.coverNames
+end
+
 function Methods:RefreshSpells()
     local API = lib.API
     for _, d in ipairs(self.defs) do
@@ -1404,15 +1457,19 @@ function Methods:RefreshSpells()
         d.names = { d.sngl, d.grp }
         d.hasSingle = API.KnowsSpell(d.snglID) and true or false
         d.hasGroup = (d.grpID and API.KnowsSpell(d.grpID)) and true or false
+        ResolveCovers(d)
     end
     -- Every name anybody is tracking, in one list. An aura pass walks a unit
     -- once against this rather than once per buff, so it has to be rebuilt
-    -- wherever the names are - which is here, and nowhere else.
+    -- wherever the names are - which is here, and nowhere else. Covering
+    -- auras are in it too: a pass that did not walk for them could not
+    -- answer for them (API.PassCovers), and each would cost a walk of its own.
     local all = {}
     for _, d in ipairs(self.defs) do
         for _, nm in ipairs(d.names) do
             if nm then all[#all + 1] = nm end
         end
+        for _, nm in ipairs(d.coverNames or {}) do all[#all + 1] = nm end
     end
     self.allNames = all
 end
@@ -1448,7 +1505,16 @@ function Methods:SpellReport()
                 out.unknown = out.unknown + 1
             end
         end
-        out[#out + 1] = { id = d.id, label = d.label, forms = forms }
+        local entry = { id = d.id, label = d.label, forms = forms }
+        -- The covering auras (r38): each ID with the name it resolved to, or
+        -- nil. An unresolved one covers nothing, which is worth seeing.
+        if d.coveredBy then
+            entry.covers = {}
+            for _, id in ipairs(d.coveredBy) do
+                entry.covers[#entry.covers + 1] = { id = id, name = d.coverByID and d.coverByID[id] }
+            end
+        end
+        out[#out + 1] = entry
     end
 
     -- Ranks this client described in words we could not read a number out of.
@@ -1533,15 +1599,20 @@ end
 
 -- Drop characters not seen in an hour, so the cache cannot grow without bound
 -- across a long session of pugs. The addon calls this on roster changes.
-function Methods:PruneCache()
-    local cutoff = GetTime() - 3600
-    for key, defs in pairs(self.cache) do
+local function PruneTable(cache, cutoff)
+    for key, defs in pairs(cache) do
         local live = false
         for _, entry in pairs(defs) do
             if entry.stamp and entry.stamp > cutoff then live = true break end
         end
-        if not live then self.cache[key] = nil end
+        if not live then cache[key] = nil end
     end
+end
+
+function Methods:PruneCache()
+    local cutoff = GetTime() - 3600
+    PruneTable(self.cache, cutoff)
+    if self.coverCache then PruneTable(self.coverCache, cutoff) end
 end
 
 -- ─── Aura passes ────────────────────────────────────────────────────────────
@@ -1638,6 +1709,114 @@ function Methods:BuffRem(unit, def)
     return 0, cached.dur, ST_MISSING, cached.spell, "expired"
 end
 
+-- ─── Covering auras (r38, #95) ──────────────────────────────────────────────
+--
+-- A stronger buff can make the client refuse this one: a member with Might
+-- of Stormwind or Warchief's Blessing gets "A more powerful spell is already
+-- active" from Power Word: Fortitude. That member has no Fortitude aura, so
+-- they read as missing, and the picker - first missing member wins - aimed
+-- every click at them, and the row's button never buffed anybody else.
+--
+-- A def lists those auras by spell ID in `coveredBy`. A covered member does
+-- not count as missing and is never picked by a row's click, but BuffRem
+-- still answers about the buff itself: its own presence, duration and the
+-- durations learned from it stay separate from the covering aura's, and
+-- nothing here is learned.
+--
+-- Returns the covering aura's name and its remaining time, false when the
+-- member is known to have none, or nil when it cannot be known: the reads are
+-- closed and this character was never looked at. Combat follows BuffRem's
+-- rules: the last thing seen carries forward, and a covering aura whose own
+-- clock runs out during the fight stops covering.
+--
+-- With two covering auras up, the one that lasts longest is the answer, and
+-- the one remembered: remembering the first would end the coverage mid-fight
+-- when it ran out, with the other still up.
+function Methods:CoverOf(unit, def)
+    local names = CoverNames(def)
+    if not names or #names == 0 then return false end
+    if not unit or not UnitExists(unit) then return false end
+    local API = lib.API
+    local key = API.UnitKey(unit)
+    self.coverCache = self.coverCache or {}
+
+    -- One read per name, each answered by the pass's single walk when one
+    -- is open. ReadBuff stops at the first name it finds. Remaining times
+    -- are compared raw: a permanent aura (math.huge) outlasts any timed one,
+    -- which the clamped PERMANENT would not.
+    local status, best, bestRem, bestExp = "NONE", nil, -1, 0
+    local refused
+    for _, single in ipairs(def.coverSingles) do
+        local st, rem, _, exp, matched = API.ReadBuff(unit, single, self.auraPass)
+        if st == "HAS" then
+            if rem > bestRem then best, bestRem, bestExp = matched, rem, exp or 0 end
+        elseif st == "BLOCKED" then
+            status = "BLOCKED"
+            refused = refused or {}
+            refused[single[1]] = true
+        end
+    end
+
+    local entries = self.coverCache[key or ""]
+    local cached = key and entries and entries[def.id]
+    -- What the cache still vouches for: name and remaining, or nil.
+    local cachedRem
+    if cached and cached.name then
+        if cached.exp == 0 then
+            cachedRem = math.huge
+        elseif cached.exp - GetTime() > 0 then
+            cachedRem = cached.exp - GetTime()
+        end
+    end
+
+    if best then
+        -- A read that was refused for some names proves only what it saw. A
+        -- longer cover remembered from before stands only if its OWN read
+        -- was the one refused; one read afresh says what it says.
+        if refused and cachedRem and refused[cached.name] and cachedRem > bestRem then
+            best, bestRem = cached.name, cachedRem
+            cached.stamp = GetTime()
+        elseif key then
+            entries = entries or {}
+            self.coverCache[key] = entries
+            entries[def.id] = { name = best, exp = bestExp, stamp = GetTime() }
+        end
+        return best, (bestRem == math.huge) and PERMANENT or bestRem
+    end
+    if status == "NONE" then
+        if key then
+            entries = entries or {}
+            self.coverCache[key] = entries
+            entries[def.id] = { none = true, stamp = GetTime() }
+        end
+        return false
+    end
+
+    if not cached then return nil end
+    if cached.none or not cachedRem then return false end
+    -- The remembered aura's own read came back and said it is gone, while
+    -- another name's was refused: the memory is contradicted and dropped, and
+    -- what is left cannot be known.
+    if not refused[cached.name] then
+        entries[def.id] = nil
+        return nil
+    end
+    return cached.name, (cachedRem == math.huge) and PERMANENT or cachedRem
+end
+
+-- BuffRem with the covering aura beside it: rem, dur, state, spell, basis,
+-- cover, coverRem. A member not seen with the buff whose cover cannot be
+-- known is UNKNOWN rather than MISSING: we do not know that a click on them
+-- would land. Only a def with covering auras can be changed by this.
+local function MemberState(self, unit, def)
+    local rem, dur, state, spell, basis = self:BuffRem(unit, def)
+    local cover, coverRem = self:CoverOf(unit, def)
+    if cover == nil and state ~= ST_HAS then
+        return 0, dur, ST_UNKNOWN, spell, nil, nil, nil
+    end
+    return rem, dur, state, spell, basis, cover or nil, coverRem
+end
+
 -- ─── Targets ────────────────────────────────────────────────────────────────
 
 -- Can this unit be buffed right now?
@@ -1675,19 +1854,24 @@ local function PickCandidate(self, members, def, anyValid, requireInRange, st)
         if self:IsValidTarget(m.unit)
             and (not requireInRange or lib.API.SpellRange(m.unit, spell) == "IN_RANGE")
         then
-            firstValid = firstValid or m.unit
-            local rem, state
+            local rem, state, cover
             local known = st and st.byUnit and st.byUnit[m.unit]
             if known then
-                rem, state = known.rem, known.state
+                rem, state, cover = known.rem, known.state, known.covered
             else
                 local _
-                rem, _, state = self:BuffRem(m.unit, def)
+                rem, _, state, _, _, cover = MemberState(self, m.unit, def)
             end
-            if state == ST_MISSING then return m.unit end
-            if state == ST_HAS and rem < bestRem then
-                bestRem = rem
-                bestUnit = m.unit
+            -- A covered member is skipped by every branch, the two fallbacks
+            -- included: the cast would be refused, whoever ends up aimed at
+            -- them (#95).
+            if not cover then
+                firstValid = firstValid or m.unit
+                if state == ST_MISSING then return m.unit end
+                if state == ST_HAS and rem < bestRem then
+                    bestRem = rem
+                    bestUnit = m.unit
+                end
             end
         end
     end
@@ -1740,9 +1924,15 @@ function Methods:PickRaidTarget(members, def, st)
         -- exists to stop.
         if self:IsValidTarget(m.unit) then
             local known = st and st.byUnit and st.byUnit[m.unit]
-            local state = known and known.state
-            if not state then local _; _, _, state = self:BuffRem(m.unit, def) end
-            if state == ST_MISSING then anyMissing = true break end
+            local state, cover
+            if known and known.state then
+                state, cover = known.state, known.covered
+            else
+                local _
+                _, _, state, _, _, cover = MemberState(self, m.unit, def)
+            end
+            -- A covered member cannot be given it either (#95).
+            if state == ST_MISSING and not cover then anyMissing = true break end
         end
     end
     if not anyMissing then return nil end
@@ -1896,21 +2086,27 @@ function Methods:MembersFor(def, members)
     return out
 end
 
--- Returns { miss, minR, minDur, allHave, nMiss, nUnknown, nTotal, byUnit }
+-- Returns { miss, minR, minDur, allHave, nMiss, nUnknown, nCovered, nTotal,
+-- byUnit }
 --
 -- Offline members count as missing. nUnknown counts members whose auras
 -- cannot be read right now (combat secrecy, nothing cached); they are
--- deliberately NOT counted as missing.
+-- deliberately NOT counted as missing. nCovered (r38) counts members a
+-- stronger aura covers (CoverOf): neither missing nor in minR, since nobody
+-- can cast the buff on them; byUnit names the aura in `covered`.
 function Methods:GroupStat(members, def)
-    local minR, minDur, miss, unknown = PERMANENT, 0, {}, 0
+    local minR, minDur, miss, unknown, covered = PERMANENT, 0, {}, 0, 0
     local byUnit = {}
     for _, m in ipairs(members) do
         if not UnitIsConnected(m.unit) then
             miss[#miss + 1] = m
         else
-            local r, d, state, spell, basis = self:BuffRem(m.unit, def)
-            byUnit[m.unit] = { rem = r, state = state, basis = basis }
-            if state == ST_UNKNOWN then
+            local r, d, state, spell, basis, cover, coverRem = MemberState(self, m.unit, def)
+            byUnit[m.unit] = { rem = r, state = state, basis = basis,
+                               covered = cover, coverRem = coverRem }
+            if cover then
+                covered = covered + 1
+            elseif state == ST_UNKNOWN then
                 unknown = unknown + 1
             elseif r <= 0 then
                 miss[#miss + 1] = m
@@ -1927,6 +2123,7 @@ function Methods:GroupStat(members, def)
         allHave  = (#miss == 0 and unknown == 0),
         nMiss    = #miss,
         nUnknown = unknown,
+        nCovered = covered,
         nTotal   = #members,
         -- Each member's state during this pass, with where it came from, so
         -- PickTarget can reuse it instead of re-reading every aura and the
@@ -1966,6 +2163,13 @@ function Methods:AuraEventIsRelevant(unit, updateInfo)
                 local nm = aura and aura.name
                 for _, d in ipairs(defs) do
                     if nm == d.sngl or nm == d.grp then return true end
+                    -- A covering aura landing changes who counts as missing.
+                    local covers = CoverNames(d)
+                    if covers then
+                        for i = 1, #covers do
+                            if nm == covers[i] then return true end
+                        end
+                    end
                 end
             end
         end
@@ -2255,6 +2459,7 @@ for key, colour in pairs({
     MISS    = { 1.00, 0.28, 0.28 },
     UNKNOWN = { 0.65, 0.65, 0.65 },
     OFFLINE = { 0.50, 0.50, 0.50 },
+    COVERED = { 0.45, 0.75, 1.00 },   -- r38: a stronger aura blocks the buff
 }) do
     local t = UI.STATE_COLOUR[key] or {}
     UI.STATE_COLOUR[key] = t
@@ -3059,6 +3264,21 @@ function Methods:ApplyRowVisuals(r, st)
     end
 end
 
+-- What a popover row's tooltip says, as a key: nil when it shows nothing.
+-- PopRowEnter records the key it drew, so a refresh can tell it is stale.
+local function PopRowTipKey(pr)
+    local unit = pr._unit
+    if not unit then return nil end
+    -- Who, not which slot: a roster change can put somebody else at the
+    -- same unit token while the row is hovered, and the tooltip names them.
+    local who = tostring(lib.API.UnitKey(unit))
+    if not UnitIsConnected(unit) then return "offline:" .. who end
+    if pr._cover and pr._def then
+        return "cover:" .. who .. ":" .. tostring(pr._def.id) .. ":" .. pr._cover
+    end
+    return nil
+end
+
 function Methods:ApplyPopRowVisuals(pr)
     if not pr._active then return end
     local engine = self.engine
@@ -3066,6 +3286,21 @@ function Methods:ApplyPopRowVisuals(pr)
     local unit, def = pr._unit, pr._def
     local rem, buffDur, state, spell = engine:BuffRem(unit, def)
     local has = (state == S.HAS) and rem > 0
+    -- A stronger aura that blocks this buff (r38, #95). Their own buff, if
+    -- they still have one, is what the row shows; otherwise the covering
+    -- aura's time, in its own colour, and the row's tooltip names it.
+    local cover, coverRem = engine:CoverOf(unit, def)
+    if cover == nil and not has then state = S.UNKNOWN end
+    pr._cover = cover or nil
+    -- The row's own tooltip, open under the cursor, says what was true when
+    -- the mouse arrived, and OnEnter does not fire again while the mouse
+    -- rests there: redraw it when that changes. Compared with what the
+    -- tooltip shows, not with the row's last state, since a rebuild of the
+    -- open popover resets the row (#95).
+    if lib.API.IsMouseOver(pr) and PopRowTipKey(pr) ~= pr._tipKey then
+        self:PopRowLeave()
+        self:PopRowEnter(pr)
+    end
     -- The range dot describes the spell the LEFT click casts: a group spell
     -- can reach further than the single form, so the single spell's range
     -- would mark members out of reach that the group spell lands on fine.
@@ -3076,10 +3311,12 @@ function Methods:ApplyPopRowVisuals(pr)
 
     if not UnitIsConnected(unit) then
         SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.75)   -- offline
-    elseif state == S.UNKNOWN then
-        SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.65)   -- unreadable
     elseif has then
         SetFill(pr, POP_ROW_H, 0.10, 0.65, 0.20, 0.80)   -- buffed
+    elseif cover then
+        SetFill(pr, POP_ROW_H, 0.15, 0.40, 0.70, 0.80)   -- covered
+    elseif state == S.UNKNOWN then
+        SetFill(pr, POP_ROW_H, 0.30, 0.30, 0.30, 0.65)   -- unreadable
     else
         SetFill(pr, POP_ROW_H, 0.70, 0.13, 0.13, 0.80)   -- missing
     end
@@ -3102,6 +3339,9 @@ function Methods:ApplyPopRowVisuals(pr)
         local tr, tg, tb = UI.TimerColor(pct)
         pr.timeTxt:SetText(UI.FmtTime(rem))
         pr.timeTxt:SetTextColor(tr, tg, tb)
+    elseif cover then
+        pr.timeTxt:SetText(UI.FmtTime(coverRem or 0))
+        pr.timeTxt:SetTextColor(unpack(COLOUR.COVERED))
     elseif state == S.UNKNOWN then
         pr.timeTxt:SetText("?")
         pr.timeTxt:SetTextColor(unpack(COLOUR.UNKNOWN))
@@ -3634,6 +3874,7 @@ function Methods:UpdatePopover(anchorRow, members, def)
         pr._unit = not preview and m.unit or nil
         pr._def = def
         pr._preview = preview and m._preview[def.id] or nil
+        pr._cover = nil   -- ApplyPopRowVisuals names it, below
 
         -- Left: the primary spell on this person (a group spell covers their
         -- subgroup). Right: the secondary spell on this person.
@@ -3693,7 +3934,9 @@ end
 function Methods:PopRowPreClick(pr)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
-    -- Block a cast at somebody offline or dead.
+    -- Block a cast at somebody offline or dead. A member a stronger aura
+    -- covers (#95) is NOT blocked here: this is the player's own choice of
+    -- target, and whether the group form bounces off them is unmeasured.
     if not self.engine:IsValidTarget(pr._unit) then
         pr:SetAttribute("spell1", nil)
         pr:SetAttribute("spell2", nil)
@@ -3716,15 +3959,26 @@ function Methods:PopRowPostClick(pr)
 end
 
 function Methods:PopRowEnter(pr)
+    pr._tipKey = PopRowTipKey(pr)
     if pr._unit and not UnitIsConnected(pr._unit) then
         OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 0.6, 0.6, 0.6)
         GameTooltip:AddLine("This player is offline", 1, 0.5, 0.5)
         GameTooltip:Show()
+    elseif pr._unit and pr._cover and pr._def then
+        -- Named here because the row has room only for a time (#95).
+        local def = pr._def
+        OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
+        GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 1, 1, 1)
+        GameTooltip:AddLine("Has " .. pr._cover .. ", which is stronger:", unpack(COLOUR.COVERED))
+        GameTooltip:AddLine((def.sngl or def.grp or "this buff") .. " cannot be cast on them.",
+            unpack(COLOUR.COVERED))
+        GameTooltip:Show()
     end
 end
 
-function Methods:PopRowLeave()
+function Methods:PopRowLeave(pr)
+    if pr then pr._tipKey = nil end
     ReleaseTooltip()
 end
 
@@ -3840,11 +4094,14 @@ function Methods:AddNeedsList(row, def)
     -- Not "are we in combat": if a future build stops hiding party auras, the
     -- reads work and the list is current again.
     local lastKnown = lib.API.AurasAreSecret()
-    local needs = {}
+    local needs, covered = {}, {}
     for _, m in ipairs(row._members) do
         local known = st.byUnit[m.unit]
         if not UnitIsConnected(m.unit) then
             needs[#needs + 1] = { m.name, "offline", COLOUR.OFFLINE }
+        elseif known and known.covered then
+            -- Does not need it and cannot be given it (#95): listed apart.
+            covered[#covered + 1] = { m.name, known.covered, COLOUR.COVERED }
         elseif known and known.state == S.UNKNOWN then
             -- Never seen, so not claimed as missing.
             needs[#needs + 1] = { m.name, "?", COLOUR.UNKNOWN }
@@ -3858,26 +4115,35 @@ function Methods:AddNeedsList(row, def)
             needs[#needs + 1] = { m.name, marker, COLOUR.MISS }
         end
     end
+    GameTooltip:AddLine(" ")
     if #needs == 0 then
-        GameTooltip:AddLine(" ")
         if lastKnown then
             -- Covers the same ground as the heading: nobody was missing it at
             -- the last look, and nothing has run out or gone offline since.
             GameTooltip:AddLine("Nobody needs it, from what can still be seen.",
                 0.40, 0.85, 0.40)
+        elseif #covered > 0 then
+            GameTooltip:AddLine("Nobody else needs it.", 0.40, 0.85, 0.40)
         else
             GameTooltip:AddLine("Everyone here has it.", 0.40, 0.85, 0.40)
         end
-        return
+    else
+        -- One heading for a list that mixes "was missing at the last look"
+        -- with "ran out since": saying "missing when the fight started"
+        -- would be false of half of it. The rows say which is which.
+        GameTooltip:AddLine(lastKnown and "Needs it, from what can still be seen:" or "Needs it:",
+            1.00, 0.82, 0.22)
+        for _, line in ipairs(needs) do
+            GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
+        end
     end
-    GameTooltip:AddLine(" ")
-    -- One heading for a list that mixes "was missing at the last look" with
-    -- "ran out since": saying "missing when the fight started" would be false
-    -- of half of it. The rows say which is which.
-    GameTooltip:AddLine(lastKnown and "Needs it, from what can still be seen:" or "Needs it:",
-        1.00, 0.82, 0.22)
-    for _, line in ipairs(needs) do
-        GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
+    -- Neither missing nor buffable (#95): the aura that blocks it, by name.
+    if #covered > 0 then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("Covered by a stronger buff:", unpack(COLOUR.COVERED))
+        for _, line in ipairs(covered) do
+            GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, unpack(line[3]))
+        end
     end
 end
 

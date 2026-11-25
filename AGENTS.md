@@ -317,6 +317,33 @@ and the like name those sections.
   eight reagents on one cast (#19); `PickTarget` still always answers with somebody, which is right
   for a cheap single-target top-up and wrong for this. Refreshing a raid-wide buff early is
   deliberately not offered.
+- **`def.coveredBy`** (r38, #95) — spell IDs of stronger auras the client refuses to cast this
+  buff over ("A more powerful spell is already active": Might of Stormwind / Warchief's
+  Blessing on Fortitude). Host data, like the def's own IDs. `RefreshSpells` resolves them to
+  `def.coverNames` (no English fallback; a name resolved once is remembered; shared names count
+  once) and adds them to the pass union. `Engine:CoverOf(unit, def)` answers the aura's name and
+  remaining time, `false` (known none) or `nil` (reads closed, never looked). Rules:
+  - `BuffRem` is **unchanged**: it answers about the buff itself. Nothing is learned from a
+    covering aura's duration.
+  - A covered member is never missing, never in `minR`, and **never picked**: `PickCandidate`
+    skips them in all three branches (missing, shortest remaining, first valid), and
+    `PickRaidTarget` does not count them. Returning `HAS` instead would have left the fallbacks
+    free to pick them.
+  - `GroupStat` adds `nCovered` and `byUnit[unit].covered` / `.coverRem`. A member not seen with
+    the buff whose cover is `nil` is `UNKNOWN`, never `MISSING`. `allHave` counts covered
+    members as fine, and `byUnit[unit].state` stays the buff's own (often `MISSING`), so **a
+    host reading `byUnit` checks `covered` before `state`**.
+  - Combat: last seen coverage carries forward (separate `coverCache`, pruned with the cache);
+    a covering aura whose own clock runs out mid-fight stops covering. With two covering auras
+    up, the longest-lasting one is the answer and the one remembered.
+  - A def an older copy refreshed has `coveredBy` but no `coverNames`: `CoverOf` and
+    `AuraEventIsRelevant` resolve them on first use, and the reads bypass the old pass union.
+  - The popover shows the covering aura's time in `COLOUR.COVERED` and names it in the row's
+    tooltip; the combat needs list puts covered members under their own heading. **A popover
+    row's own click stays armed on a covered member**: it is the player's manual choice, and
+    whether Prayer of Fortitude aimed at them bounces is unmeasured. Only automatic picks skip.
+  - Which IDs, whether coverage applies inside raid instances (the buff "has no effect" there),
+    and whether Prayer of Fortitude or other buffs bounce too are **unmeasured**: #95.
 - `Engine:RefreshSpells` resolves names from IDs, and records **per form** how each was arrived at
   — `resolved` (the client answered), `remembered` (it did not, but an earlier refresh did) or
   `fallback` (never has: this is the host's English literal) or `unknown`. The fallback stays,
