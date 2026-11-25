@@ -969,9 +969,11 @@ local function aimNote(r, edge, button, down)
     local okU, unit = pcall(r.GetAttribute, r, "unit" .. slot)
     local okS, spell = pcall(r.GetAttribute, r, "spell" .. slot)
     lastAim = { edge = edge, unit = okU and unit or nil, combat = InCombatLockdown(), at = GetTime() }
-    -- The press on the Fortitude row, kept through its release: the steps
-    -- poll once a second, and a release must not replace the press.
-    if edge == "PreClick" and down ~= false and r._def and r._def.id == "fort" then
+    -- A click on the Fortitude row is one press and its release, either of
+    -- which may cast (ActionButtonUseKeyDown). The press opens the record;
+    -- the release is added to it, never replaces it (the steps poll once a
+    -- second), and a release with no press of its own opens nothing.
+    if edge == "PreClick" and r._def and r._def.id == "fort" then
         local okN, refusedNow = pcall(function()
             local n = 0
             for _, u in ipairs(groupUnits()) do
@@ -979,9 +981,15 @@ local function aimNote(r, edge, button, down)
             end
             return n
         end)
-        lastPress = { row = r._probeName, slot = slot, unit = okU and unit or nil,
-                      spell = okS and spell or nil, down = down, at = GetTime(),
-                      refused = okN and refusedNow or 0 }
+        local edgeSnap = { unit = okU and unit or nil, spell = okS and spell or nil, refused = okN and refusedNow or 0 }
+        if down == false then
+            if lastPress and lastPress.row == r._probeName and lastPress.slot == slot and not lastPress.up then
+                lastPress.up = edgeSnap
+            end
+        else
+            lastPress = { row = r._probeName, slot = slot, unit = edgeSnap.unit, spell = edgeSnap.spell,
+                          refused = edgeSnap.refused, down = down, at = GetTime() }
+        end
     end
     say("  " .. edge .. " " .. tostring(r._probeName) .. " button=" .. Show(button) .. " down=" .. Show(down)
         .. " unit" .. slot .. "=" .. (okU and Show(unit) or "THREW")
@@ -1214,8 +1222,13 @@ local function learnedStep(step, want)
         local now = refusedUnits()
         for u in pairs(now) do
             if not base[u] then
-                local okI, same = pcall(UnitIsUnit, u, p and p.unit or "none")
-                if p and p.spell and okI and same then
+                -- Whichever edge cast: the press's aim, or its release's.
+                local function aimed(e)
+                    if not (e and e.spell) then return false end
+                    local okI, same = pcall(UnitIsUnit, u, e.unit or "none")
+                    return okI and same
+                end
+                if p and (aimed(p) or aimed(p.up)) then
                     clickSlot = clickSlot or p.slot
                     return true, "learned for " .. u .. ", where the row's press aimed (slot " .. p.slot .. ")"
                 end
@@ -1241,12 +1254,17 @@ local function blockedPress()
     hookRows()
     local n = liveRecords()
     local p = rowPress(blockedFrom)
-    if p and p.spell == nil and p.refused >= 2 then
-        return true, "pressed " .. tostring(p.row) .. " slot " .. p.slot .. " with " .. p.refused
-            .. " refused at the press: it armed nothing"
+    -- Both edges, since either may cast: the step waits for the release.
+    if p and not p.up then
+        return false, "waiting for the release of that press: either edge may cast"
     end
-    if p and p.spell == nil then
-        return false, "that press armed nothing with only " .. p.refused .. " refused: it proves nothing"
+    if p and p.spell == nil and p.up.spell == nil and p.refused >= 2 and p.up.refused >= 2 then
+        return true, "clicked " .. tostring(p.row) .. " slot " .. p.slot .. " with " .. p.up.refused
+            .. " refused: neither the press nor its release armed anything"
+    end
+    if p and (p.spell == nil or p.up.spell == nil) then
+        return false, "that click armed " .. Show(p.spell) .. " on the press and " .. Show(p.up.spell)
+            .. " on the release, with " .. p.up.refused .. " refused: it proves nothing"
     end
     if n < 2 then
         return false, "only " .. n .. " refused: this needs both of you refused (press Skip if the second cast landed)"

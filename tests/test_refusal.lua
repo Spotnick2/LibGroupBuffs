@@ -436,7 +436,7 @@ WoW.clearTooltip()
 H.runScript(pr, "OnEnter")
 local tip = WoW.tooltipText()
 H.check(tostring(tip):find("was refused on them", 1, true), "the tooltip says it was refused: " .. tostring(tip))
-H.check(tostring(tip):find("skip them for %d+s"), "and for how long")
+H.check(tostring(tip):find("skip them for up to 30 seconds", 1, true), "and for how long, with no frozen countdown")
 H.runScript(pr, "OnLeave")
 
 -- A popover click on another member: its bounce is learned the same way.

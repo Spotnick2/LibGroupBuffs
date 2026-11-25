@@ -4352,13 +4352,14 @@ function Methods:PopRowEnter(pr)
     elseif pr._unit and pr._refused and pr._def then
         -- A refusal names no aura: the client said only that something
         -- stronger is active (#97).
+        -- No countdown: the tooltip is drawn once while the pointer rests,
+        -- and a frozen number would be wrong a second later (Codex, PR #98).
         local def = pr._def
-        local left = math.max(1, math.ceil(pr._refused.retryAt - GetTime()))
         OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
         GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 1, 1, 1)
         GameTooltip:AddLine((def.sngl or "This buff") .. " was refused on them:", unpack(COLOUR.COVERED))
         GameTooltip:AddLine("a more powerful spell is already active.", unpack(COLOUR.COVERED))
-        GameTooltip:AddLine("The window's clicks skip them for " .. left .. "s.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("The window's clicks skip them for up to 30 seconds.", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end
 end

@@ -565,10 +565,24 @@ H.check(not blocked.wait(), "everyone refused, but no press yet")
 WoW.now = WoW.now + 1
 H.runScript(prow, "PreClick", "RightButton", true)
 H.eq(prow:GetAttribute("spell2"), nil, "the press armed nothing: everyone is refused")
+local okHalf, whyHalf = blocked.wait()
+H.check(not okHalf and tostring(whyHalf):find("release", 1, true),
+    "the press alone doesn't complete it: a cast-on-release client casts on the release")
 -- Its release comes before the next poll and must not replace the press.
 H.runScript(prow, "PreClick", "RightButton", false)
 local ok3, why3 = blocked.wait()
-H.check(ok3, "and that completes the step: " .. tostring(why3))
+H.check(ok3, "both edges armed nothing: that completes the step: " .. tostring(why3))
+blocked.leave("done")
+-- A release that arms (a record lapsed while held) fails the click.
+WoW.now = WoW.now + 1
+H.runScript(prow, "PreClick", "RightButton", true)
+local _, eng = T.window()
+eng:ClearRefusals()
+H.runScript(prow, "PreClick", "RightButton", false)
+H.check(prow:GetAttribute("spell2") ~= nil, "the release, with the refusals gone, armed the spell")
+local okArm, whyArm = blocked.wait()
+H.check(not okArm and tostring(whyArm):find("proves nothing", 1, true),
+    "and the step doesn't pass on that click: " .. tostring(whyArm))
 blocked.leave("done")
 H.runScript(feed, "OnEvent", "PLAYER_REGEN_DISABLED")
 H.check(logHas("MEMORY after PLAYER_REGEN_DISABLED: refusals none"), "combat entry clears it, and that is logged")
