@@ -470,6 +470,19 @@ H.runScript(brow, "PreClick", "LeftButton", false)
 stepWhere("refusal", "Ordinary failure").leave("skipped")
 sent("Sten Thornbeard", "Cast-12")
 H.check(logHas("aimed=nil match=no aim"), "nor one from a step that was left")
+-- A row click in combat that sends nothing: leaving the row step drops its
+-- aim, so the action-bar fallback, its own step, is not matched to it, even
+-- within the second (Codex review of 2ca7a8c).
+local rowStep = stepWhere("refusal", "left-click Buffy's Fortitude row once")
+local fallback = stepWhere("refusal", "from your action bar; else press Skip")
+H.check(rowStep and rowStep.leave and fallback and fallback.wait, "the combat row click and its fallback are separate steps")
+clearLog()
+WoW.now = 102
+H.runScript(brow, "PreClick", "LeftButton", false)
+H.runScript(brow, "PostClick", "LeftButton", false)
+rowStep.leave("done")
+sent("Sten Thornbeard", "Cast-14")
+H.check(logHas("aimed=nil match=no aim") and not logHas("match=yes"), "the fallback cast is not matched to the click that sent nothing")
 -- The action-bar case: no click on a row, no aim.
 clearLog()
 sent("Sten Thornbeard", "Cast-13")

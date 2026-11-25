@@ -1011,7 +1011,7 @@ local function errorConstants()
 end
 
 Probe:Steps("refusal", {
-    rev = 3,
+    rev = 4,
     title = "Refusal memory: what a refused cast says, and to whom (#97)",
     { text = "On your PRIEST, out of combat, in your party at the camp, Camp Benefits on you and your party member, Buffy's window open. Press Start: it starts the watch.",
       button = "Start", run = function()
@@ -1032,8 +1032,12 @@ Probe:Steps("refusal", {
       timeout = 600 }, CAST_WHY),
     { text = "Walk back. Pull a mob until you are in combat. The step completes by itself once lockdown is on.",
       timeout = 600, wait = function() return InCombatLockdown(), "not in combat lockdown yet" end },
-    waitStep({ text = "While still in combat: left-click Buffy's Fortitude row (if it fires nothing, cast Fortitude on your party member from your action bar).",
+    waitStep({ text = "While still in combat: left-click Buffy's Fortitude row once. If nothing happens, press Done.",
       timeout = 300 }, CAST_WHY, hookRows),
+    -- Its own step, so leaving the row step drops a click that sent nothing,
+    -- and this cast is never matched to it (Codex review of 2ca7a8c).
+    waitStep({ text = "Still in combat: if the row cast nothing, cast Power Word: Fortitude on your party member from your action bar; else press Skip.",
+      timeout = 300 }, CAST_WHY),
     { text = "Finish the fight, then type /reload to save the results.", reload = true },
 })
 
