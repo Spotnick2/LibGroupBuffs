@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 38
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 39
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -1613,6 +1613,8 @@ function Methods:PruneCache()
     local cutoff = GetTime() - 3600
     PruneTable(self.cache, cutoff)
     if self.coverCache then PruneTable(self.coverCache, cutoff) end
+    -- Refusals of members who left, and past their deadline (#97).
+    self:PruneRefusals()
 end
 
 -- ─── Aura passes ────────────────────────────────────────────────────────────
@@ -1817,6 +1819,358 @@ local function MemberState(self, unit, def)
     return rem, dur, state, spell, basis, cover or nil, coverRem
 end
 
+-- ─── Refusals (r39, #97) ────────────────────────────────────────────────────
+--
+-- Some blockers can't be listed in coveredBy. Camp Benefits (1229741) is one
+-- aura whose parts depend on the camp's items and whose values scale with
+-- level, and the client exposes neither; and which Fortitude rank a world
+-- buff refuses depends on the rank. What the client does say is when it
+-- refused a cast. Measured out of combat, in one frame (#97, runs #646 and
+-- #518, build 71037):
+--
+--     UNIT_SPELLCAST_SENT("player", targetName, castGUID, spellID)
+--     UNIT_SPELLCAST_FAILED("player", castGUID, spellID)
+--     UI_ERROR_MESSAGE(57, SPELL_FAILED_AURA_BOUNCED)
+--
+-- Type 57 is ERR_SPELL_FAILED_S, which also carries "Interrupted" and "Can't
+-- do that while moving", so the message is what tells a bounce apart.
+--
+-- What is learned is what the client reported: this rank of a def's single
+-- form, cast by the player at this member, bounced. SENT names the member
+-- and the rank, FAILED joins SENT by castGUID, and the error follows FAILED.
+-- That is true whoever started the cast (this window, an action bar, a
+-- macro), so no click is tracked: the member is who SENT names, resolved to
+-- exactly one roster GUID, never the member a click aimed at. A cast whose
+-- target can't be resolved that way (a secret or ambiguous name, a match
+-- with no readable GUID, someone outside the group) teaches nothing, and so
+-- does anything in combat, where SENT's target can be secret (#646). An
+-- out-of-range cast fails with no SENT and never reaches the error.
+--
+-- A refusal says only that this rank bounced on this member just now, not
+-- what blocked it or for how long. So it is kept apart from the aura evidence
+-- (state, nMiss, allHave and CoverOf are unchanged) and only steers the
+-- click: a single-form cast of that rank skips the member for REFUSAL_HOLD
+-- seconds. The group form, and the popover's manual click, are not affected.
+-- It steers only the pick PreClick makes out of combat, never the aim wired
+-- between clicks, which is what a click in combat uses (combat clears the
+-- records, and a row aimed past a member or disarmed by them would stay so).
+--
+-- A record clears early when the member gets a readable aura removal or
+-- update, or a full update (the blocker may be what changed); when they leave
+-- the roster (PruneCache); on combat entry and exit and a world transition.
+-- Not when the buff is seen on them: a refusal is as often of a top-up (run
+-- #520: a camp member with 29 minutes of Fortitude refused every refresh),
+-- and clearing it there sent every click straight back to them. A record
+-- applies only to the rank it was learned from. Nothing is saved: a /reload
+-- forgets it all.
+--
+-- The host opts in by forwarding UI:RefusalEvents() to UI:RefusalEvent. A
+-- host that doesn't learns nothing, and its engine behaves as r38's did.
+local REFUSAL_HOLD = 30
+-- How long a sent cast waits for its FAILED, and a FAILED for its error.
+-- Both came in the same frame in every measured bounce.
+local CAST_WINDOW = 1
+local REFUSAL_REASON = "stronger-effect"
+
+-- The state, made on first use: an engine an older copy built has none.
+local function Refusals(self)
+    local R = self.refusals
+    if not R then
+        R = { byKey = {}, casts = {} }
+        self.refusals = R
+    end
+    R.casts = R.casts or {}
+    return R
+end
+
+-- A unit's GUID, or nil. Unlike API.UnitKey there is no fallback to the unit
+-- token: a token names a slot, and a slot's occupant can change.
+local function GuidOf(unit)
+    if not unit then return nil end
+    local ok, guid = pcall(function()
+        local g = UnitGUID(unit)
+        if type(g) == "string" and g ~= "" then return g end
+        return nil
+    end)
+    return ok and guid or nil
+end
+
+-- The rank a button armed with this spell name casts: the client's highest
+-- known, which is what C_Spell.GetSpellInfo(name) answers (measured, #97:
+-- 1245 for Fortitude at level 36, the rank SENT carried).
+local function CastRank(spell)
+    if not spell then return nil end
+    local info = lib.API.SpellInfo(spell)
+    local id = info and info.spellID
+    return type(id) == "number" and id or nil
+end
+
+local function DropRecord(R, key, defId)
+    local recs = R.byKey[key]
+    if not recs then return false end
+    local had = recs[defId] ~= nil
+    recs[defId] = nil
+    if next(recs) == nil then R.byKey[key] = nil end
+    return had
+end
+
+-- The refusal on record for this member and def, or nil: { spellID, reason,
+-- retryAt }, retryAt on GetTime()'s clock. Applied only to the rank it was
+-- learned from, so a record of another rank, or with no rank resolvable now,
+-- is gone. `state` is accepted for callers and not used: the buff on them
+-- doesn't end a refusal (a top-up is refused too, run #520).
+function Methods:RefusalOf(unit, def, state)
+    local R = self.refusals
+    if not R or not unit or not def then return nil end
+    local key = GuidOf(unit)
+    local recs = key and R.byKey[key]
+    local rec = recs and recs[def.id]
+    if not rec then return nil end
+    local rank = CastRank(def.sngl)
+    if GetTime() >= rec.retryAt or rank ~= rec.spellID then
+        DropRecord(R, key, def.id)
+        return nil
+    end
+    return rec
+end
+
+-- Forget every refusal, and every cast still waiting for its answer.
+-- Returns whether there was a refusal to forget.
+function Methods:ClearRefusals()
+    local R = self.refusals
+    self.refusals = nil
+    return (R and next(R.byKey) ~= nil) and true or false
+end
+
+-- Forget this member's refusals. Returns whether there were any.
+local function ClearUnit(R, unit)
+    local key = GuidOf(unit)
+    if not key or not R.byKey[key] then return false end
+    R.byKey[key] = nil
+    return true
+end
+
+-- The roster's units, pets included: a name SENT gives must match exactly one.
+local function RosterUnits()
+    local out = { "player", "pet" }
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            out[#out + 1] = "raid" .. i
+            out[#out + 1] = "raidpet" .. i
+        end
+    else
+        for i = 1, 4 do
+            out[#out + 1] = "party" .. i
+            out[#out + 1] = "partypet" .. i
+        end
+    end
+    return out
+end
+
+-- Whether `unit` is called `name`: true, false, or nil when it can't be
+-- compared (a secret).
+local function Named(unit, name)
+    if not UnitExists(unit) then return false end
+    local ok, same = pcall(function()
+        local n = GetUnitName(unit, false)
+        return n ~= nil and n == name
+    end)
+    if not ok then return nil end
+    return same
+end
+
+local function IsPetToken(unit)
+    return unit == "pet" or unit:find("^partypet") ~= nil or unit:find("^raidpet") ~= nil
+end
+
+-- The GUID of the one roster member called `name` (GetUnitName(unit, false),
+-- the form SENT gives), or nil when the name doesn't pin the cast to one:
+--   - nobody, two members, a secret name, or a match with no readable GUID;
+--   - a pet: a pet's name isn't unique, and one outside the group could
+--     share it (a player's full name is unique region-wide). Pets still
+--     count for ambiguity;
+--   - the player's target, mouseover or focus being someone else with that
+--     name: the cast may well have gone to them (Codex, 6045a9a).
+-- In a raid "player" and its raidN are one member, one GUID.
+local function ResolveTarget(name)
+    local found, foundPet
+    for _, u in ipairs(RosterUnits()) do
+        local same = Named(u, name)
+        if same == nil then return nil end
+        if same then
+            local key = GuidOf(u)
+            if not key then return nil end
+            if found and found ~= key then return nil end
+            found = key
+            foundPet = foundPet or IsPetToken(u)
+        end
+    end
+    if not found or foundPet then return nil end
+    for _, u in ipairs({ "target", "mouseover", "focus" }) do
+        local same = Named(u, name)
+        if same == nil then return nil end
+        if same and GuidOf(u) ~= found then return nil end
+    end
+    return found
+end
+
+-- The defs whose single form this spell ID is a rank of, or nil.
+local function SingleDefs(self, spellID)
+    local name = lib.API.SpellName(spellID)
+    if not name then return nil end
+    local out
+    for _, d in ipairs(self.defs) do
+        if d.sngl and d.sngl == name then
+            out = out or {}
+            out[#out + 1] = d
+        end
+    end
+    return out
+end
+
+-- Only a bounce of the rank the window casts is kept: a lower rank from the
+-- spellbook says nothing about it, and storing it would overwrite a live
+-- record of the rank that matters (Codex, 6045a9a).
+local function LearnRefusal(R, c)
+    local changed = false
+    local recs = R.byKey[c.key] or {}
+    R.byKey[c.key] = recs
+    for _, d in ipairs(c.defs) do
+        local old = recs[d.id]
+        -- A refresh never extends a record: only its own deadline ends it.
+        local live = old and old.spellID == c.spellID and GetTime() < old.retryAt
+        if CastRank(d.sngl) == c.spellID and not live then
+            recs[d.id] = { spellID = c.spellID, reason = REFUSAL_REASON, retryAt = GetTime() + REFUSAL_HOLD }
+            changed = true
+        end
+    end
+    if next(recs) == nil then R.byKey[c.key] = nil end
+    return changed
+end
+
+-- One event. Runs in a pcall: a secret payload throws on comparison, and the
+-- event teaches nothing.
+local function Observe(self, R, event, a1, a2, a3, a4)
+    local now = GetTime()
+    for guid, c in pairs(R.casts) do
+        if now - c.at > CAST_WINDOW then R.casts[guid] = nil end
+    end
+    if event == "UNIT_SPELLCAST_SENT" then
+        if a1 ~= "player" or a3 == nil then return false end
+        local defs = SingleDefs(self, a4)
+        if not defs then return false end
+        local key = ResolveTarget(a2)
+        if not key then return false end
+        R.casts[a3] = { key = key, defs = defs, spellID = a4, at = now }
+        return false
+    end
+    if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+        if a1 ~= "player" or a2 == nil then return false end
+        local c = R.casts[a2]
+        if not c then return false end
+        if event == "UNIT_SPELLCAST_FAILED" and a3 == c.spellID then
+            c.failed, c.at = true, now
+        else
+            R.casts[a2] = nil
+        end
+        return false
+    end
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if a1 ~= "player" or a2 == nil then return false end
+        local c = R.casts[a2]
+        if not c then return false end
+        R.casts[a2] = nil
+        local changed = false
+        for _, d in ipairs(c.defs) do
+            if DropRecord(R, c.key, d.id) then changed = true end
+        end
+        return changed
+    end
+    if event == "UI_ERROR_MESSAGE" then
+        -- The error names no cast: it counts only while exactly one failed
+        -- cast is waiting for it.
+        local only, onlyGUID, n = nil, nil, 0
+        for guid, c in pairs(R.casts) do
+            if c.failed then
+                n = n + 1
+                only, onlyGUID = c, guid
+            end
+        end
+        if n == 0 then return false end
+        for guid, c in pairs(R.casts) do
+            if c.failed then R.casts[guid] = nil end
+        end
+        if n > 1 then return false end
+        local bounced = rawget(_G, "SPELL_FAILED_AURA_BOUNCED")
+        if type(bounced) == "string" and a2 == bounced then return LearnRefusal(R, only) end
+        return false
+    end
+    return false
+end
+
+-- The events a host forwards to learn refusals (UI:RefusalEvents).
+local REFUSAL_EVENTS = { "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_FAILED_QUIET",
+    "UNIT_SPELLCAST_SUCCEEDED", "UI_ERROR_MESSAGE", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+    "PLAYER_ENTERING_WORLD" }
+lib.Engine.REFUSAL_EVENTS = REFUSAL_EVENTS
+
+-- One forwarded event. Returns true when what the click skips has changed.
+function Methods:RefusalEvent(event, ...)
+    if event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED"
+        or event == "PLAYER_ENTERING_WORLD"
+    then
+        return self:ClearRefusals()
+    end
+    if InCombatLockdown() then
+        if self.refusals then self.refusals.casts = {} end
+        return false
+    end
+    local R = Refusals(self)
+    local ok, changed = pcall(Observe, self, R, event, ...)
+    return ok and changed and true or false
+end
+
+-- UNIT_AURA on a member (from AuraEventIsRelevant): a readable removal or
+-- update, or a full update, may be the blocker changing, so their refusals
+-- go. An empty list is not a change.
+function Methods:RefusalAuraChanged(unit, updateInfo)
+    local R = self.refusals
+    if not R or next(R.byKey) == nil then return end
+    pcall(function()
+        if updateInfo and not updateInfo.isFullUpdate then
+            local removed, updated = updateInfo.removedAuraInstanceIDs, updateInfo.updatedAuraInstanceIDs
+            local any = (type(removed) == "table" and #removed > 0) or (type(updated) == "table" and #updated > 0)
+            if not any then return end
+        end
+        ClearUnit(R, unit)
+    end)
+end
+
+-- Records of members no longer on the roster (from PruneCache), and past
+-- their deadline.
+function Methods:PruneRefusals()
+    local R = self.refusals
+    if not R then return end
+    local here = {}
+    for _, u in ipairs(RosterUnits()) do
+        if UnitExists(u) then
+            local g = GuidOf(u)
+            if g then here[g] = true end
+        end
+    end
+    local now = GetTime()
+    for key, recs in pairs(R.byKey) do
+        if not here[key] then
+            R.byKey[key] = nil
+        else
+            for defId, rec in pairs(recs) do
+                if now >= rec.retryAt then recs[defId] = nil end
+            end
+            if next(recs) == nil then R.byKey[key] = nil end
+        end
+    end
+end
+
 -- ─── Targets ────────────────────────────────────────────────────────────────
 
 -- Can this unit be buffed right now?
@@ -1839,7 +2193,7 @@ end
 -- A member whose auras cannot be read is never picked as "missing" - under
 -- combat secrecy that would aim at the first name in the list - but can still
 -- be the last-resort fallback.
-local function PickCandidate(self, members, def, anyValid, requireInRange, st)
+local function PickCandidate(self, members, def, anyValid, requireInRange, st, useRefusals)
     -- Range-check the spell this click will actually cast. Group spells can
     -- reach further than the single forms, so testing the single spell would
     -- rule out members the group spell reaches perfectly well.
@@ -1849,23 +2203,29 @@ local function PickCandidate(self, members, def, anyValid, requireInRange, st)
     else
         spell = def.hasSingle and def.sngl or def.grp
     end
+    -- A refusal (r39, #97) was learned from the single form, so only a
+    -- single-form cast skips the member it bounced on, and only when the
+    -- caller asks: PreClick's pick out of combat, never the aim wired for a
+    -- click in combat.
+    local single = useRefusals and spell ~= nil and spell == def.sngl
     local firstValid, bestUnit, bestRem = nil, nil, math.huge
     for _, m in ipairs(members) do
         if self:IsValidTarget(m.unit)
             and (not requireInRange or lib.API.SpellRange(m.unit, spell) == "IN_RANGE")
         then
-            local rem, state, cover
+            local rem, state, cover, refused
             local known = st and st.byUnit and st.byUnit[m.unit]
             if known then
-                rem, state, cover = known.rem, known.state, known.covered
+                rem, state, cover, refused = known.rem, known.state, known.covered, known.refused
             else
                 local _
                 rem, _, state, _, _, cover = MemberState(self, m.unit, def)
+                refused = single and self:RefusalOf(m.unit, def, state) or nil
             end
             -- A covered member is skipped by every branch, the two fallbacks
             -- included: the cast would be refused, whoever ends up aimed at
-            -- them (#95).
-            if not cover then
+            -- them (#95). So is one the client just refused it on (#97).
+            if not cover and not (single and refused) then
                 firstValid = firstValid or m.unit
                 if state == ST_MISSING then return m.unit end
                 if state == ST_HAS and rem < bestRem then
@@ -1886,9 +2246,12 @@ end
 -- in-range one is missing the buff simply fails. Then retries ignoring range,
 -- since the range check answers UNKNOWN in some cases and picking nobody
 -- would be worse than picking someone out of range.
-function Methods:PickTarget(members, def, anyValid, st)
-    return PickCandidate(self, members, def, anyValid, true, st)
-        or PickCandidate(self, members, def, anyValid, false, st)
+--
+-- `useRefusals` (r39, #97): skip members the client just refused the single
+-- form on. Only PreClick's out-of-combat pick passes it.
+function Methods:PickTarget(members, def, anyValid, st, useRefusals)
+    return PickCandidate(self, members, def, anyValid, true, st, useRefusals)
+        or PickCandidate(self, members, def, anyValid, false, st, useRefusals)
 end
 
 -- Whether a def's group form covers the whole raid. Defaults to raid, because
@@ -2095,15 +2458,20 @@ end
 -- stronger aura covers (CoverOf): neither missing nor in minR, since nobody
 -- can cast the buff on them; byUnit names the aura in `covered`.
 function Methods:GroupStat(members, def)
-    local minR, minDur, miss, unknown, covered = PERMANENT, 0, {}, 0, 0
+    local minR, minDur, miss, unknown, covered, refusedN = PERMANENT, 0, {}, 0, 0, 0
     local byUnit = {}
     for _, m in ipairs(members) do
         if not UnitIsConnected(m.unit) then
             miss[#miss + 1] = m
         else
             local r, d, state, spell, basis, cover, coverRem = MemberState(self, m.unit, def)
+            -- The client's last refusal of the single form on them (r39,
+            -- #97), or nil. It changes no count: the auras still say they
+            -- are missing it.
+            local refused = self:RefusalOf(m.unit, def, state)
+            if refused then refusedN = refusedN + 1 end
             byUnit[m.unit] = { rem = r, state = state, basis = basis,
-                               covered = cover, coverRem = coverRem }
+                               covered = cover, coverRem = coverRem, refused = refused }
             if cover then
                 covered = covered + 1
             elseif state == ST_UNKNOWN then
@@ -2124,6 +2492,7 @@ function Methods:GroupStat(members, def)
         nMiss    = #miss,
         nUnknown = unknown,
         nCovered = covered,
+        nRefused = refusedN,
         nTotal   = #members,
         -- Each member's state during this pass, with where it came from, so
         -- PickTarget can reuse it instead of re-reading every aura and the
@@ -2148,6 +2517,9 @@ end
 -- update it was simply not allowed to read.
 function Methods:AuraEventIsRelevant(unit, updateInfo)
     local defs = self.defs
+    -- An aura removed or changed on a member may be what refused a cast on
+    -- them (#97), and a full update can't say: their refusals go.
+    self:RefusalAuraChanged(unit, updateInfo)
     local ok, relevant = pcall(function()
         if not unit then return false end
         if not (unit == "player" or unit == "pet"
@@ -3276,6 +3648,9 @@ local function PopRowTipKey(pr)
     if pr._cover and pr._def then
         return "cover:" .. who .. ":" .. tostring(pr._def.id) .. ":" .. pr._cover
     end
+    if pr._refused and pr._def then
+        return "refused:" .. who .. ":" .. tostring(pr._def.id) .. ":" .. tostring(pr._refused.retryAt)
+    end
     return nil
 end
 
@@ -3292,6 +3667,8 @@ function Methods:ApplyPopRowVisuals(pr)
     local cover, coverRem = engine:CoverOf(unit, def)
     if cover == nil and not has then state = S.UNKNOWN end
     pr._cover = cover or nil
+    -- The client's last refusal on them (r39, #97): named in the tooltip.
+    pr._refused = (not cover) and engine:RefusalOf(unit, def, state) or nil
     -- The row's own tooltip, open under the cursor, says what was true when
     -- the mouse arrived, and OnEnter does not fire again while the mouse
     -- rests there: redraw it when that changes. Compared with what the
@@ -3935,8 +4312,9 @@ function Methods:PopRowPreClick(pr)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
     -- Block a cast at somebody offline or dead. A member a stronger aura
-    -- covers (#95) is NOT blocked here: this is the player's own choice of
-    -- target, and whether the group form bounces off them is unmeasured.
+    -- covers (#95), or one the client just refused it on (#97), is NOT
+    -- blocked here: this is the player's own choice of target, and whether
+    -- the group form bounces off them is unmeasured.
     if not self.engine:IsValidTarget(pr._unit) then
         pr:SetAttribute("spell1", nil)
         pr:SetAttribute("spell2", nil)
@@ -3974,6 +4352,18 @@ function Methods:PopRowEnter(pr)
         GameTooltip:AddLine((def.sngl or def.grp or "this buff") .. " cannot be cast on them.",
             unpack(COLOUR.COVERED))
         GameTooltip:Show()
+    elseif pr._unit and pr._refused and pr._def then
+        -- A refusal names no aura: the client said only that something
+        -- stronger is active (#97).
+        -- No countdown: the tooltip is drawn once while the pointer rests,
+        -- and a frozen number would be wrong a second later (Codex, PR #98).
+        local def = pr._def
+        OwnTooltip(pr, "ANCHOR_RIGHT", TIP_GAP)
+        GameTooltip:SetText(lib.API.UnitDisplayName(pr._unit, "Unknown"), 1, 1, 1)
+        GameTooltip:AddLine((def.sngl or "This buff") .. " was refused on them:", unpack(COLOUR.COVERED))
+        GameTooltip:AddLine("a more powerful spell is already active.", unpack(COLOUR.COVERED))
+        GameTooltip:AddLine("The window's clicks skip them for up to 30 seconds.", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
     end
 end
 
@@ -4006,9 +4396,12 @@ end
 -- the last layout. A raid-wide group buff is aimed across the roster and
 -- answers nil once nobody needs it; everything else keeps the old behaviour of
 -- picking inside the row's own members.
-local function PrimaryPick(engine, r)
+-- `useRefusals`: PreClick's out-of-combat pick skips members the client just
+-- refused the single form on (#97). The aim wired between clicks never does,
+-- since a click in combat uses it and combat forgets the refusals.
+local function PrimaryPick(engine, r, useRefusals)
     if r._castMembers then return engine:PickRaidTarget(r._castMembers, r._def) end
-    return engine:PickTarget(r._members, r._def, r._groupMode)
+    return engine:PickTarget(r._members, r._def, r._groupMode, nil, useRefusals)
 end
 
 function Methods:ShowClickHint(row)
@@ -4040,9 +4433,9 @@ function Methods:ShowClickHint(row)
         if not spell or not row._members then return nil end
         local unit
         if which == 1 then
-            unit = PrimaryPick(engine, row)
+            unit = PrimaryPick(engine, row, true)
         else
-            unit = engine:PickTarget(row._members, def, false)
+            unit = engine:PickTarget(row._members, def, false, nil, true)
         end
         if not unit then return nil end   -- PreClick clears the spell here too
         return spell, unit
@@ -4172,7 +4565,7 @@ function Methods:RowPreClick(r, button)
         -- row per subgroup, so it is offered eight times in a full raid; this
         -- re-picks at click time, finds nobody left missing after the first
         -- cast, and clears the spell. Clicks two through eight cast nothing.
-        local unit = PrimaryPick(engine, r)
+        local unit = PrimaryPick(engine, r, true)
         r:SetAttribute("spell1", unit and r._primary or nil)
         if unit then r:SetAttribute("unit1", unit) end
     else
@@ -4180,7 +4573,7 @@ function Methods:RowPreClick(r, button)
             r:SetAttribute("spell2", nil)
             return
         end
-        local unit = engine:PickTarget(ms, df, false)
+        local unit = engine:PickTarget(ms, df, false, nil, true)
         r:SetAttribute("spell2", unit and r._secondary or nil)
         if unit then r:SetAttribute("unit2", unit) end
     end
@@ -4406,6 +4799,26 @@ local function AdoptLegacyState(self)
             frame:SetClampedToScreen(true)
         end
     end
+end
+
+-- Refusal memory (r39, #97). A host that wants it registers these events on
+-- its own frame and forwards each one, with all its arguments:
+--
+--     if ui.RefusalEvents then
+--         GB.RegisterEvents(frame, unpack(ui:RefusalEvents()))
+--     end
+--     -- in OnEvent, for each of them:  ui:RefusalEvent(event, ...)
+--
+-- A copy for every event it might carry, so a host can't change the list.
+-- A host that forwards nothing learns nothing.
+function Methods:RefusalEvents()
+    local out = {}
+    for i, ev in ipairs(lib.Engine.REFUSAL_EVENTS) do out[i] = ev end
+    return out
+end
+
+function Methods:RefusalEvent(event, ...)
+    if self.engine:RefusalEvent(event, ...) then self:ScheduleRefresh() end
 end
 
 function Methods:OnCombatEnd()

@@ -45,7 +45,7 @@ local procs = {}
 for key, proc in pairs(FP.procedures or {}) do
     if tostring(key):find("LibGroupBuffsProbe", 1, true) then procs[tostring(key):match("/(.*)$") or key] = proc end
 end
-for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal" }) do
+for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal", "memory" }) do
     local proc = procs[name]
     H.check(proc ~= nil, "procedure '" .. name .. "' is registered")
     if proc then
@@ -489,6 +489,103 @@ sent("Sten Thornbeard", "Cast-13")
 H.check(logHas("resolves to party1") and logHas("aimed=nil match=no aim"), "an action-bar cast resolves but has no row aim")
 WoW.now = nil
 rawset(_G, "Buffy", nil)
+T.watching(false)
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+-- memory (#97, r39): the probe window opts in like a host, and a refused
+-- click on its Fortitude row is learned and logged.
+rawset(_G, "SPELL_FAILED_AURA_BOUNCED", "A more powerful spell is already active")
+WoW.Know(1245, "Power Word: Fortitude")   -- the rank a cast by name sends
+clearLog()
+drive("memory", { skip = { [8] = true, [9] = true } })
+H.check(logHas("MEMORY start: refusals none"), "the memory procedure starts with nothing on record")
+local feed = T.feed()
+H.check(feed and WoW.events[feed] and WoW.events[feed].UNIT_SPELLCAST_SENT and WoW.events[feed].PLAYER_REGEN_DISABLED,
+    "it registers the library's refusal events on its own frame")
+local prow
+for _, r in ipairs((T.window()).rows or {}) do
+    if r._active and r._def and r._def.id == "fort" then prow = r end
+end
+H.check(prow, "the probe window has a Fortitude row")
+-- The stub knows Prayer of Fortitude, so the left click casts the group
+-- form, which is never learned from: the right click casts the single form.
+local aimed = prow and prow:GetAttribute("unit2")
+local learned = stepWhere("memory", "It should be refused, and learned")
+H.check(learned and learned.wait and learned.check and learned.leave, "the click step waits for a learned refusal")
+learned.leave("done")
+H.check(not learned.wait(), "and does not complete before one")
+H.runScript(prow, "PreClick", "RightButton", true)
+H.check(logHas("PreClick probe-row") and logHas("unit2=") and logHas("spell2="),
+    "a right click logs the slot it reads, unit2/spell2")
+local who = ({ player = "Karuzo Elegia", party1 = "Sten Thornbeard", party2 = "Mirel Dawnsong" })[aimed]
+H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_SENT", "player", who, "Cast-m1", 1245)
+H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_FAILED", "player", "Cast-m1", 1245)
+H.runScript(feed, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+H.check(logHas("MEMORY after UI_ERROR_MESSAGE: refusals " .. tostring(aimed) .. "=1245/\"stronger-effect\"/30s"),
+    "the learned refusal is logged: aimed at " .. tostring(aimed))
+H.check(not logHas(tostring(who)), "the member's name is never logged")
+H.check(learned.wait(), "the learned refusal completes the click step")
+H.check(select(1, learned.check()), "and its check passes with one on record")
+-- A Prayer or a landed cast doesn't complete it: only a new record does.
+learned.leave("done")
+H.check(not learned.wait(), "a second run waits for a new record")
+learned.leave("done")
+clearLog()
+T.memoryState("probe test")
+H.check(logHas("; fort row wired unit1=") and logHas("; next click picks left="),
+    "the state reads the wired aim and what the next click's PreClick picks")
+H.check(not logHas("right=" .. '"' .. tostring(aimed) .. '"'), "the next right click skips the refused member")
+-- The lapse starts from a live record and tells a deadline from an early clear.
+local lapseStep = stepWhere("memory", "nothing is on record any more")
+H.check(lapseStep and lapseStep.wait and lapseStep.leave, "the lapse is a wait")
+lapseStep.leave("done")
+H.check(not lapseStep.wait(), "it waits while the record lives")
+WoW.now = (WoW.now or 0) + 31
+local done, detail = lapseStep.wait()
+H.check(done and tostring(detail):find("at its deadline", 1, true), "and reports a lapse at the deadline: " .. tostring(detail))
+lapseStep.leave("done")
+local fresh, why = lapseStep.wait()
+H.check(not fresh and tostring(why):find("nothing on record", 1, true), "with nothing on record it says so instead of passing")
+lapseStep.leave("done")
+-- The blocked press: with the members refused, a press on the row that
+-- armed nothing. Nobody offline: that would be a false pass (Codex, 2581b88).
+local blocked = stepWhere("memory", "a press that armed no spell")
+H.check(blocked and blocked.wait, "the blocked click is a wait")
+blocked.leave("done")
+local okNone, whyNone = blocked.wait()
+H.check(not okNone and tostring(whyNone):find("needs both of you refused", 1, true),
+    "with fewer than two refused it waits, and says why: " .. tostring(whyNone))
+for i, u in ipairs({ "player", "party1", "party2" }) do
+    local name = ({ player = "Karuzo Elegia", party1 = "Sten Thornbeard", party2 = "Mirel Dawnsong" })[u]
+    H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_SENT", "player", name, "Cast-b" .. i, 1245)
+    H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_FAILED", "player", "Cast-b" .. i, 1245)
+    H.runScript(feed, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+end
+H.check(not blocked.wait(), "everyone refused, but no press yet")
+WoW.now = WoW.now + 1
+H.runScript(prow, "PreClick", "RightButton", true)
+H.eq(prow:GetAttribute("spell2"), nil, "the press armed nothing: everyone is refused")
+local okHalf, whyHalf = blocked.wait()
+H.check(not okHalf and tostring(whyHalf):find("release", 1, true),
+    "the press alone doesn't complete it: a cast-on-release client casts on the release")
+-- Its release comes before the next poll and must not replace the press.
+H.runScript(prow, "PreClick", "RightButton", false)
+local ok3, why3 = blocked.wait()
+H.check(ok3, "both edges armed nothing: that completes the step: " .. tostring(why3))
+blocked.leave("done")
+-- A release that arms (a record lapsed while held) fails the click.
+WoW.now = WoW.now + 1
+H.runScript(prow, "PreClick", "RightButton", true)
+local _, eng = T.window()
+eng:ClearRefusals()
+H.runScript(prow, "PreClick", "RightButton", false)
+H.check(prow:GetAttribute("spell2") ~= nil, "the release, with the refusals gone, armed the spell")
+local okArm, whyArm = blocked.wait()
+H.check(not okArm and tostring(whyArm):find("proves nothing", 1, true),
+    "and the step doesn't pass on that click: " .. tostring(whyArm))
+blocked.leave("done")
+H.runScript(feed, "OnEvent", "PLAYER_REGEN_DISABLED")
+H.check(logHas("MEMORY after PLAYER_REGEN_DISABLED: refusals none"), "combat entry clears it, and that is logged")
 T.watching(false)
 H.eq(#WoW.messages, 0, "nothing to chat")
 
