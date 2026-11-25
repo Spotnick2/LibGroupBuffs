@@ -16,6 +16,9 @@
 --                         combat, one call at a time (Wildly #42)
 --   /fp steps gb spells   spell data at login: GetSpellInfo(id) against a cold cache,
 --                         for every consumer's IDs (Magely #48)
+--   /fp gb auras [unit]   every helpful aura whole, and the camp and world buff ids (#95)
+--   /fp gb watch [off]    log the player's casts and UI errors
+--   /fp steps gb camp     what blocks Fortitude: Camp Benefits, a refused cast (#95)
 -- The embedded libraries are these checkouts (deploy.ps1). A newer copy in
 -- another addon would win LibStub, so `state` and every sample log which
 -- MINOR runs.
@@ -694,6 +697,161 @@ Probe:Steps("look", {
     { text = "Type /reload to save the results.", reload = true },
 })
 
+-- ─── camp: what blocks a buff, and what a refused cast says (#95) ───────────
+--
+-- Camp Benefits (1229741) is one aura holding whatever the camp's items give
+-- (First Aid Kit: Stamina, 1230124; Faction Banner: Spirit, 1229718; ...),
+-- scaled by level: +34 Stamina at level 36 blocks Fortitude rank 4 (+32).
+-- A sample logs every helpful aura whole (spell id, name, time, points) and
+-- asks for each camp item's and world buff's id on its own, to see whether
+-- the client exposes the parts and their values. While watching, the
+-- player's casts and UI errors are logged: what a refused cast says, for a
+-- reactive alternative to a list of covering ids. No name a player chose is
+-- logged; a cast's target is logged by shape only.
+
+local COVER_IDS = {
+    { 1229741, "Camp Benefits" }, { 1230124, "First Aid Kit" }, { 1229718, "Faction Banner" },
+    { 1229513, "Incense Candle" }, { 1230098, "Fish Bowl" }, { 1230653, "Enchanted Lute" },
+    { 1230172, "Sharpening Wheel" }, { 1230164, "Lodestone" }, { 1230587, "Mana Well" },
+    { 1229519, "Camp Chair" },
+    { 460939, "Might of Stormwind" }, { 460940, "Might of Stormwind" },
+    { 16609, "Warchief's Blessing" }, { 355366, "Warchief's Blessing" }, { 1304594, "Warchief's Blessing" },
+}
+local AURA_KEYS = { "spellId", "name", "duration", "expirationTime", "sourceUnit",
+    "isFromPlayerOrPlayerPet", "auraInstanceID", "isHelpful" }
+
+local function auraLine(a)
+    local parts = {}
+    for _, k in ipairs(AURA_KEYS) do
+        local ok, v = pcall(function() return a[k] end)
+        parts[#parts + 1] = k .. "=" .. (ok and Show(v) or "THREW")
+    end
+    local okR, rem = pcall(function() return math.floor(a.expirationTime - GetTime()) end)
+    parts[#parts + 1] = "remaining=" .. (okR and Show(rem) or "THREW")
+    local okP, pts = pcall(function()
+        local pt = a.points
+        if type(pt) ~= "table" then return Show(pt) end
+        local out = {}
+        for i = 1, #pt do out[#out + 1] = Show(pt[i]) end
+        return "{" .. table.concat(out, ",") .. "}"
+    end)
+    parts[#parts + 1] = "points=" .. (okP and pts or "THREW")
+    return table.concat(parts, " ")
+end
+
+local function presence(fn, ...)
+    if type(fn) ~= "function" then return "MISSING" end
+    local ok, a = pcall(fn, ...)
+    if not ok then return "THREW" end
+    return a == nil and "nil" or "aura"
+end
+
+local function groupUnits()
+    local units = { "player" }
+    local n = GetNumGroupMembers()
+    if IsInRaid() then
+        for i = 1, math.min(n, 40) do units[#units + 1] = "raid" .. i end
+    else
+        for i = 1, math.min(n - 1, 4) do units[#units + 1] = "party" .. i end
+    end
+    return units
+end
+
+local function auraDump(label, only)
+    local okF, fortID = pcall(function()
+        local info = lookup("C_Spell.GetSpellInfo")("Power Word: Fortitude")
+        return info and info.spellID
+    end)
+    say("AURAS " .. tostring(label) .. " begin: combat=" .. try("InCombatLockdown")
+        .. " level=" .. try("UnitLevel", "player")
+        .. " fortByName=" .. (okF and Show(fortID) or "THREW")
+        .. " stamina=" .. try("UnitStat", "player", 3))
+    local byIndex = lookup("C_UnitAuras.GetAuraDataByIndex")
+    local byID = lookup("C_UnitAuras.GetUnitAuraBySpellID")
+    local byName = lookup("C_UnitAuras.GetAuraDataBySpellName")
+    local units = (only and only ~= "") and { only } or groupUnits()
+    for _, unit in ipairs(units) do
+        if not UnitExists(unit) then
+            say("  " .. unit .. ": absent")
+        else
+            say("  " .. unit .. ": guid=" .. Shape((select(2, pcall(UnitGUID, unit))))
+                .. " level=" .. try("UnitLevel", unit))
+            if type(byIndex) == "function" then
+                for i = 1, 40 do
+                    local ok, a = pcall(byIndex, unit, i, "HELPFUL")
+                    if not ok then say("    [" .. i .. "] THREW"); break end
+                    if a == nil then break end
+                    say("    [" .. i .. "] " .. auraLine(a))
+                end
+            else
+                say("    GetAuraDataByIndex MISSING")
+            end
+            local ids = {}
+            for _, e in ipairs(COVER_IDS) do
+                local r = presence(byID, unit, e[1])
+                if r ~= "nil" then ids[#ids + 1] = e[1] .. " " .. e[2] .. "=" .. r end
+            end
+            say("    byID (all others nil): " .. (#ids > 0 and table.concat(ids, ", ") or "none"))
+            say("    byName: Camp Benefits=" .. presence(byName, unit, "Camp Benefits", "HELPFUL")
+                .. " First Aid Kit=" .. presence(byName, unit, "First Aid Kit", "HELPFUL"))
+        end
+    end
+    say("AURAS " .. tostring(label) .. " end: " .. #units .. " units")
+    return #units
+end
+
+Probe:Command("auras", function(args)
+    auraDump("command", args and args:match("^%s*(%S+)"))
+end, "every helpful aura, whole, and the camp and world buff ids: every unit, or the one named")
+
+local castWatching, castsSeen = false, 0
+local castWatch = CreateFrame("Frame")
+Probe:RegisterEvents(castWatch, { "UI_ERROR_MESSAGE", "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_FAILED",
+    "UNIT_SPELLCAST_FAILED_QUIET", "UNIT_SPELLCAST_SUCCEEDED" })
+castWatch:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
+    if not castWatching then return end
+    if event == "UI_ERROR_MESSAGE" then
+        say("  " .. event .. " type=" .. Show(a1) .. " message=" .. Show(a2))
+        return
+    end
+    local okU, mine = pcall(function() return a1 == "player" end)
+    if not (okU and mine) then return end
+    if event == "UNIT_SPELLCAST_SENT" then
+        say("  " .. event .. " target=" .. Shape(a2) .. " spell=" .. Show(a4))
+    else
+        say("  " .. event .. " spell=" .. Show(a3))
+        castsSeen = castsSeen + 1
+    end
+end)
+
+Probe:Command("watch", function(args)
+    castWatching = not (args and args:match("off"))
+    say("cast watch " .. (castWatching and "on" or "off"))
+end, "log the player's casts and UI errors (on|off)")
+
+local function waitCast()
+    local base
+    return function()
+        if base == nil then base = castsSeen end
+        return castsSeen > base, "waiting for a cast to succeed or fail"
+    end
+end
+
+Probe:Steps("camp", {
+    rev = 1,
+    title = "What blocks Fortitude: Camp Benefits and world buffs (#95)",
+    { text = "Out of combat, in your party, with Camp Benefits on you. Press Sample.", button = "Sample",
+      run = function() castWatching = true; return auraDump("camp") end },
+    { text = "Cast Power Word: Fortitude on YOURSELF (target yourself and cast it). The step completes when the client answers.",
+      timeout = 300, wait = waitCast() },
+    { text = "Now cast it on your party member who has Camp Benefits. The step completes when the client answers.",
+      timeout = 300, wait = waitCast() },
+    { text = "Cast Prayer of Fortitude if you have it, else press Skip. The step completes when the client answers.",
+      timeout = 300, wait = waitCast() },
+    { text = "Sampling again.", auto = true, run = function() return auraDump("after the casts") end },
+    { text = "Type /reload to save the results.", reload = true },
+})
+
 -- ─── boot ───────────────────────────────────────────────────────────────────
 
 local boot = CreateFrame("Frame")
@@ -708,7 +866,7 @@ boot:SetScript("OnEvent", function(_, _, name)
     logBound = true
     for _, line in ipairs(buffered) do say(line) end
     buffered = {}
-    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look")
+    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look|camp")
 end)
 
 -- The test seam (tests/test_probe.lua), never on _G.
@@ -721,5 +879,6 @@ if type(NS) == "table" then
         remembered = function() return sweepSaved end,
         window = function() return ui, engine end,
         spellWatch = spellWatch, sweepWatch = sweepWatch,
+        auraDump = auraDump, castWatch = castWatch,
     }
 end
