@@ -412,6 +412,27 @@ H.eq(WoW.tooltipText(), "", "not even when the cover comes back")
 WoW.clearTooltip()
 H.runScript(ui.popRows[2], "OnEnter")
 H.eq(WoW.tooltipText(), "", "a member who is not covered gets no such tooltip")
+-- A roster change puts somebody else at the same token, with the same cover,
+-- while the cursor rests on the row (Codex PR review of e0185b2).
+WoW.SetAura("party1", "Might of Stormwind", 7200, 5000, MIGHT)
+ui:Update()
+local pr2 = ui.popRows[2]
+H.eq(pr2._unit, "party1", "the second row is party1")
+WoW.mouseOver[pr2] = true
+WoW.clearTooltip()
+H.runScript(pr2, "OnEnter")
+H.check(WoW.tooltipText():find("Sten Thornbeard", 1, true), "its tooltip names them: " .. WoW.tooltipText())
+WoW.SetUnit("party1", { name = "Orla Vane", guid = "P9", class = "PALADIN" })
+ui:Update()
+H.eq(pr2._unit, "party1", "the rebuilt row is still party1")
+local swapped = WoW.tooltipText()
+H.check(swapped:find("Orla Vane", 1, true) and not swapped:find("Sten Thornbeard", 1, true),
+    "the tooltip follows the new member at that token: " .. swapped)
+WoW.mouseOver[pr2] = nil
+H.runScript(pr2, "OnLeave")
+WoW.ClearAuras("party1")
+WoW.SetUnit("party1", { name = "Sten Thornbeard", guid = "P1", class = "WARRIOR" })
+ui:Update()
 H.runScript(row, "OnLeave")
 
 -- In combat the hint lists them apart, by aura, and not as needing it.

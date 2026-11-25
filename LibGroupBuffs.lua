@@ -3269,9 +3269,12 @@ end
 local function PopRowTipKey(pr)
     local unit = pr._unit
     if not unit then return nil end
-    if not UnitIsConnected(unit) then return "offline:" .. unit end
+    -- Who, not which slot: a roster change can put somebody else at the
+    -- same unit token while the row is hovered, and the tooltip names them.
+    local who = tostring(lib.API.UnitKey(unit))
+    if not UnitIsConnected(unit) then return "offline:" .. who end
     if pr._cover and pr._def then
-        return "cover:" .. unit .. ":" .. tostring(pr._def.id) .. ":" .. pr._cover
+        return "cover:" .. who .. ":" .. tostring(pr._def.id) .. ":" .. pr._cover
     end
     return nil
 end
