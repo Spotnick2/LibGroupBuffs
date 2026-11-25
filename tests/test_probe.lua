@@ -547,19 +547,26 @@ lapseStep.leave("done")
 local fresh, why = lapseStep.wait()
 H.check(not fresh and tostring(why):find("nothing on record", 1, true), "with nothing on record it says so instead of passing")
 lapseStep.leave("done")
--- The blocked press: a press on the probe's row that armed nothing.
+-- The blocked press: with the members refused, a press on the row that
+-- armed nothing. Nobody offline: that would be a false pass (Codex, 2581b88).
 local blocked = stepWhere("memory", "a press that armed no spell")
 H.check(blocked and blocked.wait, "the blocked click is a wait")
 blocked.leave("done")
-H.check(not blocked.wait(), "not before a press")
--- Nobody to cast at (all offline): PreClick disarms the row.
-for _, u in ipairs({ "player", "party1", "party2" }) do WoW.units[u].connected = false end
+local okNone, whyNone = blocked.wait()
+H.check(not okNone and tostring(whyNone):find("needs both of you refused", 1, true),
+    "with fewer than two refused it waits, and says why: " .. tostring(whyNone))
+for i, u in ipairs({ "player", "party1", "party2" }) do
+    local name = ({ player = "Karuzo Elegia", party1 = "Sten Thornbeard", party2 = "Mirel Dawnsong" })[u]
+    H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_SENT", "player", name, "Cast-b" .. i, 1245)
+    H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_FAILED", "player", "Cast-b" .. i, 1245)
+    H.runScript(feed, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+end
+H.check(not blocked.wait(), "everyone refused, but no press yet")
 WoW.now = WoW.now + 1
 H.runScript(prow, "PreClick", "RightButton", true)
-H.eq(prow:GetAttribute("spell2"), nil, "the press armed nothing")
+H.eq(prow:GetAttribute("spell2"), nil, "the press armed nothing: everyone is refused")
 local ok3, why3 = blocked.wait()
 H.check(ok3, "and that completes the step: " .. tostring(why3))
-for _, u in ipairs({ "player", "party1", "party2" }) do WoW.units[u].connected = true end
 blocked.leave("done")
 H.runScript(feed, "OnEvent", "PLAYER_REGEN_DISABLED")
 H.check(logHas("MEMORY after PLAYER_REGEN_DISABLED: refusals none"), "combat entry clears it, and that is logged")

@@ -1835,6 +1835,17 @@ end
 -- Type 57 is ERR_SPELL_FAILED_S, which also carries "Interrupted" and "Can't
 -- do that while moving", so the message is what tells a bounce apart.
 --
+-- What is learned is what the client reported: this rank of a def's single
+-- form, cast by the player at this member, bounced. SENT names the member
+-- and the rank, FAILED joins SENT by castGUID, and the error follows FAILED.
+-- That is true whoever started the cast (this window, an action bar, a
+-- macro), so no click is tracked: the member is who SENT names, resolved to
+-- exactly one roster GUID, never the member a click aimed at. A cast whose
+-- target can't be resolved that way (a secret or ambiguous name, a match
+-- with no readable GUID, someone outside the group) teaches nothing, and so
+-- does anything in combat, where SENT's target can be secret (#646). An
+-- out-of-range cast fails with no SENT and never reaches the error.
+--
 -- A refusal says only that this rank bounced on this member just now, not
 -- what blocked it or for how long. So it is kept apart from the aura evidence
 -- (state, nMiss, allHave and CoverOf are unchanged) and only steers the
@@ -1844,50 +1855,33 @@ end
 -- between clicks, which is what a click in combat uses (combat clears the
 -- records, and a row aimed past a member or disarmed by them would stay so).
 --
--- Learned only from this window's own out-of-combat clicks, and only when the
--- member the click aimed at is the one SENT names:
---   - the click's PreClick notes the attempt (NoteAttempt), with the rank the
---     button will cast: C_Spell.GetSpellInfo(name).spellID, measured equal to
---     SENT's (1245 for Fortitude at level 36). Both mouse edges run PreClick
---     and which one casts can't be computed there, so a second edge naming
---     another member, rank or nothing spoils the attempt, and the edge after
---     an answered attempt notes nothing (for ATTEMPT_WINDOW);
---   - SENT arrives after PostClick has re-aimed the button (0.06-0.16 s
---     measured), so the attributes can't be read back then;
---   - SENT's target is a name. It must resolve to exactly one roster member
---     with a readable GUID, the attempt's. A secret or ambiguous name, or a
---     matching member whose GUID can't be read, is nobody;
---   - FAILED must carry SENT's castGUID and rank, and the UI error follows
---     it. An out-of-range cast fails during the click with no SENT: that ends
---     the attempt.
--- Nothing is learned in combat, where SENT's target can be secret (#646).
---
 -- A record clears early when the buff is seen on the member; when the member
 -- gets a readable aura removal or update, or a full update (the blocker may
 -- be what changed); when they leave the roster (PruneCache); on combat entry
--- and exit and a world transition. A rank change ends it by itself: a record
--- applies only to the rank it was learned from. Nothing is saved: a /reload
--- forgets it all.
+-- and exit and a world transition. A record applies only to the rank it was
+-- learned from. Nothing is saved: a /reload forgets it all.
 --
 -- The host opts in by forwarding UI:RefusalEvents() to UI:RefusalEvent. A
 -- host that doesn't learns nothing, and its engine behaves as r38's did.
 local REFUSAL_HOLD = 30
-local ATTEMPT_WINDOW = 1
+-- How long a sent cast waits for its FAILED, and a FAILED for its error.
+-- Both came in the same frame in every measured bounce.
+local CAST_WINDOW = 1
 local REFUSAL_REASON = "stronger-effect"
 
 -- The state, made on first use: an engine an older copy built has none.
 local function Refusals(self)
     local R = self.refusals
     if not R then
-        R = { byKey = {} }
+        R = { byKey = {}, casts = {} }
         self.refusals = R
     end
+    R.casts = R.casts or {}
     return R
 end
 
 -- A unit's GUID, or nil. Unlike API.UnitKey there is no fallback to the unit
--- token: a token names a slot, and a slot's occupant can change between a
--- click and its cast.
+-- token: a token names a slot, and a slot's occupant can change.
 local function GuidOf(unit)
     if not unit then return nil end
     local ok, guid = pcall(function()
@@ -1899,7 +1893,8 @@ local function GuidOf(unit)
 end
 
 -- The rank a button armed with this spell name casts: the client's highest
--- known, which is what C_Spell.GetSpellInfo(name) answers (measured, #97).
+-- known, which is what C_Spell.GetSpellInfo(name) answers (measured, #97:
+-- 1245 for Fortitude at level 36, the rank SENT carried).
 local function CastRank(spell)
     if not spell then return nil end
     local info = lib.API.SpellInfo(spell)
@@ -1918,8 +1913,9 @@ end
 
 -- The refusal on record for this member and def, or nil: { spellID, reason,
 -- retryAt }, retryAt on GetTime()'s clock. `state`, when given, is the
--- member's state for the def: seen with the buff, the record goes. A record
--- of another rank than the one the single form now casts is gone too.
+-- member's state for the def: seen with the buff, the record goes. Applied
+-- only to the rank it was learned from, so a record of another rank, or with
+-- no rank resolvable now, is gone too.
 function Methods:RefusalOf(unit, def, state)
     local R = self.refusals
     if not R or not unit or not def then return nil end
@@ -1927,8 +1923,6 @@ function Methods:RefusalOf(unit, def, state)
     local recs = key and R.byKey[key]
     local rec = recs and recs[def.id]
     if not rec then return nil end
-    -- Applied only to the rank it was learned from, so a rank that can't be
-    -- resolved now applies nothing.
     local rank = CastRank(def.sngl)
     if GetTime() >= rec.retryAt or state == ST_HAS or rank ~= rec.spellID then
         DropRecord(R, key, def.id)
@@ -1937,8 +1931,8 @@ function Methods:RefusalOf(unit, def, state)
     return rec
 end
 
--- Forget every refusal, and any click still waiting for its cast. Returns
--- whether there was a refusal to forget.
+-- Forget every refusal, and every cast still waiting for its answer.
+-- Returns whether there was a refusal to forget.
 function Methods:ClearRefusals()
     local R = self.refusals
     self.refusals = nil
@@ -1951,89 +1945,6 @@ local function ClearUnit(R, unit)
     if not key or not R.byKey[key] then return false end
     R.byKey[key] = nil
     return true
-end
-
--- An attempt is over: the edge that follows it, from the same button, notes
--- nothing until ATTEMPT_WINDOW after the click.
-local function EndAttempt(R, a)
-    R.attempt = nil
-    R.spent = { source = a.source, at = a.at }
-end
-
--- A click is about to cast `spell` at `unit` for `def`: called from PreClick,
--- after the library has aimed the button. `source` is the button, `button`
--- the mouse button and `down` the edge. `spell` nil means the click casts
--- nothing (the caller resolves it as the client will, modifiers included).
--- Only a single-form cast is noted.
---
--- One press is one gesture: its down edge notes the attempt, its release
--- never starts one. Which edge casts can't be known here, so the release of
--- a press whose attempt is still unsent may be the one: the same aim keeps
--- it (and restarts its deadline, for a release after a long hold), another
--- spoils it. A new press while an attempt is unsent spoils that one.
---
--- A row an older copy built passes no edge (`down` nil). For those, both
--- edges note, and the edge after an answered attempt notes nothing for
--- ATTEMPT_WINDOW.
-function Methods:NoteAttempt(def, unit, spell, source, button, down)
-    if InCombatLockdown() then return end
-    local R = Refusals(self)
-    local now = GetTime()
-    local key = GuidOf(unit)
-    local rank = def and spell ~= nil and spell == def.sngl and CastRank(spell) or nil
-    local single = key ~= nil and rank ~= nil
-
-    if down == false then
-        local g = R.gesture
-        R.gesture = nil
-        if not (g and g.source == source and g.button == button) then return end
-        local ga = g.attempt
-        if ga and ga == R.attempt and not ga.castGUID then
-            if single and ga.key == key and ga.def == def and ga.rank == rank then
-                ga.at = now
-            else
-                ga.mixed = true
-            end
-        end
-        return
-    end
-
-    local a = R.attempt
-    if a and now - a.at > ATTEMPT_WINDOW then
-        a = nil
-        R.attempt = nil
-    end
-
-    if down == true then
-        local g = { source = source, button = button }
-        R.gesture = g
-        if a and not a.castGUID then
-            a.mixed = true
-            return
-        end
-        if single then
-            R.attempt = { def = def, key = key, rank = rank, source = source, at = now }
-            g.attempt = R.attempt
-        end
-        return
-    end
-
-    -- No edge: the trailing edge of a click whose cast was already answered.
-    local spent = R.spent
-    if spent and spent.source == source and now - spent.at <= ATTEMPT_WINDOW then return end
-    if a then
-        -- The other edge of the same click, or another click before the
-        -- first one's cast: different aims make the attempt unattributable.
-        if not a.castGUID and (not single or a.key ~= key or a.def ~= def
-            or a.rank ~= rank or a.source ~= source)
-        then
-            a.mixed = true
-        end
-        return
-    end
-    if single then
-        R.attempt = { def = def, key = key, rank = rank, source = source, at = now }
-    end
 end
 
 -- The roster's units, pets included: a name SENT gives must match exactly one.
@@ -2077,52 +1988,91 @@ local function ResolveTarget(name)
     return found
 end
 
-local function Learn(R, a)
-    local recs = R.byKey[a.key] or {}
-    R.byKey[a.key] = recs
-    local old = recs[a.def.id]
-    -- A refresh never extends a record: only its own deadline ends it.
-    if old and old.spellID == a.rank and GetTime() < old.retryAt then return false end
-    recs[a.def.id] = { spellID = a.rank, reason = REFUSAL_REASON, retryAt = GetTime() + REFUSAL_HOLD }
-    return true
+-- The defs whose single form this spell ID is a rank of, or nil.
+local function SingleDefs(self, spellID)
+    local name = lib.API.SpellName(spellID)
+    if not name then return nil end
+    local out
+    for _, d in ipairs(self.defs) do
+        if d.sngl and d.sngl == name then
+            out = out or {}
+            out[#out + 1] = d
+        end
+    end
+    return out
 end
 
--- One event against the attempt. Runs in a pcall: a secret payload throws on
--- comparison, and that drops the attempt.
-local function Observe(R, a, event, a1, a2, a3, a4)
-    if event == "UNIT_SPELLCAST_SENT" then
-        if a1 ~= "player" then return false end
-        if a.castGUID or a.mixed or a4 ~= a.rank or ResolveTarget(a2) ~= a.key then
-            EndAttempt(R, a)
-            return false
+local function LearnRefusal(R, c)
+    local changed = false
+    local recs = R.byKey[c.key] or {}
+    R.byKey[c.key] = recs
+    for _, d in ipairs(c.defs) do
+        local old = recs[d.id]
+        -- A refresh never extends a record: only its own deadline ends it.
+        if not (old and old.spellID == c.spellID and GetTime() < old.retryAt) then
+            recs[d.id] = { spellID = c.spellID, reason = REFUSAL_REASON, retryAt = GetTime() + REFUSAL_HOLD }
+            changed = true
         end
-        a.castGUID = a3
+    end
+    return changed
+end
+
+-- One event. Runs in a pcall: a secret payload throws on comparison, and the
+-- event teaches nothing.
+local function Observe(self, R, event, a1, a2, a3, a4)
+    local now = GetTime()
+    for guid, c in pairs(R.casts) do
+        if now - c.at > CAST_WINDOW then R.casts[guid] = nil end
+    end
+    if event == "UNIT_SPELLCAST_SENT" then
+        if a1 ~= "player" or a3 == nil then return false end
+        local defs = SingleDefs(self, a4)
+        if not defs then return false end
+        local key = ResolveTarget(a2)
+        if not key then return false end
+        R.casts[a3] = { key = key, defs = defs, spellID = a4, at = now }
         return false
     end
     if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
-        if a1 ~= "player" then return false end
-        -- Before SENT: the cast failed during the click (out of range, not
-        -- ready). The attempt is over.
-        if not a.castGUID then EndAttempt(R, a) return false end
-        if a2 ~= a.castGUID then return false end
-        if event == "UNIT_SPELLCAST_FAILED" and a3 == a.rank then
-            a.failed = true
+        if a1 ~= "player" or a2 == nil then return false end
+        local c = R.casts[a2]
+        if not c then return false end
+        if event == "UNIT_SPELLCAST_FAILED" and a3 == c.spellID then
+            c.failed, c.at = true, now
         else
-            EndAttempt(R, a)
+            R.casts[a2] = nil
         end
         return false
     end
-    if not a.castGUID then return false end
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if a1 ~= "player" or a2 ~= a.castGUID then return false end
-        EndAttempt(R, a)
-        return DropRecord(R, a.key, a.def.id)
+        if a1 ~= "player" or a2 == nil then return false end
+        local c = R.casts[a2]
+        if not c then return false end
+        R.casts[a2] = nil
+        local changed = false
+        for _, d in ipairs(c.defs) do
+            if DropRecord(R, c.key, d.id) then changed = true end
+        end
+        return changed
     end
     if event == "UI_ERROR_MESSAGE" then
-        if not a.failed then return false end
-        EndAttempt(R, a)
+        -- The error names no cast: it counts only while exactly one failed
+        -- cast is waiting for it.
+        local only, onlyGUID, n = nil, nil, 0
+        for guid, c in pairs(R.casts) do
+            if c.failed then
+                n = n + 1
+                only, onlyGUID = c, guid
+            end
+        end
+        if n == 0 then return false end
+        for guid, c in pairs(R.casts) do
+            if c.failed then R.casts[guid] = nil end
+        end
+        if n > 1 then return false end
         local bounced = rawget(_G, "SPELL_FAILED_AURA_BOUNCED")
-        if type(bounced) == "string" and a2 == bounced then return Learn(R, a) end
+        if type(bounced) == "string" and a2 == bounced then return LearnRefusal(R, only) end
+        return false
     end
     return false
 end
@@ -2140,19 +2090,13 @@ function Methods:RefusalEvent(event, ...)
     then
         return self:ClearRefusals()
     end
-    local R = self.refusals
-    local a = R and R.attempt
-    if not a then return false end
-    if InCombatLockdown() or GetTime() - a.at > ATTEMPT_WINDOW then
-        R.attempt = nil
+    if InCombatLockdown() then
+        if self.refusals then self.refusals.casts = {} end
         return false
     end
-    local ok, changed = pcall(Observe, R, a, event, ...)
-    if not ok then
-        R.attempt = nil
-        return false
-    end
-    return changed and true or false
+    local R = Refusals(self)
+    local ok, changed = pcall(Observe, self, R, event, ...)
+    return ok and changed and true or false
 end
 
 -- UNIT_AURA on a member (from AuraEventIsRelevant): a readable removal or
@@ -3262,7 +3206,7 @@ local function MakeRow(ui, parent, i)
     r.missAll   = r:CreateFontString(nil, "OVERLAY")
     StyleRow(r)
 
-    r:SetScript("PreClick",  function(self, button, down) return self._ui:RowPreClick(self, button, down) end)
+    r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
     r:SetScript("PostClick", function(self, button) return self._ui:RowPostClick(self, button) end)
     r:SetScript("OnEnter",   function(self) return self._ui:RowEnter(self) end)
     r:SetScript("OnLeave",   function(self) return self._ui:RowLeave(self) end)
@@ -3315,7 +3259,7 @@ local function MakePopRow(ui, parent, i)
     pr.timeTxt  = pr:CreateFontString(nil, "OVERLAY")
     StylePopRow(pr, i)
 
-    pr:SetScript("PreClick",  function(self, button, down) return self._ui:PopRowPreClick(self, button, down) end)
+    pr:SetScript("PreClick",  function(self, button) return self._ui:PopRowPreClick(self, button) end)
     pr:SetScript("PostClick", function(self, button) return self._ui:PopRowPostClick(self, button) end)
     pr:SetScript("OnEnter",   function(self) return self._ui:PopRowEnter(self) end)
     pr:SetScript("OnLeave",   function(self) return self._ui:PopRowLeave(self) end)
@@ -4224,30 +4168,6 @@ function Methods:IsPreview()
     return self.previewGroups ~= nil
 end
 
--- What this click of `mouseButton` will cast, as the client resolves it:
--- the rows set only type1/spell1 and type2/spell2, so with a modifier held
--- the click casts nothing (measured, #97 run #518: Alt+click sent no cast).
--- SecureButton_GetModifiedAttribute is FrameXML's own lookup; without it,
--- any modifier held means nothing.
-local function ClickSpell(btn, mouseButton)
-    local get = rawget(_G, "SecureButton_GetModifiedAttribute")
-    if type(get) == "function" then
-        local ok, kind, spell = pcall(function()
-            return get(btn, "type", mouseButton), get(btn, "spell", mouseButton)
-        end)
-        if not ok or kind ~= "spell" then return nil end
-        return spell
-    end
-    for _, name in ipairs({ "IsModifierKeyDown", "IsAltKeyDown", "IsControlKeyDown", "IsShiftKeyDown" }) do
-        local fn = rawget(_G, name)
-        if type(fn) == "function" then
-            local ok, held = pcall(fn)
-            if not ok or held then return nil end
-        end
-    end
-    return btn:GetAttribute(mouseButton == "RightButton" and "spell2" or "spell1")
-end
-
 -- ─── Popover ────────────────────────────────────────────────────────────────
 
 -- Which side of its row the popover opens on: the addon's choice, or on
@@ -4357,21 +4277,16 @@ function Methods:UpdatePopover(anchorRow, members, def)
     pop:Show()
 end
 
-function Methods:PopRowPreClick(pr, button, down)
+function Methods:PopRowPreClick(pr)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
     -- Block a cast at somebody offline or dead. A member a stronger aura
     -- covers (#95), or one the client just refused it on (#97), is NOT
     -- blocked here: this is the player's own choice of target, and whether
     -- the group form bounces off them is unmeasured.
-    local valid = self.engine:IsValidTarget(pr._unit)
-    if not valid then
+    if not self.engine:IsValidTarget(pr._unit) then
         pr:SetAttribute("spell1", nil)
         pr:SetAttribute("spell2", nil)
-    end
-    if pr._def then
-        local spell = valid and ClickSpell(pr, button) or nil
-        self.engine:NoteAttempt(pr._def, valid and pr._unit or nil, spell, pr, button, down)
     end
 end
 
@@ -4598,7 +4513,7 @@ end
 -- Re-pick the target at click time, skipping the dead and offline. Does
 -- nothing in combat: SetAttribute is refused under lockdown, so the click uses
 -- whatever was wired before the pull.
-function Methods:RowPreClick(r, button, down)
+function Methods:RowPreClick(r, button)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
     local ms, df = r._members, r._def
@@ -4621,8 +4536,6 @@ function Methods:RowPreClick(r, button, down)
         local unit = PrimaryPick(engine, r, true)
         r:SetAttribute("spell1", unit and r._primary or nil)
         if unit then r:SetAttribute("unit1", unit) end
-        -- What this click casts, and at whom, for the refusal it may draw (#97).
-        engine:NoteAttempt(df, unit, unit and ClickSpell(r, button) or nil, r, button, down)
     else
         if not r._secondary then
             r:SetAttribute("spell2", nil)
@@ -4631,7 +4544,6 @@ function Methods:RowPreClick(r, button, down)
         local unit = engine:PickTarget(ms, df, false, nil, true)
         r:SetAttribute("spell2", unit and r._secondary or nil)
         if unit then r:SetAttribute("unit2", unit) end
-        engine:NoteAttempt(df, unit, unit and ClickSpell(r, button) or nil, r, button, down)
     end
 end
 

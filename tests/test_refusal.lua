@@ -5,9 +5,9 @@
 -- the camp and the level, and the client exposes neither. The client does say
 -- when it refused a cast. Measured out of combat (#97, runs #646 and #518):
 -- SENT("player", name, castGUID, spellID), then FAILED("player", castGUID,
--- spellID), then UI_ERROR_MESSAGE(57, SPELL_FAILED_AURA_BOUNCED), the cast
--- sent after the click's PostClick. A member the window's own click was
--- refused on is skipped by single-form picks for 30 seconds.
+-- spellID), then UI_ERROR_MESSAGE(57, SPELL_FAILED_AURA_BOUNCED). A member
+-- the player's single-form cast of a rank bounced on, whoever started it, is
+-- skipped by PreClick's single-form pick of that rank for 30 seconds.
 --
 --   & 'C:\Program Files (x86)\Lua\5.1\lua.exe' tests\test_refusal.lua
 ------------------------------------------------------------
@@ -79,29 +79,20 @@ local function answer(unit, how, opts)
     return changed
 end
 
--- A click by the window on `unit`: the attempt PreClick notes. `spell` is
--- what it armed: the single form by default, NOTHING for a disarmed click.
-local NOTHING = {}
-local function click(unit, spell, source)
-    if spell == NOTHING then spell = nil elseif spell == nil then spell = fort.sngl end
-    E:NoteAttempt(fort, unit, spell, source or "row")
-end
-
 local function refusedOn(unit) return E:RefusalOf(unit, fort) ~= nil end
 
 ------------------------------------------------------------
--- A refused click is learned, and the picker skips that member
+-- A refused cast is learned, and PreClick's pick skips that member
 ------------------------------------------------------------
 
 setup()
 local ms = members()
-H.eq(E.refusals, nil, "no state until a click: an engine an older copy built works unchanged")
+H.eq(E.refusals, nil, "no state until an event: an engine an older copy built works unchanged")
 H.eq(E:PickTarget(ms, fort, false), "player", "the first missing member is picked")
-click("player")
-H.check(answer("player"), "a bounce on the clicked member is learned, and says so")
+H.check(answer("player"), "a bounce on a member is learned, and says so")
 local rec = E:RefusalOf("player", fort)
 H.check(rec, "RefusalOf has the record")
-H.eq(rec.spellID, RANK3, "with the rank the click cast, which SENT named")
+H.eq(rec.spellID, RANK3, "with the rank SENT named")
 H.eq(rec.reason, "stronger-effect", "a stable reason")
 H.eq(rec.retryAt, 1030, "and a deadline 30 seconds on")
 H.eq(E:PickTarget(ms, fort, false, nil, true), "party1", "PreClick's single-form pick skips them")
@@ -125,27 +116,33 @@ H.eq(E:PickTarget(ms, fort, false, nil, true), "party2", "the shortest of the ot
 H.eq(E:PickTarget(ms, fort, true, nil, true), "player", "a group-form pick still aims at them")
 H.eq(E:PickRaidTarget(ms, fort), "player", "and so does the raid-wide pick")
 
+-- Whoever started the cast: SENT names who got it, so the record is true
+-- for a cast from an action bar or a macro as much as for the window's.
+setup()
+H.check(answer("party1"), "a bounce on another member is learned for that member")
+H.check(refusedOn("party1") and not refusedOn("player"), "and only for them")
+
 ------------------------------------------------------------
 -- The deadline, and what clears a record early
 ------------------------------------------------------------
 
 setup()
-click("player"); answer("player")
+answer("player")
 WoW.now = 1029.9
 H.check(refusedOn("player"), "held until the deadline")
 WoW.now = 1030
 H.check(not refusedOn("player"), "and gone at it")
 H.eq(E:PickTarget(members(), fort, false, nil, true), "player", "the member is picked again")
 
--- A refresh never extends it: a manual click that bounces again keeps the deadline.
+-- A refresh never extends it: a second bounce keeps the deadline.
 setup()
-click("player"); answer("player")
+answer("player")
 WoW.now = 1020
-click("player", nil, "popover"); H.check(not answer("player"), "a second bounce changes nothing")
+H.check(not answer("player"), "a second bounce changes nothing")
 H.eq(E:RefusalOf("player", fort).retryAt, 1030, "the first deadline stands")
 
 setup()
-click("player"); answer("player")
+answer("player")
 WoW.SetAura("player", "Power Word: Fortitude", 3600, 3600)
 local st2 = E:GroupStat(members(), fort)
 H.eq(st2.byUnit.player.refused, nil, "seen with the buff: the record goes")
@@ -153,7 +150,7 @@ WoW.ClearAuras("player")
 H.check(not refusedOn("player"), "and stays gone")
 
 setup()
-click("player"); answer("player")
+answer("player")
 E:AuraEventIsRelevant("player", { addedAuras = { { name = "Mark of the Wild" } } })
 H.check(refusedOn("player"), "an aura gained keeps it")
 E:AuraEventIsRelevant("party1", { removedAuraInstanceIDs = { 7 } })
@@ -162,45 +159,58 @@ E:AuraEventIsRelevant("player", { removedAuraInstanceIDs = {} })
 H.check(refusedOn("player"), "an empty removal list is no change")
 E:AuraEventIsRelevant("player", { removedAuraInstanceIDs = { 7 } })
 H.check(not refusedOn("player"), "an aura lost on them clears it: the blocker may be what went")
-click("player"); answer("player")
+answer("player")
 E:AuraEventIsRelevant("player", { updatedAuraInstanceIDs = { 9 } })
 H.check(not refusedOn("player"), "so does an aura changed in place")
-click("player"); answer("player")
+answer("player")
 E:AuraEventIsRelevant("player", { isFullUpdate = true })
 H.check(not refusedOn("player"), "so does a full update")
-click("player"); answer("player")
+answer("player")
 E:AuraEventIsRelevant("player", nil)
 H.check(not refusedOn("player"), "and an event with no details")
 
 for _, ev in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD" }) do
     setup()
-    click("player"); answer("player")
+    answer("player")
     H.check(E:RefusalEvent(ev), ev .. " clears every refusal, and says so")
     H.check(not refusedOn("player"), "gone after " .. ev)
     H.check(not E:RefusalEvent(ev), "with nothing left, it says nothing changed")
 end
 
 setup()
-click("player"); answer("player")
+answer("player")
 E:RefreshSpells()
 H.check(refusedOn("player"), "a spell refresh with the same rank keeps it")
 WoW.Know(2791, "Power Word: Fortitude")
 E:RefreshSpells()
 H.check(not refusedOn("player"), "a new rank ends it: the record is of the rank it was learned from")
-WoW.now = WoW.now + 2
-click("player")
 H.check(answer("player", nil, { spell = 2791 }), "the new rank's own bounce is learned")
 H.eq(E:RefusalOf("player", fort).spellID, 2791, "as that rank")
 
+-- A lower rank cast from the spellbook bounces: recorded as that rank, it
+-- doesn't hold back the rank the window casts.
 setup()
-click("player"); answer("player")
+WoW.Know(1244, "Power Word: Fortitude")
+H.check(answer("player", nil, { spell = 1244 }), "a lower rank's bounce is learned")
+H.check(not refusedOn("player"), "but applies only to that rank, not the one the window casts")
+
+-- A rank that can't be resolved applies no record.
+setup()
+answer("player")
+H.check(refusedOn("player"), "learned")
+WoW.knownSpells[RANK3] = nil
+WoW.knownSpells[H.SPELL.FORT_SINGLE] = nil
+H.check(not refusedOn("player"), "with no rank to compare, the record applies to nothing")
+
+setup()
+answer("player")
 WoW.now = 1031
 E:PruneCache()
 H.eq(E.refusals.byKey.P0, nil, "PruneCache drops a record past its deadline")
 
 -- A member who leaves loses theirs, so rejoining within the 30 s starts afresh.
 setup()
-click("party1"); answer("party1")
+answer("party1")
 H.check(refusedOn("party1"), "learned on party1")
 local p1 = WoW.units.party1
 WoW.RemoveUnit("party1")
@@ -212,100 +222,109 @@ H.check(not refusedOn("party1"), "gone after they left and a roster prune ran")
 -- What is never learned
 ------------------------------------------------------------
 
-local function notLearned(label, fn)
+local function notLearned(label, fn, unit)
     setup()
     fn()
-    H.check(not refusedOn("player"), label)
+    H.check(not refusedOn(unit or "player"), label)
 end
 
-notLearned("a bounce with no click from the window (an action-bar cast)", function() answer("player") end)
-notLearned("a click in combat", function()
-    WoW.combat = true; click("player"); WoW.combat = false; answer("player")
-end)
 notLearned("a cast answered in combat", function()
-    click("player"); WoW.combat = true; answer("player"); WoW.combat = false
+    WoW.combat = true; answer("player"); WoW.combat = false
 end)
-notLearned("SENT naming another member", function() click("player"); answer("player", nil, { target = NAMES.party1 }) end)
-notLearned("SENT naming nobody in the group", function() click("player"); answer("player", nil, { target = "Odo Farwalker" }) end)
-notLearned("a secret target name", function()
-    click("player"); answer("player", nil, { target = WoW.Secret("SENT target") })
+notLearned("a cast sent in combat and answered after", function()
+    WoW.combat = true
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-c", RANK3)
+    WoW.combat = false
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-c", RANK3)
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
+notLearned("SENT naming nobody in the group", function() answer("player", nil, { target = "Odo Farwalker" }) end)
+notLearned("a secret target name", function() answer("player", nil, { target = WoW.Secret("SENT target") }) end)
 notLearned("a name two members share", function()
     WoW.SetUnit("party2", { name = "Karuzo Elegia", guid = "P2", class = "MAGE" })
-    click("player"); answer("player")
+    answer("player")
 end)
-notLearned("SENT for another spell", function() click("player"); answer("player", nil, { spell = 585 }) end)
-notLearned("SENT for another rank of the same spell", function() click("player"); answer("player", nil, { spell = 1244 }) end)
+notLearned("SENT for another spell", function() answer("player", nil, { spell = 585 }) end)
+notLearned("the group form bouncing", function() answer("player", nil, { spell = H.SPELL.FORT_GROUP }) end)
 notLearned("a member whose GUID can't be read", function()
     WoW.units.player.guid = nil
-    click("player"); answer("player")
+    answer("player")
     WoW.units.player.guid = "P0"
 end)
 -- The pet is looked at before party1: a GUID-less match first must still
 -- make the name ambiguous, not be skipped.
-do
-    setup()
+notLearned("a name a member shares whose GUID can't be read", function()
     WoW.SetUnit("pet", { name = NAMES.party1, guid = "Pet-0", class = "WARRIOR" })
     WoW.units.pet.guid = nil
-    click("party1"); answer("party1")
-    H.check(not refusedOn("party1"), "a name a member shares whose GUID can't be read")
-end
-notLearned("a cast that failed during the click (no SENT), then a bounce", function()
-    click("player")
-    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-r", RANK3)
-    answer("player")
-end)
+    answer("party1")
+end, "party1")
 notLearned("a secret castGUID on FAILED", function()
-    click("player")
     E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-s", RANK3)
     E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", WoW.Secret("castGUID"), RANK3)
     E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
-notLearned("a click arming the group form", function() click("player", fort.grp); answer("player") end)
-notLearned("a click arming nothing", function() click("player", NOTHING); answer("player") end)
-notLearned("FAILED for another cast", function() click("player"); answer("player", nil, { failedGUID = "Cast-0" }) end)
-notLearned("a quiet failure", function() click("player"); answer("player", "quiet") end)
-notLearned("another failure's message on error 57", function() click("player"); answer("player", "Interrupted") end)
-notLearned("out of range: FAILED with no SENT, then error 402", function() click("player"); answer("player", "range") end)
-notLearned("a cast that landed", function() click("player"); answer("player", "land") end)
-notLearned("SENT more than a second after the click", function()
-    click("player"); WoW.now = WoW.now + 1.5; answer("player")
+notLearned("a secret unit token on SENT", function()
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", WoW.Secret("unit"), NAMES.player, "Cast-u", RANK3)
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-u", RANK3)
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
-notLearned("a click whose other edge aimed elsewhere", function()
-    click("player"); click("party1"); answer("player")
+notLearned("another unit's cast", function()
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", "party1", NAMES.player, "Cast-p", RANK3)
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "party1", "Cast-p", RANK3)
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
-notLearned("a click whose other edge armed nothing", function()
-    click("player"); click(nil, NOTHING); answer("player")
+notLearned("FAILED for another cast", function() answer("player", nil, { failedGUID = "Cast-0" }) end)
+notLearned("a quiet failure", function() answer("player", "quiet") end)
+notLearned("another failure's message on error 57", function() answer("player", "Interrupted") end)
+notLearned("out of range: FAILED with no SENT, then error 402", function() answer("player", "range") end)
+notLearned("a cast that landed", function() answer("player", "land") end)
+notLearned("FAILED more than a second after SENT", function()
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-l", RANK3)
+    WoW.now = WoW.now + 1.5
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-l", RANK3)
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
-notLearned("another button clicked before the cast", function()
-    click("player", nil, "row"); click("player", nil, "popover"); answer("player")
+notLearned("the error more than a second after FAILED", function()
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-e", RANK3)
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-e", RANK3)
+    WoW.now = WoW.now + 1.5
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 end)
 notLearned("the error before FAILED", function()
-    click("player")
     E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-x", RANK3)
     E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
     E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-x", RANK3)
 end)
+notLearned("FAILED for a different rank than SENT", function()
+    E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-k", RANK3)
+    E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-k", 1244)
+    E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+end)
 
--- A slot whose occupant changed between the click and SENT: with no GUID
--- for the first, the click is never noted, so the replacement inherits nothing.
+-- Two failed casts waiting for one error: it can't say whose, so neither.
 setup()
-WoW.units.party1.guid = nil
-click("party1")
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-a", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.party1, "Cast-b", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-a", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-b", RANK3)
+E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+H.check(not refusedOn("player") and not refusedOn("party1"), "one error for two failed casts teaches nothing")
+
+-- Two casts in flight, one fails: the error is that one's.
+setup()
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-a", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.party1, "Cast-b", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-a", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-b", RANK3)
+E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+H.check(refusedOn("party1") and not refusedOn("player"), "the one failed cast gets the error")
+
+-- A slot whose occupant changed: the record follows who SENT named.
+setup()
 WoW.SetUnit("party1", { name = "Orla Vane", guid = "P9", class = "PALADIN" })
 answer("party1", nil, { target = "Orla Vane" })
-H.check(not refusedOn("party1"), "the replacement in a slot never inherits the first occupant's click")
-
--- The trailing edge of an answered click notes nothing, so an action-bar
--- cast right after it is never taken for the window's (Codex, 9223733).
-setup()
-click("player"); answer("player")
-click("party1")                      -- the release, re-aimed at the next member
-H.check(not answer("party1"), "an action-bar bounce on party1 within the second is not learned")
-H.check(not refusedOn("party1"), "nothing recorded for party1")
-WoW.now = WoW.now + 1.1
-click("party1"); answer("party1")
-H.check(refusedOn("party1"), "a real click on the same row after the window is learned")
+H.check(refusedOn("party1"), "the new occupant's bounce is theirs")
+H.eq(E.refusals.byKey.P1, nil, "and nothing went to the one who left the slot")
 
 -- In a raid "player" and its raidN are one member: their name resolves.
 setup()
@@ -313,48 +332,31 @@ WoW.inRaid = true
 WoW.SetUnit("raid1", { name = "Karuzo Elegia", guid = "P0", class = "PRIEST" })
 WoW.SetUnit("raid2", { name = "Sten Thornbeard", guid = "P1", class = "WARRIOR" })
 WoW.groupMembers = 2
-click("player"); answer("player")
+answer("player")
 H.check(refusedOn("player"), "a raid alias of the player resolves to the one GUID")
 WoW.SetUnit("raidpet2", { name = "Sten Thornbeard", guid = "Pet-2", class = "WARRIOR" })
-WoW.now = WoW.now + 2
-click("raid2"); answer("raid2", nil, { target = "Sten Thornbeard" })
+answer("raid2", nil, { target = "Sten Thornbeard" })
 H.check(not refusedOn("raid2"), "a pet sharing a member's name makes it ambiguous")
 WoW.inRaid = false
 
--- The same edge twice is one attempt, and the edge after the cast is ignored.
-setup()
-click("player"); click("player")
-H.check(answer("player"), "both edges naming the same member: learned")
-setup()
-click("player")
-E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-y", RANK3)
-click("party1")                      -- the up edge, after the cast was sent
-E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-y", RANK3)
-E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
-H.check(refusedOn("player"), "an edge after SENT doesn't spoil the attempt")
-
--- One click, one cast: a second SENT finds no attempt.
-setup()
-click("player"); answer("player", "land")
-H.check(not answer("player"), "a second cast after one click learns nothing")
-H.check(not refusedOn("player"), "nothing recorded")
-
 -- A cast that lands clears an earlier refusal of the same member.
 setup()
-click("player"); answer("player")
-click("player", nil, "popover")
-H.check(answer("player", "land"), "a manual cast that lands clears the refusal, and says so")
+answer("player")
+H.check(answer("player", "land"), "a cast that lands clears the refusal, and says so")
 H.check(not refusedOn("player"), "gone")
 
--- Throws are contained: a secret castGUID or unit drops the attempt.
+-- Overlapping casts each wait for their own FAILED by castGUID.
 setup()
-click("player")
-H.check(not E:RefusalEvent("UNIT_SPELLCAST_SENT", WoW.Secret("unit"), NAMES.player, "Cast-z", RANK3),
-    "a secret unit token is not the player")
-H.check(not E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", WoW.Secret("guid"), RANK3), "nor is a secret castGUID")
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.player, "Cast-o1", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES.party1, "Cast-o2", RANK3)
+E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-o1", RANK3)
+E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+E:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-o2", RANK3)
+E:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+H.check(refusedOn("player") and refusedOn("party1"), "each bounce is its own cast's")
 
 ------------------------------------------------------------
--- The window: PreClick notes, the host forwards, the row re-aims
+-- The window: the host forwards, PreClick re-aims, the wired aim stays
 ------------------------------------------------------------
 
 WoW.reset()
@@ -389,7 +391,7 @@ ui:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-w1", RANK3)
 ui:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
 H.runScript(row, "PreClick", "LeftButton", false)
 H.runScript(row, "PostClick", "LeftButton", false)
-H.check(E:RefusalOf("player", fort), "the window's click taught the engine the refusal")
+H.check(E:RefusalOf("player", fort), "the forwarded events taught the engine the refusal")
 WoW.flushTimers(1)
 H.eq(row:GetAttribute("unit1"), "player",
     "the aim wired for a click in combat is the ordinary one: combat forgets the refusal")
@@ -413,10 +415,7 @@ H.check(tostring(tip):find("was refused on them", 1, true), "the tooltip says it
 H.check(tostring(tip):find("skip them for %d+s"), "and for how long")
 H.runScript(pr, "OnLeave")
 
--- A popover click on another member is noted too. The row's up edge, after
--- the cast, noted an attempt of its own that nothing consumed; it lapses
--- after a second, and a click on another button before then would spoil it.
-WoW.now = WoW.now + 2
+-- A popover click on another member: its bounce is learned the same way.
 local pr2 = ui.popRows[2]
 H.eq(pr2._unit, "party1", "the second popover row")
 H.runScript(pr2, "PreClick", "LeftButton", true)
@@ -448,147 +447,6 @@ H.check(not E:RefusalOf("player", fort) and not E:RefusalOf("party1", fort), "co
 H.eq(row:GetAttribute("spell1"), "Power Word: Fortitude", "and the row stays armed in combat")
 H.check(row:GetAttribute("unit1") ~= nil, "at a member")
 WoW.combat = false
-
-------------------------------------------------------------
--- One press, one gesture, through the real row handlers (Codex, 349045a)
-------------------------------------------------------------
-
-local function window()
-    WoW.reset()
-    H.TeachSpells({ "FORT_SINGLE" })
-    WoW.Know(RANK3, "Power Word: Fortitude")
-    local h = H.PriestUI()
-    h.config.visible.spirit = false
-    h.config.visible.shadow = false
-    h.engine:RefreshSpells()
-    H.Party3()
-    WoW.now = 5000
-    h.ui:Update()
-    return h, H.ActiveRows(h.ui)[1]
-end
-
-local function bounce(ui, who, guid)
-    ui:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES[who], guid, RANK3)
-    ui:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", guid, RANK3)
-    ui:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
-end
-
--- A long hold: the press casts and bounces; the release, seconds later,
--- re-aims at the next member and must not open an attempt an action-bar
--- cast could answer.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "PostClick", "LeftButton", true)
-    bounce(ui, "player", "Cast-g1")
-    H.check(e:RefusalOf("player", def), "the press's bounce is learned")
-    WoW.now = WoW.now + 3
-    H.runScript(row, "PreClick", "LeftButton", false)
-    H.runScript(row, "PostClick", "LeftButton", false)
-    bounce(ui, "party1", "Cast-g2")
-    H.check(not e:RefusalOf("party1", def), "a release after a long hold opens nothing for an action-bar cast")
-end
-
--- A quick second click within the second is a new press, and is learned.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "PostClick", "LeftButton", true)
-    bounce(ui, "player", "Cast-g3")
-    H.runScript(row, "PreClick", "LeftButton", false)
-    H.runScript(row, "PostClick", "LeftButton", false)
-    WoW.now = WoW.now + 0.3
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.eq(row:GetAttribute("unit1"), "party1", "the second press aims at the next member")
-    H.runScript(row, "PostClick", "LeftButton", true)
-    bounce(ui, "party1", "Cast-g4")
-    H.check(e:RefusalOf("party1", def), "and its bounce is learned, 0.3 s after the first")
-end
-
--- The release is the edge that casts (ActionButtonUseKeyDown off), after a
--- hold longer than the event deadline: the same aim keeps the attempt.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "PostClick", "LeftButton", true)
-    WoW.now = WoW.now + 1.5
-    H.runScript(row, "PreClick", "LeftButton", false)
-    H.runScript(row, "PostClick", "LeftButton", false)
-    bounce(ui, "player", "Cast-g5")
-    H.check(e:RefusalOf("player", def), "a cast on the release, after a long hold, is learned")
-end
-
--- A press while another press's cast is still unsent: two clicks, one cast
--- to come, and no telling whose. Neither is learned from.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "OnEnter")
-    local pr2 = ui.popRows[2]
-    H.runScript(pr2, "PreClick", "LeftButton", true)
-    bounce(ui, "party1", "Cast-g0")
-    H.check(not e:RefusalOf("party1", def), "a second press before the first one's cast spoils both")
-    H.runScript(row, "OnLeave")
-end
-
--- A release that aims elsewhere than its press spoils the attempt.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    H.runScript(row, "PreClick", "LeftButton", true)
-    WoW.SetAura("player", "Power Word: Fortitude", 3600, 3600)   -- the press's target got it meanwhile
-    H.runScript(row, "PreClick", "LeftButton", false)
-    WoW.ClearAuras("player")
-    bounce(ui, "player", "Cast-g6")
-    H.check(not e:RefusalOf("player", def), "a press and release aimed apart learn nothing")
-end
-
--- Alt held: the row casts nothing (#518), so nothing is noted, and an
--- action-bar cast right after is never taken for it.
-do
-    local h, row = window()
-    local ui, e, def = h.ui, h.engine, h.def("fort")
-    rawset(_G, "IsAltKeyDown", function() return true end)
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "PostClick", "LeftButton", true)
-    H.runScript(row, "PreClick", "LeftButton", false)
-    H.runScript(row, "PostClick", "LeftButton", false)
-    rawset(_G, "IsAltKeyDown", nil)
-    bounce(ui, "player", "Cast-g7")
-    H.check(not e:RefusalOf("player", def), "an Alt+click notes nothing for an action-bar bounce to answer")
-    -- With FrameXML's own lookup, the same: only type1 is set, so Alt resolves nothing.
-    rawset(_G, "IsAltKeyDown", function() return true end)
-    rawset(_G, "SecureButton_GetModifiedAttribute", function(btn, name, mouseButton)
-        local suffix = (mouseButton == "RightButton") and "2" or "1"
-        local held = IsAltKeyDown() and "alt-" or ""
-        return btn:GetAttribute(held .. name .. suffix) or btn:GetAttribute("*" .. name .. suffix)
-    end)
-    WoW.now = WoW.now + 2
-    H.runScript(row, "PreClick", "LeftButton", true)
-    H.runScript(row, "PreClick", "LeftButton", false)
-    rawset(_G, "IsAltKeyDown", nil)
-    bounce(ui, "player", "Cast-g8")
-    H.check(not e:RefusalOf("player", def), "nor through SecureButton_GetModifiedAttribute")
-    WoW.now = WoW.now + 2
-    rawset(_G, "IsAltKeyDown", function() return false end)
-    H.runScript(row, "PreClick", "LeftButton", true)
-    bounce(ui, "player", "Cast-g9")
-    H.check(e:RefusalOf("player", def), "a plain click through the same lookup is learned")
-    rawset(_G, "IsAltKeyDown", nil)
-    rawset(_G, "SecureButton_GetModifiedAttribute", nil)
-end
-
--- A rank that can't be resolved applies no record: it is the rank's.
-setup()
-click("player"); answer("player")
-H.check(refusedOn("player"), "learned")
-WoW.knownSpells[RANK3] = nil
-WoW.knownSpells[H.SPELL.FORT_SINGLE] = nil
-H.check(not refusedOn("player"), "with no rank to compare, the record applies to nothing")
 
 ------------------------------------------------------------
 -- An upgrade: an engine and a window r36 built, then this copy loads

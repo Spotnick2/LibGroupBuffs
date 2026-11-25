@@ -359,24 +359,20 @@ and the like name those sections.
     message is the test**, compared with the client's own global. An out-of-range cast fails
     during the click with no SENT (error 402). `C_Spell.GetSpellInfo(name).spellID` is the rank a
     cast by that name sends (1245 for Fortitude at level 36, #516).
-  - **Learned only from the window's own out-of-combat clicks.** `RowPreClick` and
-    `PopRowPreClick` call `Engine:NoteAttempt(def, unit, spell, source, button, down)` after
-    aiming, which snapshots the member's **GUID** (never the token fallback of `API.UnitKey`) and
-    the **rank** by name; only a single-form cast is noted. `spell` is what the click will really
-    cast, by FrameXML's `SecureButton_GetModifiedAttribute` (or, without it, nothing while a
-    modifier is held): the rows set only `type1`/`type2`, so a modified click casts nothing (#518)
-    and notes nothing. SENT arrives **after PostClick** has re-aimed
-    (0.06-0.16 s), so the snapshot is the evidence. SENT must come within `ATTEMPT_WINDOW` (1 s),
-    carry that rank, and its target name must resolve to **exactly one** roster member (pets
-    included, raid aliases of one GUID allowed) whose GUID is readable and the attempt's; FAILED
-    must carry SENT's castGUID and rank, and the error follow it. **One press is one gesture**:
-    the down edge notes, the release never starts an attempt. Which edge casts can't be computed
-    in PreClick, so a release whose press's attempt is still unsent keeps it if it aims the same
-    (restarting its deadline, for a long hold) and spoils it otherwise; a new press while an
-    attempt is unsent spoils that one. A FAILED with no SENT ends the attempt. Rows an older copy
-    built pass no edge: for those both edges note, and the edge after an answered attempt notes
-    nothing for 1 s. A secret payload throws inside a pcall and drops the attempt. Nothing is
-    learned in combat (SENT's target can be secret, #646).
+  - **What is learned is what the client reported, whoever started the cast.** No click is
+    tracked: the window's row, an action bar and a macro all teach the same thing, because the
+    record is SENT's, not a click's. Out of combat, a `SENT` from `"player"` whose spell ID is a
+    rank of a def's single form (by `API.SpellName`), and whose target name resolves to **exactly
+    one** roster member with a readable **GUID** (pets included, raid aliases of one GUID allowed;
+    never the token fallback of `API.UnitKey`), waits by castGUID for its `FAILED`, which must
+    carry the same rank, within `CAST_WINDOW` (1 s). The bounce error, which names no cast,
+    counts only while exactly one failed cast waits for it. `SUCCEEDED` on a cast drops that
+    member's record. Several casts can be in flight at once. Not learned: a secret, ambiguous or
+    outside-the-group target, a match with no readable GUID, another unit's cast, the group form,
+    anything in combat (SENT's target can be secret, #646), an out-of-range cast (FAILED with no
+    SENT). Three Codex rounds tried to tie a SENT to the window's click (both mouse edges, long
+    holds, modifiers, cast-on-release) and each found a new hole; resolving the recipient from
+    SENT itself made the click irrelevant, since the record is true whichever way it was cast.
   - **The record**: `Engine:RefusalOf(unit, def)` → `{ spellID, reason = "stronger-effect",
     retryAt }` or nil; `GroupStat` adds `byUnit[unit].refused` and `nRefused`. **No count or state
     changes**: `nMiss`, `allHave`, `state` and `CoverOf` still answer from the auras. Only the
