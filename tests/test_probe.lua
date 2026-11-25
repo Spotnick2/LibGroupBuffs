@@ -413,6 +413,26 @@ H.check(logHas("UNIT_SPELLCAST_SUCCEEDED castGUID="), "a cast by its castGUID's 
 H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", "Sten Thornbeard", "Cast-2", 1245)
 H.check(logHas("resolves to party1"), "SENT's target resolves to the member's unit token")
 H.check(not logHas("Sten Thornbeard"), "and the name itself is never logged")
+
+-- Buffy's rows are followed too (run #646 was on a mage, where the probe
+-- window has none): a click logs the aim, and SENT is matched against it.
+local brow = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+brow:SetScript("PreClick", function() end)
+brow:SetScript("PostClick", function() end)
+brow:SetAttribute("unit1", "party1")
+brow:SetAttribute("spell1", "Power Word: Fortitude")
+rawset(_G, "Buffy", { ui = { rows = { brow }, popRows = {} } })
+T.watching(true)
+clearLog()
+T.hookRows()
+H.check(brow._probeHooked, "a row of Buffy's window is hooked")
+H.runScript(brow, "PreClick", "LeftButton", false)
+H.check(logHas("PreClick buffy-row1") and logHas('unit1="party1"'), "its click logs where the library aimed it")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", "Sten Thornbeard", "Cast-3", 1245)
+H.check(logHas('aimed="party1" match=yes'), "and SENT's target is matched against that aim")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", "Mirel Dawnsong", "Cast-4", 1245)
+H.check(logHas("match=NO"), "a cast that went to someone else does not match")
+rawset(_G, "Buffy", nil)
 T.watching(false)
 H.eq(#WoW.messages, 0, "nothing to chat")
 

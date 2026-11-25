@@ -925,8 +925,10 @@ Probe:Steps("camp", {
 --      and what a self-cast modifier does to that;
 --   3. how many PreClick/PostClick edges one click runs;
 --   4. whether the payloads are secret in combat.
--- The rows clicked are the probe window's: the same library code as Buffy's.
--- Prayer of Fortitude (level 48) is not covered.
+-- The rows clicked are Buffy's (the pilot, any class) or the probe window's
+-- (priest buffs only): both are the library's own buttons. Run #646, on a
+-- mage, recorded no click: the probe window has no rows there, so Buffy's
+-- are hooked too. Prayer of Fortitude (level 48) is not covered.
 
 local function aimNote(r, edge, button, down)
     local okU, unit = pcall(r.GetAttribute, r, "unit1")
@@ -940,7 +942,6 @@ end
 -- Hooks run after the library's own handlers, so PreClick logs the aim the
 -- library just chose, and PostClick the re-aim it does after the cast.
 local function hookRows()
-    if not ui then return 0 end
     local n = 0
     local function hook(r, label)
         if r and not r._probeHooked then
@@ -958,8 +959,14 @@ local function hookRows()
             n = n + 1
         end
     end
-    for i, r in ipairs(ui.rows or {}) do hook(r, "row" .. i) end
-    for i, r in ipairs(ui.popRows or {}) do hook(r, "pop" .. i) end
+    local function hookWindow(w, prefix)
+        if type(w) ~= "table" then return end
+        for i, r in ipairs(w.rows or {}) do hook(r, prefix .. "row" .. i) end
+        for i, r in ipairs(w.popRows or {}) do hook(r, prefix .. "pop" .. i) end
+    end
+    hookWindow(ui, "probe-")
+    local B = rawget(_G, "Buffy")
+    hookWindow(type(B) == "table" and B.ui or nil, "buffy-")
     return n
 end
 
@@ -973,27 +980,28 @@ local function errorConstants()
 end
 
 Probe:Steps("refusal", {
-    rev = 1,
+    rev = 2,
     title = "Refusal memory: what a refused cast says, and to whom (#97)",
-    { text = "Out of combat, in your party at the camp, Camp Benefits on both of you. Press Start: it opens the probe window and starts the watch.",
+    { text = "On your PRIEST, out of combat, in your party at the camp, Camp Benefits on you and your party member, Buffy's window open. Press Start: it starts the watch.",
       button = "Start", run = function()
           castWatching = true
-          local shown = openNow()
+          local okB = pcall(build)
           local hooked = hookRows()
+          local shown = okB
           say("  GetGameMessageInfo(57)=" .. errorName(57) .. " " .. errorConstants())
           return shown, hooked
       end },
-    waitStep({ text = "LEFT-click the Power Word: Fortitude row in the probe window (titled 'LibGroupBuffs probe', not Buffy's). The step completes when the client answers.",
+    waitStep({ text = "LEFT-click the Power Word: Fortitude row in BUFFY's window. The step completes when the client answers.",
       timeout = 300 }, answers, ANSWER_WHY, hookRows),
     waitStep({ text = "Hold ALT (self-cast) and left-click the same row again.",
       timeout = 300 }, answers, ANSWER_WHY, hookRows),
-    waitStep({ text = "Hover the Fortitude row so its popover opens, then left-click your PARTY MEMBER's line in the popover.",
+    waitStep({ text = "Hover Buffy's Fortitude row so its popover opens, then left-click your PARTY MEMBER's line in the popover.",
       timeout = 300 }, answers, ANSWER_WHY, hookRows),
     waitStep({ text = "Ordinary failure: walk at least 45 yards from your party member, target them, and cast Power Word: Fortitude from your action bar or spellbook.",
       timeout = 600 }, answers, ANSWER_WHY),
     { text = "Walk back. Pull a mob until you are in combat. The step completes by itself once lockdown is on.",
       timeout = 600, wait = function() return InCombatLockdown(), "not in combat lockdown yet" end },
-    waitStep({ text = "While still in combat: left-click the probe window's Fortitude row (if it fires nothing, cast Fortitude on your party member from your action bar).",
+    waitStep({ text = "While still in combat: left-click Buffy's Fortitude row (if it fires nothing, cast Fortitude on your party member from your action bar).",
       timeout = 300 }, answers, ANSWER_WHY, hookRows),
     { text = "Finish the fight, then type /reload to save the results.", reload = true },
 })
