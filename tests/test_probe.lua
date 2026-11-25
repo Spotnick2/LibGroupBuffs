@@ -45,7 +45,7 @@ local procs = {}
 for key, proc in pairs(FP.procedures or {}) do
     if tostring(key):find("LibGroupBuffsProbe", 1, true) then procs[tostring(key):match("/(.*)$") or key] = proc end
 end
-for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal" }) do
+for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal", "memory" }) do
     local proc = procs[name]
     H.check(proc ~= nil, "procedure '" .. name .. "' is registered")
     if proc then
@@ -489,6 +489,37 @@ sent("Sten Thornbeard", "Cast-13")
 H.check(logHas("resolves to party1") and logHas("aimed=nil match=no aim"), "an action-bar cast resolves but has no row aim")
 WoW.now = nil
 rawset(_G, "Buffy", nil)
+T.watching(false)
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+-- memory (#97, r39): the probe window opts in like a host, and a refused
+-- click on its Fortitude row is learned and logged.
+rawset(_G, "SPELL_FAILED_AURA_BOUNCED", "A more powerful spell is already active")
+WoW.DefineSpell(1245, "Power Word: Fortitude")
+clearLog()
+drive("memory", { skip = { [8] = true } })
+H.check(logHas("MEMORY start: refusals none"), "the memory procedure starts with nothing on record")
+local feed = T.feed()
+H.check(feed and WoW.events[feed] and WoW.events[feed].UNIT_SPELLCAST_SENT and WoW.events[feed].PLAYER_REGEN_DISABLED,
+    "it registers the library's refusal events on its own frame")
+local prow
+for _, r in ipairs((T.window()).rows or {}) do
+    if r._active and r._def and r._def.id == "fort" then prow = r end
+end
+H.check(prow, "the probe window has a Fortitude row")
+-- The stub knows Prayer of Fortitude, so the left click casts the group
+-- form, which is never learned from: the right click casts the single form.
+local aimed = prow and prow:GetAttribute("unit2")
+H.runScript(prow, "PreClick", "RightButton", true)
+local who = ({ player = "Karuzo Elegia", party1 = "Sten Thornbeard", party2 = "Mirel Dawnsong" })[aimed]
+H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_SENT", "player", who, "Cast-m1", 1245)
+H.runScript(feed, "OnEvent", "UNIT_SPELLCAST_FAILED", "player", "Cast-m1", 1245)
+H.runScript(feed, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+H.check(logHas("MEMORY after UI_ERROR_MESSAGE: refusals " .. tostring(aimed) .. "=1245/\"stronger-effect\"/30s"),
+    "the learned refusal is logged: aimed at " .. tostring(aimed))
+H.check(not logHas(tostring(who)), "the member's name is never logged")
+H.runScript(feed, "OnEvent", "PLAYER_REGEN_DISABLED")
+H.check(logHas("MEMORY after PLAYER_REGEN_DISABLED: refusals none"), "combat entry clears it, and that is logged")
 T.watching(false)
 H.eq(#WoW.messages, 0, "nothing to chat")
 

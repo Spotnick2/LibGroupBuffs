@@ -20,6 +20,7 @@
 --   /fp gb watch [off]    log the player's casts and UI errors
 --   /fp steps gb camp     what blocks Fortitude: Camp Benefits, a refused cast (#95)
 --   /fp steps gb refusal  refusal memory's evidence: error 57, click to cast, combat (#97)
+--   /fp steps gb memory   refusal memory in game: learned, skipped, lapsed (#97, r39)
 -- The embedded libraries are these checkouts (deploy.ps1). A newer copy in
 -- another addon would win LibStub, so `state` and every sample log which
 -- MINOR runs.
@@ -1041,6 +1042,108 @@ Probe:Steps("refusal", {
     { text = "Finish the fight, then type /reload to save the results.", reload = true },
 })
 
+-- ─── memory: refusal memory in game (#97, r39) ─────────────────────────────
+--
+-- The probe window is a library window like Buffy's. Here it opts in the
+-- way a host does: it registers ui:RefusalEvents() on its own frame and
+-- forwards each one. Then a click refused on a camp member should be
+-- learned, the row's next click should go to someone else, and the record
+-- should lapse after 30 s. What is logged: each change of the refusals on
+-- record, and the Fortitude row's aim.
+
+local feed
+local lastRefusals
+
+local function fortDef()
+    for _, d in ipairs(DEFS) do if d.id == "fort" then return d end end
+end
+
+local function refusalSig()
+    if not engine or not engine.RefusalOf then return "no RefusalOf" end
+    local parts, def = {}, fortDef()
+    for _, u in ipairs(groupUnits()) do
+        local ok, rec = pcall(engine.RefusalOf, engine, u, def)
+        if not ok then
+            parts[#parts + 1] = u .. "=THREW"
+        elseif rec then
+            parts[#parts + 1] = u .. "=" .. Show(rec.spellID) .. "/" .. Show(rec.reason)
+                .. "/" .. string.format("%.0fs", rec.retryAt - GetTime())
+        end
+    end
+    return #parts > 0 and table.concat(parts, " ") or "none"
+end
+
+local function fortRow()
+    if not ui then return nil end
+    for _, r in ipairs(ui.rows or {}) do
+        if r._active and r._def and r._def.id == "fort" then return r end
+    end
+end
+
+local function memoryState(label)
+    local r = fortRow()
+    local aim = "no Fortitude row"
+    if r then
+        local st = r._members and engine:GroupStat(r._members, r._def)
+        aim = "unit1=" .. Show(r:GetAttribute("unit1")) .. " spell1=" .. Show(r:GetAttribute("spell1"))
+            .. (st and (" nMiss=" .. st.nMiss .. " nRefused=" .. Show(st.nRefused) .. " nCovered=" .. st.nCovered) or "")
+    end
+    say("MEMORY " .. label .. ": refusals " .. refusalSig() .. "; fort row " .. aim)
+    return r ~= nil
+end
+
+local function startFeed()
+    build()
+    if feed then return true end
+    if type(ui.RefusalEvents) ~= "function" then
+        say("MEMORY this library copy has no RefusalEvents (r39): active MINOR " .. Show(select(2, LibStub:GetLibrary("LibGroupBuffs-1.0"))))
+        return false
+    end
+    feed = CreateFrame("Frame")
+    Probe:RegisterEvents(feed, ui:RefusalEvents())
+    feed:SetScript("OnEvent", function(_, event, ...)
+        local ok, err = pcall(ui.RefusalEvent, ui, event, ...)
+        if not ok then say("MEMORY RefusalEvent threw on " .. event .. ": " .. tostring(err)) end
+        local sig = refusalSig()
+        if sig ~= lastRefusals then
+            lastRefusals = sig
+            say("MEMORY after " .. event .. ": refusals " .. sig)
+        end
+    end)
+    return true
+end
+
+local function noRefusals()
+    return refusalSig() == "none", "still on record: " .. refusalSig()
+end
+
+Probe:Steps("memory", {
+    rev = 1,
+    title = "Refusal memory in game: learned, skipped, lapsed (#97)",
+    { text = "On your PRIEST at the camp, out of combat, Camp Benefits on you and your party member (neither with Fortitude). Press Start: it opens the PROBE window (titled 'LibGroupBuffs probe') and turns refusal memory on for it.",
+      button = "Start", run = function()
+          castWatching = true
+          local fed = startFeed()
+          openNow()
+          hookRows()
+          return fed and memoryState("start")
+      end },
+    waitStep({ text = "LEFT-click the Power Word: Fortitude row in the PROBE window (not Buffy's). It should be refused. (If you know Prayer of Fortitude, RIGHT-click here and below: the left click casts the group form, which refusal memory never learns from.)",
+      timeout = 300 }, CAST_WHY, hookRows),
+    { text = "Reading what was learned.", auto = true, run = function() return memoryState("after the first click") end },
+    waitStep({ text = "LEFT-click the same row again. It should go to your party member this time (and be refused too, if the camp covers them).",
+      timeout = 300 }, CAST_WHY, hookRows),
+    { text = "Reading what was learned.", auto = true, run = function() return memoryState("after the second click") end },
+    { text = "LEFT-click the row once more: with both of you refused it should cast nothing. Then press Done.",
+      button = "Done", run = function() return memoryState("after the third click") end },
+    { text = "Hover the Fortitude row so its popover opens, then hover YOUR line in it. Press Shot while its tooltip shows.",
+      button = "Shot", screenshot = "refused member tooltip", run = function() return memoryState("tooltip") end },
+    { text = "Wait about 30 seconds without clicking: the step completes when nothing is on record any more.",
+      timeout = 90, wait = noRefusals },
+    { text = "Reading the row after the lapse.", auto = true, run = function() return memoryState("after the lapse") end },
+    { text = "Type /reload to save the results.", reload = true },
+})
+
 -- ─── boot ───────────────────────────────────────────────────────────────────
 
 local boot = CreateFrame("Frame")
@@ -1055,7 +1158,7 @@ boot:SetScript("OnEvent", function(_, _, name)
     logBound = true
     for _, line in ipairs(buffered) do say(line) end
     buffered = {}
-    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look|camp|refusal")
+    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look|camp|refusal|memory")
 end)
 
 -- The test seam (tests/test_probe.lua), never on _G.
@@ -1069,6 +1172,8 @@ if type(NS) == "table" then
         window = function() return ui, engine end,
         spellWatch = spellWatch, sweepWatch = sweepWatch,
         auraDump = auraDump, castWatch = castWatch, hookRows = hookRows, resolveName = resolveName,
+        startFeed = startFeed, memoryState = memoryState, refusalSig = refusalSig,
+        feed = function() return feed end,
         watching = function(on) castWatching = on end,
     }
 end
