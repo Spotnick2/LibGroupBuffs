@@ -1927,8 +1927,10 @@ function Methods:RefusalOf(unit, def, state)
     local recs = key and R.byKey[key]
     local rec = recs and recs[def.id]
     if not rec then return nil end
+    -- Applied only to the rank it was learned from, so a rank that can't be
+    -- resolved now applies nothing.
     local rank = CastRank(def.sngl)
-    if GetTime() >= rec.retryAt or state == ST_HAS or (rank and rank ~= rec.spellID) then
+    if GetTime() >= rec.retryAt or state == ST_HAS or rank ~= rec.spellID then
         DropRecord(R, key, def.id)
         return nil
     end
@@ -1959,23 +1961,66 @@ local function EndAttempt(R, a)
 end
 
 -- A click is about to cast `spell` at `unit` for `def`: called from PreClick,
--- after the library has aimed the button. `source` is the button. `spell`
--- nil means the click casts nothing. Only a single-form cast is noted.
-function Methods:NoteAttempt(def, unit, spell, source)
+-- after the library has aimed the button. `source` is the button, `button`
+-- the mouse button and `down` the edge. `spell` nil means the click casts
+-- nothing (the caller resolves it as the client will, modifiers included).
+-- Only a single-form cast is noted.
+--
+-- One press is one gesture: its down edge notes the attempt, its release
+-- never starts one. Which edge casts can't be known here, so the release of
+-- a press whose attempt is still unsent may be the one: the same aim keeps
+-- it (and restarts its deadline, for a release after a long hold), another
+-- spoils it. A new press while an attempt is unsent spoils that one.
+--
+-- A row an older copy built passes no edge (`down` nil). For those, both
+-- edges note, and the edge after an answered attempt notes nothing for
+-- ATTEMPT_WINDOW.
+function Methods:NoteAttempt(def, unit, spell, source, button, down)
     if InCombatLockdown() then return end
     local R = Refusals(self)
     local now = GetTime()
+    local key = GuidOf(unit)
+    local rank = def and spell ~= nil and spell == def.sngl and CastRank(spell) or nil
+    local single = key ~= nil and rank ~= nil
+
+    if down == false then
+        local g = R.gesture
+        R.gesture = nil
+        if not (g and g.source == source and g.button == button) then return end
+        local ga = g.attempt
+        if ga and ga == R.attempt and not ga.castGUID then
+            if single and ga.key == key and ga.def == def and ga.rank == rank then
+                ga.at = now
+            else
+                ga.mixed = true
+            end
+        end
+        return
+    end
+
     local a = R.attempt
     if a and now - a.at > ATTEMPT_WINDOW then
         a = nil
         R.attempt = nil
     end
-    -- The trailing edge of a click whose cast was already answered.
+
+    if down == true then
+        local g = { source = source, button = button }
+        R.gesture = g
+        if a and not a.castGUID then
+            a.mixed = true
+            return
+        end
+        if single then
+            R.attempt = { def = def, key = key, rank = rank, source = source, at = now }
+            g.attempt = R.attempt
+        end
+        return
+    end
+
+    -- No edge: the trailing edge of a click whose cast was already answered.
     local spent = R.spent
     if spent and spent.source == source and now - spent.at <= ATTEMPT_WINDOW then return end
-    local key = GuidOf(unit)
-    local rank = def and spell ~= nil and spell == def.sngl and CastRank(spell) or nil
-    local single = key ~= nil and rank ~= nil
     if a then
         -- The other edge of the same click, or another click before the
         -- first one's cast: different aims make the attempt unattributable.
@@ -3217,7 +3262,7 @@ local function MakeRow(ui, parent, i)
     r.missAll   = r:CreateFontString(nil, "OVERLAY")
     StyleRow(r)
 
-    r:SetScript("PreClick",  function(self, button) return self._ui:RowPreClick(self, button) end)
+    r:SetScript("PreClick",  function(self, button, down) return self._ui:RowPreClick(self, button, down) end)
     r:SetScript("PostClick", function(self, button) return self._ui:RowPostClick(self, button) end)
     r:SetScript("OnEnter",   function(self) return self._ui:RowEnter(self) end)
     r:SetScript("OnLeave",   function(self) return self._ui:RowLeave(self) end)
@@ -3270,7 +3315,7 @@ local function MakePopRow(ui, parent, i)
     pr.timeTxt  = pr:CreateFontString(nil, "OVERLAY")
     StylePopRow(pr, i)
 
-    pr:SetScript("PreClick",  function(self, button) return self._ui:PopRowPreClick(self, button) end)
+    pr:SetScript("PreClick",  function(self, button, down) return self._ui:PopRowPreClick(self, button, down) end)
     pr:SetScript("PostClick", function(self, button) return self._ui:PopRowPostClick(self, button) end)
     pr:SetScript("OnEnter",   function(self) return self._ui:PopRowEnter(self) end)
     pr:SetScript("OnLeave",   function(self) return self._ui:PopRowLeave(self) end)
@@ -4179,6 +4224,30 @@ function Methods:IsPreview()
     return self.previewGroups ~= nil
 end
 
+-- What this click of `mouseButton` will cast, as the client resolves it:
+-- the rows set only type1/spell1 and type2/spell2, so with a modifier held
+-- the click casts nothing (measured, #97 run #518: Alt+click sent no cast).
+-- SecureButton_GetModifiedAttribute is FrameXML's own lookup; without it,
+-- any modifier held means nothing.
+local function ClickSpell(btn, mouseButton)
+    local get = rawget(_G, "SecureButton_GetModifiedAttribute")
+    if type(get) == "function" then
+        local ok, kind, spell = pcall(function()
+            return get(btn, "type", mouseButton), get(btn, "spell", mouseButton)
+        end)
+        if not ok or kind ~= "spell" then return nil end
+        return spell
+    end
+    for _, name in ipairs({ "IsModifierKeyDown", "IsAltKeyDown", "IsControlKeyDown", "IsShiftKeyDown" }) do
+        local fn = rawget(_G, name)
+        if type(fn) == "function" then
+            local ok, held = pcall(fn)
+            if not ok or held then return nil end
+        end
+    end
+    return btn:GetAttribute(mouseButton == "RightButton" and "spell2" or "spell1")
+end
+
 -- ─── Popover ────────────────────────────────────────────────────────────────
 
 -- Which side of its row the popover opens on: the addon's choice, or on
@@ -4288,7 +4357,7 @@ function Methods:UpdatePopover(anchorRow, members, def)
     pop:Show()
 end
 
-function Methods:PopRowPreClick(pr, button)
+function Methods:PopRowPreClick(pr, button, down)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
     -- Block a cast at somebody offline or dead. A member a stronger aura
@@ -4301,8 +4370,8 @@ function Methods:PopRowPreClick(pr, button)
         pr:SetAttribute("spell2", nil)
     end
     if pr._def then
-        local spell = valid and pr:GetAttribute(button == "RightButton" and "spell2" or "spell1") or nil
-        self.engine:NoteAttempt(pr._def, valid and pr._unit or nil, spell, pr)
+        local spell = valid and ClickSpell(pr, button) or nil
+        self.engine:NoteAttempt(pr._def, valid and pr._unit or nil, spell, pr, button, down)
     end
 end
 
@@ -4529,7 +4598,7 @@ end
 -- Re-pick the target at click time, skipping the dead and offline. Does
 -- nothing in combat: SetAttribute is refused under lockdown, so the click uses
 -- whatever was wired before the pull.
-function Methods:RowPreClick(r, button)
+function Methods:RowPreClick(r, button, down)
     if self.previewGroups then return end
     if InCombatLockdown() then return end
     local ms, df = r._members, r._def
@@ -4553,7 +4622,7 @@ function Methods:RowPreClick(r, button)
         r:SetAttribute("spell1", unit and r._primary or nil)
         if unit then r:SetAttribute("unit1", unit) end
         -- What this click casts, and at whom, for the refusal it may draw (#97).
-        engine:NoteAttempt(df, unit, unit and r._primary or nil, r)
+        engine:NoteAttempt(df, unit, unit and ClickSpell(r, button) or nil, r, button, down)
     else
         if not r._secondary then
             r:SetAttribute("spell2", nil)
@@ -4562,7 +4631,7 @@ function Methods:RowPreClick(r, button)
         local unit = engine:PickTarget(ms, df, false, nil, true)
         r:SetAttribute("spell2", unit and r._secondary or nil)
         if unit then r:SetAttribute("unit2", unit) end
-        engine:NoteAttempt(df, unit, unit and r._secondary or nil, r)
+        engine:NoteAttempt(df, unit, unit and ClickSpell(r, button) or nil, r, button, down)
     end
 end
 

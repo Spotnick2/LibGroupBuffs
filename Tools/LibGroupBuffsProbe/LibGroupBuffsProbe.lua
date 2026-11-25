@@ -962,12 +962,20 @@ Probe:Steps("camp", {
 -- mage, recorded no click: the probe window has no rows there, so Buffy's
 -- are hooked too. Prayer of Fortitude (level 48) is not covered.
 
+-- The slot the pressed mouse button reads: unit2/spell2 for a right click.
+local lastPress                 -- { row, slot, unit, spell, edge, down, at } from the last PreClick
 local function aimNote(r, edge, button, down)
-    local okU, unit = pcall(r.GetAttribute, r, "unit1")
-    local okS, spell = pcall(r.GetAttribute, r, "spell1")
+    local slot = (button == "RightButton") and "2" or "1"
+    local okU, unit = pcall(r.GetAttribute, r, "unit" .. slot)
+    local okS, spell = pcall(r.GetAttribute, r, "spell" .. slot)
     lastAim = { edge = edge, unit = okU and unit or nil, combat = InCombatLockdown(), at = GetTime() }
+    if edge == "PreClick" then
+        lastPress = { row = r._probeName, slot = slot, unit = okU and unit or nil,
+                      spell = okS and spell or nil, down = down, at = GetTime() }
+    end
     say("  " .. edge .. " " .. tostring(r._probeName) .. " button=" .. Show(button) .. " down=" .. Show(down)
-        .. " unit1=" .. (okU and Show(unit) or "THREW") .. " spell1=" .. (okS and Show(spell) or "THREW")
+        .. " unit" .. slot .. "=" .. (okU and Show(unit) or "THREW")
+        .. " spell" .. slot .. "=" .. (okS and Show(spell) or "THREW")
         .. " combat=" .. Show(lastAim.combat))
 end
 
@@ -1080,12 +1088,37 @@ local function fortRow()
     end
 end
 
+-- The records on record for the group: how many, and the latest deadline.
+local function liveRecords()
+    local n, last, def = 0, nil, fortDef()
+    if not engine or not engine.RefusalOf then return 0, nil end
+    for _, u in ipairs(groupUnits()) do
+        local ok, rec = pcall(engine.RefusalOf, engine, u, def)
+        if ok and rec then
+            n = n + 1
+            if not last or rec.retryAt > last then last = rec.retryAt end
+        end
+    end
+    return n, last
+end
+
+-- The Fortitude row: the aim wired between clicks (what a click in combat
+-- uses, which ignores refusals), and what the next click's PreClick picks
+-- out of combat, which skips the refused (r39).
 local function memoryState(label)
     local r = fortRow()
     local aim = "no Fortitude row"
     if r then
         local st = r._members and engine:GroupStat(r._members, r._def)
-        aim = "unit1=" .. Show(r:GetAttribute("unit1")) .. " spell1=" .. Show(r:GetAttribute("spell1"))
+        local okL, left = pcall(function()
+            if r._castMembers then return engine:PickRaidTarget(r._castMembers, r._def) end
+            return engine:PickTarget(r._members, r._def, r._groupMode, nil, true)
+        end)
+        local okR, right = pcall(engine.PickTarget, engine, r._members, r._def, false, nil, true)
+        aim = "wired unit1=" .. Show(r:GetAttribute("unit1")) .. " spell1=" .. Show(r:GetAttribute("spell1"))
+            .. " unit2=" .. Show(r:GetAttribute("unit2")) .. " spell2=" .. Show(r:GetAttribute("spell2"))
+            .. "; next click picks left=" .. (okL and Show(left) or "THREW")
+            .. " right=" .. (okR and Show(right) or "THREW")
             .. (st and (" nMiss=" .. st.nMiss .. " nRefused=" .. Show(st.nRefused) .. " nCovered=" .. st.nCovered) or "")
     end
     say("MEMORY " .. label .. ": refusals " .. refusalSig() .. "; fort row " .. aim)
@@ -1136,33 +1169,94 @@ local function startFeed()
     return true
 end
 
-local function noRefusals()
-    return refusalSig() == "none", "still on record: " .. refusalSig()
+-- A step that completes when one more refusal is on record than when it
+-- began, so a Prayer, a landed cast or a cast from elsewhere doesn't.
+local function learnedStep(step, want)
+    local base
+    step.wait = function()
+        hookRows()
+        local n = liveRecords()
+        if base == nil then base = n end
+        return n > base, "waiting for a refusal to be learned (" .. n .. " on record; Done if the cast landed)"
+    end
+    step.check = function()
+        local n = liveRecords()
+        return n >= want, n .. " on record, " .. want .. " expected: " .. refusalSig()
+    end
+    step.leave = function() base = nil end
+    return step
 end
 
+-- A press on the probe's Fortitude row that armed nothing, after the step began.
+local blockedFrom
+local function blockedPress()
+    blockedFrom = blockedFrom or GetTime()
+    hookRows()
+    local p = lastPress
+    if p and p.at >= blockedFrom and tostring(p.row):find("^probe%-row") and p.spell == nil then
+        return true, "pressed " .. tostring(p.row) .. " slot " .. p.slot .. " armed nothing"
+    end
+    return false, "waiting for a press on the probe's Fortitude row that casts nothing"
+end
+
+-- The tooltip of a refused member's popover line, shot while it shows: the
+-- panel's Shot button would move the pointer off the line and close it.
+local shotTaken
+local function refusedTooltip()
+    if shotTaken then return true, "shot taken" end
+    local ok, owner = pcall(function()
+        if not GameTooltip:IsShown() then return nil end
+        return GameTooltip:GetOwner()
+    end)
+    if ok and type(owner) == "table" and owner._refused and owner._ui == ui then
+        shotTaken = true
+        Probe:Screenshot("refused member tooltip")
+        return true, "the refused line's tooltip, shot"
+    end
+    return false, "hover a refused member's line in the probe window's popover"
+end
+
+-- The lapse: starts from a live record and says whether it went at its
+-- deadline or early (an aura change, combat).
+local lapse
+local function lapsed()
+    local n, last = liveRecords()
+    if not lapse then
+        if n == 0 then return false, "nothing on record: press Back and click the row first" end
+        lapse = { deadline = last }
+    end
+    if n > 0 then return false, n .. " on record, the last until " .. string.format("%.0fs", last - GetTime()) .. " from now" end
+    local early = lapse.deadline - GetTime()
+    if early > 1 then return true, string.format("cleared %.1fs BEFORE its deadline (see the MEMORY lines)", early) end
+    return true, string.format("cleared at its deadline (%.1fs after)", -early)
+end
+
+local CLICK = "your Fortitude click on the PROBE window's Power Word: Fortitude row (titled 'LibGroupBuffs probe', not Buffy's): LEFT if you don't know Prayer of Fortitude, RIGHT if you do. Use the same one throughout"
+
 Probe:Steps("memory", {
-    rev = 1,
+    rev = 2,
     title = "Refusal memory in game: learned, skipped, lapsed (#97)",
-    { text = "On your PRIEST at the camp, out of combat, Camp Benefits on you and your party member (neither with Fortitude). Press Start: it opens the PROBE window (titled 'LibGroupBuffs probe') and turns refusal memory on for it.",
+    { text = "On your PRIEST at the camp, out of combat, Camp Benefits on you and your party member (neither with Fortitude), no modifier key held. Press Start: it opens the PROBE window and turns refusal memory on for it.",
       button = "Start", run = function()
           castWatching = true
+          blockedFrom, shotTaken, lapse = nil, nil, nil
           local fed = startFeed()
           openNow()
           hookRows()
           return fed and memoryState("start")
       end },
-    waitStep({ text = "LEFT-click the Power Word: Fortitude row in the PROBE window (not Buffy's). It should be refused. (If you know Prayer of Fortitude, RIGHT-click here and below: the left click casts the group form, which refusal memory never learns from.)",
-      timeout = 300 }, CAST_WHY, hookRows),
+    learnedStep({ text = "Make " .. CLICK .. ". It should be refused, and learned.", timeout = 300 }, 1),
     { text = "Reading what was learned.", auto = true, run = function() return memoryState("after the first click") end },
-    waitStep({ text = "LEFT-click the same row again. It should go to your party member this time (and be refused too, if the camp covers them).",
-      timeout = 300 }, CAST_WHY, hookRows),
+    learnedStep({ text = "Make the same click again. It should go to your party member this time, and be refused and learned too if the camp covers them (press Done if it landed).",
+      timeout = 300 }, 2),
     { text = "Reading what was learned.", auto = true, run = function() return memoryState("after the second click") end },
-    { text = "LEFT-click the row once more: with both of you refused it should cast nothing. Then press Done.",
-      button = "Done", run = function() return memoryState("after the third click") end },
-    { text = "Hover the Fortitude row so its popover opens, then hover YOUR line in it. Press Shot while its tooltip shows.",
-      button = "Shot", screenshot = "refused member tooltip", run = function() return memoryState("tooltip") end },
-    { text = "Wait about 30 seconds without clicking or moving: the step completes when nothing is on record any more. (An aura change on either of you clears it sooner; the log says which.)",
-      timeout = 90, wait = noRefusals },
+    { text = "Make the same click once more. With both of you refused it should cast nothing: the step completes on a press that armed no spell.",
+      timeout = 300, wait = blockedPress, leave = function() blockedFrom = nil end },
+    { text = "Reading the row.", auto = true, run = function() return memoryState("after the third click") end },
+    { text = "Hover the Fortitude row so its popover opens, then hover YOUR line in it and keep the pointer there: the probe takes the screenshot itself while the tooltip shows.",
+      timeout = 120, wait = refusedTooltip },
+    { text = "Wait without clicking or moving: the step completes when nothing is on record any more, and says whether that was at the 30 s deadline or earlier.",
+      timeout = 90, wait = lapsed, leave = function() lapse = nil end },
     { text = "Reading the row after the lapse.", auto = true, run = function() return memoryState("after the lapse") end },
     { text = "Type /reload to save the results.", reload = true },
 })

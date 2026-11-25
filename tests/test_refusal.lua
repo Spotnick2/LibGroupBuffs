@@ -450,6 +450,147 @@ H.check(row:GetAttribute("unit1") ~= nil, "at a member")
 WoW.combat = false
 
 ------------------------------------------------------------
+-- One press, one gesture, through the real row handlers (Codex, 349045a)
+------------------------------------------------------------
+
+local function window()
+    WoW.reset()
+    H.TeachSpells({ "FORT_SINGLE" })
+    WoW.Know(RANK3, "Power Word: Fortitude")
+    local h = H.PriestUI()
+    h.config.visible.spirit = false
+    h.config.visible.shadow = false
+    h.engine:RefreshSpells()
+    H.Party3()
+    WoW.now = 5000
+    h.ui:Update()
+    return h, H.ActiveRows(h.ui)[1]
+end
+
+local function bounce(ui, who, guid)
+    ui:RefusalEvent("UNIT_SPELLCAST_SENT", "player", NAMES[who], guid, RANK3)
+    ui:RefusalEvent("UNIT_SPELLCAST_FAILED", "player", guid, RANK3)
+    ui:RefusalEvent("UI_ERROR_MESSAGE", 57, BOUNCED)
+end
+
+-- A long hold: the press casts and bounces; the release, seconds later,
+-- re-aims at the next member and must not open an attempt an action-bar
+-- cast could answer.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "PostClick", "LeftButton", true)
+    bounce(ui, "player", "Cast-g1")
+    H.check(e:RefusalOf("player", def), "the press's bounce is learned")
+    WoW.now = WoW.now + 3
+    H.runScript(row, "PreClick", "LeftButton", false)
+    H.runScript(row, "PostClick", "LeftButton", false)
+    bounce(ui, "party1", "Cast-g2")
+    H.check(not e:RefusalOf("party1", def), "a release after a long hold opens nothing for an action-bar cast")
+end
+
+-- A quick second click within the second is a new press, and is learned.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "PostClick", "LeftButton", true)
+    bounce(ui, "player", "Cast-g3")
+    H.runScript(row, "PreClick", "LeftButton", false)
+    H.runScript(row, "PostClick", "LeftButton", false)
+    WoW.now = WoW.now + 0.3
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.eq(row:GetAttribute("unit1"), "party1", "the second press aims at the next member")
+    H.runScript(row, "PostClick", "LeftButton", true)
+    bounce(ui, "party1", "Cast-g4")
+    H.check(e:RefusalOf("party1", def), "and its bounce is learned, 0.3 s after the first")
+end
+
+-- The release is the edge that casts (ActionButtonUseKeyDown off), after a
+-- hold longer than the event deadline: the same aim keeps the attempt.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "PostClick", "LeftButton", true)
+    WoW.now = WoW.now + 1.5
+    H.runScript(row, "PreClick", "LeftButton", false)
+    H.runScript(row, "PostClick", "LeftButton", false)
+    bounce(ui, "player", "Cast-g5")
+    H.check(e:RefusalOf("player", def), "a cast on the release, after a long hold, is learned")
+end
+
+-- A press while another press's cast is still unsent: two clicks, one cast
+-- to come, and no telling whose. Neither is learned from.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "OnEnter")
+    local pr2 = ui.popRows[2]
+    H.runScript(pr2, "PreClick", "LeftButton", true)
+    bounce(ui, "party1", "Cast-g0")
+    H.check(not e:RefusalOf("party1", def), "a second press before the first one's cast spoils both")
+    H.runScript(row, "OnLeave")
+end
+
+-- A release that aims elsewhere than its press spoils the attempt.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    H.runScript(row, "PreClick", "LeftButton", true)
+    WoW.SetAura("player", "Power Word: Fortitude", 3600, 3600)   -- the press's target got it meanwhile
+    H.runScript(row, "PreClick", "LeftButton", false)
+    WoW.ClearAuras("player")
+    bounce(ui, "player", "Cast-g6")
+    H.check(not e:RefusalOf("player", def), "a press and release aimed apart learn nothing")
+end
+
+-- Alt held: the row casts nothing (#518), so nothing is noted, and an
+-- action-bar cast right after is never taken for it.
+do
+    local h, row = window()
+    local ui, e, def = h.ui, h.engine, h.def("fort")
+    rawset(_G, "IsAltKeyDown", function() return true end)
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "PostClick", "LeftButton", true)
+    H.runScript(row, "PreClick", "LeftButton", false)
+    H.runScript(row, "PostClick", "LeftButton", false)
+    rawset(_G, "IsAltKeyDown", nil)
+    bounce(ui, "player", "Cast-g7")
+    H.check(not e:RefusalOf("player", def), "an Alt+click notes nothing for an action-bar bounce to answer")
+    -- With FrameXML's own lookup, the same: only type1 is set, so Alt resolves nothing.
+    rawset(_G, "IsAltKeyDown", function() return true end)
+    rawset(_G, "SecureButton_GetModifiedAttribute", function(btn, name, mouseButton)
+        local suffix = (mouseButton == "RightButton") and "2" or "1"
+        local held = IsAltKeyDown() and "alt-" or ""
+        return btn:GetAttribute(held .. name .. suffix) or btn:GetAttribute("*" .. name .. suffix)
+    end)
+    WoW.now = WoW.now + 2
+    H.runScript(row, "PreClick", "LeftButton", true)
+    H.runScript(row, "PreClick", "LeftButton", false)
+    rawset(_G, "IsAltKeyDown", nil)
+    bounce(ui, "player", "Cast-g8")
+    H.check(not e:RefusalOf("player", def), "nor through SecureButton_GetModifiedAttribute")
+    WoW.now = WoW.now + 2
+    rawset(_G, "IsAltKeyDown", function() return false end)
+    H.runScript(row, "PreClick", "LeftButton", true)
+    bounce(ui, "player", "Cast-g9")
+    H.check(e:RefusalOf("player", def), "a plain click through the same lookup is learned")
+    rawset(_G, "IsAltKeyDown", nil)
+    rawset(_G, "SecureButton_GetModifiedAttribute", nil)
+end
+
+-- A rank that can't be resolved applies no record: it is the rank's.
+setup()
+click("player"); answer("player")
+H.check(refusedOn("player"), "learned")
+WoW.knownSpells[RANK3] = nil
+WoW.knownSpells[H.SPELL.FORT_SINGLE] = nil
+H.check(not refusedOn("player"), "with no rank to compare, the record applies to nothing")
+
+------------------------------------------------------------
 -- An upgrade: an engine and a window r36 built, then this copy loads
 ------------------------------------------------------------
 
