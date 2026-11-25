@@ -19,6 +19,7 @@
 --   /fp gb auras [unit]   every helpful aura whole, and the camp and world buff ids (#95)
 --   /fp gb watch [off]    log the player's casts and UI errors
 --   /fp steps gb camp     what blocks Fortitude: Camp Benefits, a refused cast (#95)
+--   /fp steps gb refusal  refusal memory's evidence: error 57, click to cast, combat (#97)
 -- The embedded libraries are these checkouts (deploy.ps1). A newer copy in
 -- another addon would win LibStub, so `state` and every sample log which
 -- MINOR runs.
@@ -701,7 +702,8 @@ Probe:Steps("look", {
 --
 -- Camp Benefits (1229741) is one aura holding whatever the camp's items give
 -- (First Aid Kit: Stamina, 1230124; Faction Banner: Spirit, 1229718; ...),
--- scaled by level: +34 Stamina at level 36 blocks Fortitude rank 4 (+32).
+-- scaled by level. Run #516: +34 Stamina at level 36 refused Fortitude rank 3
+-- (1245, +20); rank 4 (2791, +32) and higher are not measured.
 -- A sample logs every helpful aura whole (spell id, name, time, points) and
 -- asks for each camp item's and world buff's id on its own, to see whether
 -- the client exposes the parts and their values. While watching, the
@@ -804,22 +806,74 @@ Probe:Command("auras", function(args)
     auraDump("command", args and args:match("^%s*(%S+)"))
 end, "every helpful aura, whole, and the camp and world buff ids: every unit, or the one named")
 
-local castWatching, castsSeen = false, 0
+-- The cast watch (#95, #97). While on, it logs the player's casts and every
+-- UI error: SENT's target resolved to the group's unit tokens (the name
+-- itself is never logged), compared with the unit the probe window's last
+-- click was aimed at; FAILED and SUCCEEDED with their castGUID's shape; the
+-- error's symbolic name from GetGameMessageInfo. Each payload says whether
+-- it is secret, which matters in combat.
+local castWatching, castsSeen, errorsSeen = false, 0, 0
+local lastAim                   -- { edge, unit, spell, combat } from the last click on a probe row
+
+local function secretTag(v)
+    local isSecret = lookup("issecretvalue")
+    if type(isSecret) ~= "function" then return "" end
+    local ok, s = pcall(isSecret, v)
+    if not ok then return "(secret?THREW)" end
+    return s and "(SECRET)" or ""
+end
+
+-- Which group units carry this name, by GetUnitName(unit, false), the full
+-- Name Surname. Returns the matching tokens, or "none"/"THREW". Never logs it.
+local function resolveName(name)
+    local hits = {}
+    for _, u in ipairs(groupUnits()) do
+        local ok, same = pcall(function()
+            local full = GetUnitName(u, false)
+            return full ~= nil and full == name
+        end)
+        if not ok then return "THREW" end
+        if same then hits[#hits + 1] = u end
+    end
+    return #hits > 0 and table.concat(hits, ",") or "none"
+end
+
+local function errorName(errorType)
+    local fn = lookup("GetGameMessageInfo")
+    if type(fn) ~= "function" then return "MISSING" end
+    local ok, name = pcall(fn, errorType)
+    return ok and Show(name, true) or "THREW"
+end
+
 local castWatch = CreateFrame("Frame")
 Probe:RegisterEvents(castWatch, { "UI_ERROR_MESSAGE", "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_FAILED",
     "UNIT_SPELLCAST_FAILED_QUIET", "UNIT_SPELLCAST_SUCCEEDED" })
 castWatch:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
     if not castWatching then return end
+    local combat = InCombatLockdown() and " combat" or ""
     if event == "UI_ERROR_MESSAGE" then
-        say("  " .. event .. " type=" .. Show(a1) .. " message=" .. Show(a2))
+        errorsSeen = errorsSeen + 1
+        say("  " .. event .. combat .. " type=" .. Show(a1) .. secretTag(a1) .. " name=" .. errorName(a1)
+            .. " message=" .. Show(a2) .. secretTag(a2))
         return
     end
     local okU, mine = pcall(function() return a1 == "player" end)
     if not (okU and mine) then return end
     if event == "UNIT_SPELLCAST_SENT" then
-        say("  " .. event .. " target=" .. Shape(a2) .. " spell=" .. Show(a4))
+        local resolved = resolveName(a2)
+        local aimed = lastAim and lastAim.unit
+        local okM, match = pcall(function()
+            if not aimed then return "no aim" end
+            for u in resolved:gmatch("[^,]+") do
+                if UnitIsUnit(u, aimed) then return "yes" end
+            end
+            return "NO"
+        end)
+        say("  " .. event .. combat .. " target=" .. Shape(a2) .. secretTag(a2) .. " resolves to " .. resolved
+            .. " castGUID=" .. Shape(a3) .. secretTag(a3) .. " spell=" .. Show(a4) .. secretTag(a4)
+            .. " aimed=" .. Show(aimed) .. " match=" .. (okM and match or "THREW"))
     else
-        say("  " .. event .. " spell=" .. Show(a3))
+        say("  " .. event .. combat .. " castGUID=" .. Shape(a2) .. secretTag(a2) .. " spell=" .. Show(a3) .. secretTag(a3))
         castsSeen = castsSeen + 1
     end
 end)
@@ -829,27 +883,119 @@ Probe:Command("watch", function(args)
     say("cast watch " .. (castWatching and "on" or "off"))
 end, "log the player's casts and UI errors (on|off)")
 
-local function waitCast()
+-- A step that completes on a fresh result. The baseline is taken on the
+-- step's first poll and dropped when the step is left, however it is left,
+-- so a second run of a procedure (no /reload between) waits for new casts
+-- rather than counting the first run's.
+local function waitStep(step, count, why, before)
     local base
-    return function()
-        if base == nil then base = castsSeen end
-        return castsSeen > base, "waiting for a cast to succeed or fail"
+    step.wait = function()
+        if before then before() end
+        if base == nil then base = count() end
+        return count() > base, why
     end
+    step.leave = function() base = nil end
+    return step
 end
+local function casts() return castsSeen end
+local function answers() return castsSeen + errorsSeen end
+local CAST_WHY = "waiting for a cast to succeed or fail"
+local ANSWER_WHY = "waiting for a cast or an error"
 
 Probe:Steps("camp", {
     rev = 1,
     title = "What blocks Fortitude: Camp Benefits and world buffs (#95)",
     { text = "Out of combat, in your party, with Camp Benefits on you. Press Sample.", button = "Sample",
       run = function() castWatching = true; return auraDump("camp") end },
-    { text = "Cast Power Word: Fortitude on YOURSELF (target yourself and cast it). The step completes when the client answers.",
-      timeout = 300, wait = waitCast() },
-    { text = "Now cast it on your party member who has Camp Benefits. The step completes when the client answers.",
-      timeout = 300, wait = waitCast() },
-    { text = "Cast Prayer of Fortitude if you have it, else press Skip. The step completes when the client answers.",
-      timeout = 300, wait = waitCast() },
+    waitStep({ text = "Cast Power Word: Fortitude on YOURSELF (target yourself and cast it). The step completes when the client answers.",
+      timeout = 300 }, casts, CAST_WHY),
+    waitStep({ text = "Now cast it on your party member who has Camp Benefits. The step completes when the client answers.",
+      timeout = 300 }, casts, CAST_WHY),
+    waitStep({ text = "Cast Prayer of Fortitude if you have it, else press Skip. The step completes when the client answers.",
+      timeout = 300 }, casts, CAST_WHY),
     { text = "Sampling again.", auto = true, run = function() return auraDump("after the casts") end },
     { text = "Type /reload to save the results.", reload = true },
+})
+
+-- ─── refusal: the evidence refusal memory needs (#97) ──────────────────────
+--
+-- Four questions before the library may learn from a refused cast:
+--   1. what error 57 is (its symbolic name), next to an ordinary failure;
+--   2. whether a click on a library row and its SENT name the same member,
+--      and what a self-cast modifier does to that;
+--   3. how many PreClick/PostClick edges one click runs;
+--   4. whether the payloads are secret in combat.
+-- The rows clicked are the probe window's: the same library code as Buffy's.
+-- Prayer of Fortitude (level 48) is not covered.
+
+local function aimNote(r, edge, button, down)
+    local okU, unit = pcall(r.GetAttribute, r, "unit1")
+    local okS, spell = pcall(r.GetAttribute, r, "spell1")
+    lastAim = { edge = edge, unit = okU and unit or nil, combat = InCombatLockdown() }
+    say("  " .. edge .. " " .. tostring(r._probeName) .. " button=" .. Show(button) .. " down=" .. Show(down)
+        .. " unit1=" .. (okU and Show(unit) or "THREW") .. " spell1=" .. (okS and Show(spell) or "THREW")
+        .. " combat=" .. Show(lastAim.combat))
+end
+
+-- Hooks run after the library's own handlers, so PreClick logs the aim the
+-- library just chose, and PostClick the re-aim it does after the cast.
+local function hookRows()
+    if not ui then return 0 end
+    local n = 0
+    local function hook(r, label)
+        if r and not r._probeHooked then
+            r._probeHooked, r._probeName = true, label
+            r:HookScript("PreClick", function(self, button, down)
+                if castWatching then aimNote(self, "PreClick", button, down) end
+            end)
+            r:HookScript("PostClick", function(self, button, down)
+                if castWatching then
+                    local keep = lastAim
+                    aimNote(self, "PostClick", button, down)
+                    lastAim = keep      -- the cast went where PreClick aimed
+                end
+            end)
+            n = n + 1
+        end
+    end
+    for i, r in ipairs(ui.rows or {}) do hook(r, "row" .. i) end
+    for i, r in ipairs(ui.popRows or {}) do hook(r, "pop" .. i) end
+    return n
+end
+
+local function errorConstants()
+    local out = {}
+    for _, k in ipairs({ "SPELL_FAILED_AURA_BOUNCED", "ERR_SPELL_FAILED_AURA_BOUNCED", "SPELL_FAILED_OUT_OF_RANGE",
+        "ERR_OUT_OF_RANGE", "LE_GAME_ERR_SPELL_FAILED_AURA_BOUNCED", "LE_GAME_ERR_OUT_OF_RANGE" }) do
+        out[#out + 1] = k .. "=" .. Show(lookup(k))
+    end
+    return table.concat(out, " ")
+end
+
+Probe:Steps("refusal", {
+    rev = 1,
+    title = "Refusal memory: what a refused cast says, and to whom (#97)",
+    { text = "Out of combat, in your party at the camp, Camp Benefits on both of you. Press Start: it opens the probe window and starts the watch.",
+      button = "Start", run = function()
+          castWatching = true
+          local shown = openNow()
+          local hooked = hookRows()
+          say("  GetGameMessageInfo(57)=" .. errorName(57) .. " " .. errorConstants())
+          return shown, hooked
+      end },
+    waitStep({ text = "LEFT-click the Power Word: Fortitude row in the probe window (titled 'LibGroupBuffs probe', not Buffy's). The step completes when the client answers.",
+      timeout = 300 }, answers, ANSWER_WHY, hookRows),
+    waitStep({ text = "Hold ALT (self-cast) and left-click the same row again.",
+      timeout = 300 }, answers, ANSWER_WHY, hookRows),
+    waitStep({ text = "Hover the Fortitude row so its popover opens, then left-click your PARTY MEMBER's line in the popover.",
+      timeout = 300 }, answers, ANSWER_WHY, hookRows),
+    waitStep({ text = "Ordinary failure: walk at least 45 yards from your party member, target them, and cast Power Word: Fortitude from your action bar or spellbook.",
+      timeout = 600 }, answers, ANSWER_WHY),
+    { text = "Walk back. Pull a mob until you are in combat. The step completes by itself once lockdown is on.",
+      timeout = 600, wait = function() return InCombatLockdown(), "not in combat lockdown yet" end },
+    waitStep({ text = "While still in combat: left-click the probe window's Fortitude row (if it fires nothing, cast Fortitude on your party member from your action bar).",
+      timeout = 300 }, answers, ANSWER_WHY, hookRows),
+    { text = "Finish the fight, then type /reload to save the results.", reload = true },
 })
 
 -- ─── boot ───────────────────────────────────────────────────────────────────
@@ -866,7 +1012,7 @@ boot:SetScript("OnEvent", function(_, _, name)
     logBound = true
     for _, line in ipairs(buffered) do say(line) end
     buffered = {}
-    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look|camp")
+    say("loaded (" .. LibGroupBuffsProbeDB.loads .. " loads). /fp gb for the commands; /fp steps gb bg|sweep|spells|look|camp|refusal")
 end)
 
 -- The test seam (tests/test_probe.lua), never on _G.
@@ -879,6 +1025,7 @@ if type(NS) == "table" then
         remembered = function() return sweepSaved end,
         window = function() return ui, engine end,
         spellWatch = spellWatch, sweepWatch = sweepWatch,
-        auraDump = auraDump, castWatch = castWatch,
+        auraDump = auraDump, castWatch = castWatch, hookRows = hookRows, resolveName = resolveName,
+        watching = function(on) castWatching = on end,
     }
 end

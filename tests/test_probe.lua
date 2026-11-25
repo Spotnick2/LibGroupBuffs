@@ -45,7 +45,7 @@ local procs = {}
 for key, proc in pairs(FP.procedures or {}) do
     if tostring(key):find("LibGroupBuffsProbe", 1, true) then procs[tostring(key):match("/(.*)$") or key] = proc end
 end
-for _, name in ipairs({ "bg", "sweep", "spells", "look" }) do
+for _, name in ipairs({ "bg", "sweep", "spells", "look", "camp", "refusal" }) do
     local proc = procs[name]
     H.check(proc ~= nil, "procedure '" .. name .. "' is registered")
     if proc then
@@ -369,6 +369,51 @@ H.check(logHas("SPELLS PLAYER_ENTERING_WORLD+5s "), "and again five seconds afte
 H.check(relaunch.wait(), "after which the relaunch check completes")
 H.check(select(1, relaunch.check()), "and passes when every id resolved at both phases")
 drive("spells")
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+------------------------------------------------------------
+-- camp and refusal (#95, #97): the cast watch and fresh waits
+------------------------------------------------------------
+
+WoW.reset()
+H.TeachSpells({ "FORT_SINGLE", "FORT_GROUP" })
+H.Party3()
+clearLog()
+drive("camp")
+drive("refusal")
+H.check(logHas("AURAS camp begin"), "the camp procedure samples the auras")
+H.check(logHas("GetGameMessageInfo(57)="), "the refusal procedure looks up error 57's name")
+H.eq(#WoW.messages, 0, "nothing to chat")
+
+-- A second run of a procedure, with no /reload between, waits for new casts
+-- (Codex review of fd7386a): the baseline goes when the step is left.
+T.watching(true)
+local castStep = stepWhere("camp", "on YOURSELF")
+H.check(castStep and castStep.wait and castStep.leave, "a cast step is a wait that can be left")
+castStep.leave("done")      -- drive() above polled it; the panel leaves a step before entering it again
+local function succeed() H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 1245) end
+H.check(not castStep.wait(), "it does not complete before a cast")
+succeed()
+H.check(castStep.wait(), "a cast completes it")
+castStep.leave("done")
+H.check(not castStep.wait(), "run again, the first run's cast does not complete it")
+succeed()
+H.check(castStep.wait(), "a new cast does")
+castStep.leave("stopped")
+local errStep = stepWhere("refusal", "Ordinary failure")
+H.check(errStep and errStep.wait and errStep.leave, "the refusal steps wait the same way")
+errStep.leave("done")
+H.check(not errStep.wait(), "not before an answer")
+H.runScript(T.castWatch, "OnEvent", "UI_ERROR_MESSAGE", 57, "A more powerful spell is already active")
+H.check(errStep.wait(), "an error completes it as well as a cast")
+errStep.leave("done")
+H.check(not errStep.wait(), "and a second run waits for a new one")
+H.check(logHas("UI_ERROR_MESSAGE type=57"), "the error is logged with its type")
+H.check(logHas("UNIT_SPELLCAST_SUCCEEDED castGUID="), "a cast by its castGUID's shape, not its value")
+H.runScript(T.castWatch, "OnEvent", "UNIT_SPELLCAST_SENT", "player", "Sten Thornbeard", "Cast-2", 1245)
+H.check(logHas("resolves to party1"), "SENT's target resolves to the member's unit token")
+H.check(not logHas("Sten Thornbeard"), "and the name itself is never logged")
+T.watching(false)
 H.eq(#WoW.messages, 0, "nothing to chat")
 
 -- Every widget method the probe, the window it drives and ForeverProbe's
