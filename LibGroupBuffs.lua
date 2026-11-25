@@ -1855,11 +1855,14 @@ end
 -- between clicks, which is what a click in combat uses (combat clears the
 -- records, and a row aimed past a member or disarmed by them would stay so).
 --
--- A record clears early when the buff is seen on the member; when the member
--- gets a readable aura removal or update, or a full update (the blocker may
--- be what changed); when they leave the roster (PruneCache); on combat entry
--- and exit and a world transition. A record applies only to the rank it was
--- learned from. Nothing is saved: a /reload forgets it all.
+-- A record clears early when the member gets a readable aura removal or
+-- update, or a full update (the blocker may be what changed); when they leave
+-- the roster (PruneCache); on combat entry and exit and a world transition.
+-- Not when the buff is seen on them: a refusal is as often of a top-up (run
+-- #520: a camp member with 29 minutes of Fortitude refused every refresh),
+-- and clearing it there sent every click straight back to them. A record
+-- applies only to the rank it was learned from. Nothing is saved: a /reload
+-- forgets it all.
 --
 -- The host opts in by forwarding UI:RefusalEvents() to UI:RefusalEvent. A
 -- host that doesn't learns nothing, and its engine behaves as r38's did.
@@ -1912,10 +1915,10 @@ local function DropRecord(R, key, defId)
 end
 
 -- The refusal on record for this member and def, or nil: { spellID, reason,
--- retryAt }, retryAt on GetTime()'s clock. `state`, when given, is the
--- member's state for the def: seen with the buff, the record goes. Applied
--- only to the rank it was learned from, so a record of another rank, or with
--- no rank resolvable now, is gone too.
+-- retryAt }, retryAt on GetTime()'s clock. Applied only to the rank it was
+-- learned from, so a record of another rank, or with no rank resolvable now,
+-- is gone. `state` is accepted for callers and not used: the buff on them
+-- doesn't end a refusal (a top-up is refused too, run #520).
 function Methods:RefusalOf(unit, def, state)
     local R = self.refusals
     if not R or not unit or not def then return nil end
@@ -1924,7 +1927,7 @@ function Methods:RefusalOf(unit, def, state)
     local rec = recs and recs[def.id]
     if not rec then return nil end
     local rank = CastRank(def.sngl)
-    if GetTime() >= rec.retryAt or state == ST_HAS or rank ~= rec.spellID then
+    if GetTime() >= rec.retryAt or rank ~= rec.spellID then
         DropRecord(R, key, def.id)
         return nil
     end

@@ -141,13 +141,20 @@ WoW.now = 1020
 H.check(not answer("player"), "a second bounce changes nothing")
 H.eq(E:RefusalOf("player", fort).retryAt, 1030, "the first deadline stands")
 
+-- A top-up is refused too: a member who has the buff and whose refresh
+-- bounced keeps the record (run #520, where clearing it on the buff sent
+-- every click straight back to them).
 setup()
-answer("player")
-WoW.SetAura("player", "Power Word: Fortitude", 3600, 3600)
+WoW.SetAura("party1", "Power Word: Fortitude", 3600, 1760)
+WoW.SetAura("party2", "Power Word: Fortitude", 3600, 3000)
+WoW.SetAura("player", "Power Word: Fortitude", 3600, 3500)
+H.eq(E:PickTarget(members(), fort, false, nil, true), "party1", "everyone buffed: the shortest is topped up")
+answer("party1")
 local st2 = E:GroupStat(members(), fort)
-H.eq(st2.byUnit.player.refused, nil, "seen with the buff: the record goes")
-WoW.ClearAuras("player")
-H.check(not refusedOn("player"), "and stays gone")
+H.check(st2.byUnit.party1.refused, "seen with the buff, the refused top-up stays on record")
+H.eq(st2.byUnit.party1.state, S.HAS, "while their state says they have it")
+H.eq(E:PickTarget(members(), fort, false, st2, true), "party2", "the next top-up goes to the next shortest")
+H.eq(E:PickTarget(members(), fort, false, nil, true), "party2", "with or without GroupStat's states")
 
 setup()
 answer("player")

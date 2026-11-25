@@ -387,8 +387,9 @@ and the like name those sections.
     click are untouched. The popover row's tooltip says it was refused and for how long.
   - **30 s, never extended** by a second bounce of the same rank, and applied only to the rank it
     was learned from (a new rank is a fresh start, and a rank that can't be resolved applies
-    nothing; `RefreshSpells` itself clears nothing). Cleared
-    early when `GroupStat` or the pick sees the buff on the member; on a non-empty
+    nothing; `RefreshSpells` itself clears nothing). **Not** cleared when the buff is seen on the
+    member: a top-up is refused too (run #520, a camp member with 29 min of Fortitude refused every
+    refresh, and clearing on the buff sent every click back to them). Cleared early on a non-empty
     `removedAuraInstanceIDs` or `updatedAuraInstanceIDs`, or a full update, for that member
     (`AuraEventIsRelevant`); when they leave the roster (`PruneCache`, which the hosts call on
     roster updates); on combat entry and exit and a world transition (forwarded events). Not saved:
