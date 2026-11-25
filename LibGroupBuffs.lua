@@ -1964,26 +1964,49 @@ local function RosterUnits()
     return out
 end
 
+-- Whether `unit` is called `name`: true, false, or nil when it can't be
+-- compared (a secret).
+local function Named(unit, name)
+    if not UnitExists(unit) then return false end
+    local ok, same = pcall(function()
+        local n = GetUnitName(unit, false)
+        return n ~= nil and n == name
+    end)
+    if not ok then return nil end
+    return same
+end
+
+local function IsPetToken(unit)
+    return unit == "pet" or unit:find("^partypet") ~= nil or unit:find("^raidpet") ~= nil
+end
+
 -- The GUID of the one roster member called `name` (GetUnitName(unit, false),
--- the form SENT gives), or nil: nobody, two members, a name that can't be
--- compared because it is secret, or a match whose GUID can't be read. In a
--- raid "player" and its raidN are one member, one GUID.
+-- the form SENT gives), or nil when the name doesn't pin the cast to one:
+--   - nobody, two members, a secret name, or a match with no readable GUID;
+--   - a pet: a pet's name isn't unique, and one outside the group could
+--     share it (a player's full name is unique region-wide). Pets still
+--     count for ambiguity;
+--   - the player's target, mouseover or focus being someone else with that
+--     name: the cast may well have gone to them (Codex, 6045a9a).
+-- In a raid "player" and its raidN are one member, one GUID.
 local function ResolveTarget(name)
-    local found
+    local found, foundPet
     for _, u in ipairs(RosterUnits()) do
-        if UnitExists(u) then
-            local ok, same = pcall(function()
-                local n = GetUnitName(u, false)
-                return n ~= nil and n == name
-            end)
-            if not ok then return nil end
-            if same then
-                local key = GuidOf(u)
-                if not key then return nil end
-                if found and found ~= key then return nil end
-                found = key
-            end
+        local same = Named(u, name)
+        if same == nil then return nil end
+        if same then
+            local key = GuidOf(u)
+            if not key then return nil end
+            if found and found ~= key then return nil end
+            found = key
+            foundPet = foundPet or IsPetToken(u)
         end
+    end
+    if not found or foundPet then return nil end
+    for _, u in ipairs({ "target", "mouseover", "focus" }) do
+        local same = Named(u, name)
+        if same == nil then return nil end
+        if same and GuidOf(u) ~= found then return nil end
     end
     return found
 end
@@ -2002,6 +2025,9 @@ local function SingleDefs(self, spellID)
     return out
 end
 
+-- Only a bounce of the rank the window casts is kept: a lower rank from the
+-- spellbook says nothing about it, and storing it would overwrite a live
+-- record of the rank that matters (Codex, 6045a9a).
 local function LearnRefusal(R, c)
     local changed = false
     local recs = R.byKey[c.key] or {}
@@ -2009,11 +2035,13 @@ local function LearnRefusal(R, c)
     for _, d in ipairs(c.defs) do
         local old = recs[d.id]
         -- A refresh never extends a record: only its own deadline ends it.
-        if not (old and old.spellID == c.spellID and GetTime() < old.retryAt) then
+        local live = old and old.spellID == c.spellID and GetTime() < old.retryAt
+        if CastRank(d.sngl) == c.spellID and not live then
             recs[d.id] = { spellID = c.spellID, reason = REFUSAL_REASON, retryAt = GetTime() + REFUSAL_HOLD }
             changed = true
         end
     end
+    if next(recs) == nil then R.byKey[c.key] = nil end
     return changed
 end
 

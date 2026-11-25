@@ -187,12 +187,18 @@ H.check(not refusedOn("player"), "a new rank ends it: the record is of the rank 
 H.check(answer("player", nil, { spell = 2791 }), "the new rank's own bounce is learned")
 H.eq(E:RefusalOf("player", fort).spellID, 2791, "as that rank")
 
--- A lower rank cast from the spellbook bounces: recorded as that rank, it
--- doesn't hold back the rank the window casts.
+-- A lower rank cast from the spellbook bounces: it says nothing about the
+-- rank the window casts, so it is not kept, and it never overwrites a live
+-- record of that rank (Codex, 6045a9a).
 setup()
 WoW.Know(1244, "Power Word: Fortitude")
-H.check(answer("player", nil, { spell = 1244 }), "a lower rank's bounce is learned")
-H.check(not refusedOn("player"), "but applies only to that rank, not the one the window casts")
+H.check(not answer("player", nil, { spell = 1244 }), "a lower rank's bounce is not learned")
+H.check(not refusedOn("player"), "nothing held back")
+answer("player")
+WoW.now = 1010
+H.check(not answer("player", nil, { spell = 1244 }), "a lower rank's bounce on a refused member changes nothing")
+H.eq(E:RefusalOf("player", fort) and E:RefusalOf("player", fort).retryAt, 1030,
+    "the window rank's record keeps its deadline")
 
 -- A rank that can't be resolved applies no record.
 setup()
@@ -338,6 +344,24 @@ WoW.SetUnit("raidpet2", { name = "Sten Thornbeard", guid = "Pet-2", class = "WAR
 answer("raid2", nil, { target = "Sten Thornbeard" })
 H.check(not refusedOn("raid2"), "a pet sharing a member's name makes it ambiguous")
 WoW.inRaid = false
+
+-- A name that doesn't pin the cast to one roster member (Codex, 6045a9a):
+-- a pet, whose name isn't unique, or a target, mouseover or focus outside
+-- the group with the member's name.
+notLearned("a roster pet named in SENT", function()
+    WoW.SetUnit("partypet1", { name = "Wolf", guid = "Pet-1", class = "HUNTER" })
+    answer("partypet1", nil, { target = "Wolf" })
+end, "partypet1")
+for _, token in ipairs({ "target", "mouseover", "focus" }) do
+    notLearned("the " .. token .. " outside the group sharing the member's name", function()
+        WoW.SetUnit(token, { name = NAMES.party1, guid = "Outsider-1", class = "WARRIOR" })
+        answer("party1")
+    end, "party1")
+end
+setup()
+WoW.SetUnit("target", { name = NAMES.party1, guid = "P1", class = "WARRIOR" })
+answer("party1")
+H.check(refusedOn("party1"), "the member themselves as the target is fine")
 
 -- A cast that lands clears an earlier refusal of the same member.
 setup()

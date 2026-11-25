@@ -969,9 +969,19 @@ local function aimNote(r, edge, button, down)
     local okU, unit = pcall(r.GetAttribute, r, "unit" .. slot)
     local okS, spell = pcall(r.GetAttribute, r, "spell" .. slot)
     lastAim = { edge = edge, unit = okU and unit or nil, combat = InCombatLockdown(), at = GetTime() }
-    if edge == "PreClick" then
+    -- The press on the Fortitude row, kept through its release: the steps
+    -- poll once a second, and a release must not replace the press.
+    if edge == "PreClick" and down ~= false and r._def and r._def.id == "fort" then
+        local okN, refusedNow = pcall(function()
+            local n = 0
+            for _, u in ipairs(groupUnits()) do
+                if engine and engine.RefusalOf and engine:RefusalOf(u, r._def) then n = n + 1 end
+            end
+            return n
+        end)
         lastPress = { row = r._probeName, slot = slot, unit = okU and unit or nil,
-                      spell = okS and spell or nil, down = down, at = GetTime() }
+                      spell = okS and spell or nil, down = down, at = GetTime(),
+                      refused = okN and refusedNow or 0 }
     end
     say("  " .. edge .. " " .. tostring(r._probeName) .. " button=" .. Show(button) .. " down=" .. Show(down)
         .. " unit" .. slot .. "=" .. (okU and Show(unit) or "THREW")
@@ -1230,12 +1240,16 @@ local function blockedPress()
     blockedFrom = blockedFrom or GetTime()
     hookRows()
     local n = liveRecords()
+    local p = rowPress(blockedFrom)
+    if p and p.spell == nil and p.refused >= 2 then
+        return true, "pressed " .. tostring(p.row) .. " slot " .. p.slot .. " with " .. p.refused
+            .. " refused at the press: it armed nothing"
+    end
+    if p and p.spell == nil then
+        return false, "that press armed nothing with only " .. p.refused .. " refused: it proves nothing"
+    end
     if n < 2 then
         return false, "only " .. n .. " refused: this needs both of you refused (press Skip if the second cast landed)"
-    end
-    local p = rowPress(blockedFrom)
-    if p and p.spell == nil then
-        return true, "pressed " .. tostring(p.row) .. " slot " .. p.slot .. " with " .. n .. " refused: it armed nothing"
     end
     if p then return false, "that press armed " .. Show(p.spell) .. ": expected nothing" end
     return false, "waiting for the press on the probe's Fortitude row"
@@ -1245,18 +1259,35 @@ end
 -- panel's Shot button would move the pointer off the line and close it. The
 -- step completes when the client confirms the file.
 local shot                      -- nil, "pending", "ok:<file>" or "failed:<why>"
-local function refusedTooltip()
-    if shot and shot:find("^ok:") then return true, "shot: " .. shot:sub(4) end
-    if shot == "pending" then return false, "taking the screenshot: keep the pointer on the line" end
-    local retry = shot and ("the last try failed (" .. shot:sub(8) .. "); ") or ""
+local shotTry = 0               -- which capture a callback belongs to
+
+-- The popover line whose tooltip is showing, if it is a refused member's.
+local function refusedOwner()
     local ok, owner = pcall(function()
         if not GameTooltip:IsShown() then return nil end
         return GameTooltip:GetOwner()
     end)
-    if ok and type(owner) == "table" and owner._refused and owner._ui == ui then
+    if ok and type(owner) == "table" and owner._refused and owner._ui == ui then return owner end
+    return nil
+end
+
+local function refusedTooltip()
+    if shot and shot:find("^ok:") then return true, "shot: " .. shot:sub(4) end
+    if shot == "pending" then return false, "taking the screenshot: keep the pointer on the line" end
+    local retry = shot and ("the last try failed (" .. shot:sub(8) .. "); ") or ""
+    local owner = refusedOwner()
+    if owner then
         shot = "pending"
+        shotTry = shotTry + 1
+        local try = shotTry
         Probe:Screenshot("refused member tooltip", function(file, why)
-            shot = file and ("ok:" .. tostring(file)) or ("failed:" .. tostring(why))
+            if try ~= shotTry then return end           -- a capture the step has left
+            -- The capture counts only if the same line's tooltip still showed.
+            if file and refusedOwner() == owner then
+                shot = "ok:" .. tostring(file)
+            else
+                shot = "failed:" .. (file and "the tooltip had gone by the capture" or tostring(why))
+            end
         end)
         return false, "taking the screenshot: keep the pointer on the line"
     end
@@ -1305,7 +1336,7 @@ Probe:Steps("memory", {
       timeout = 300, wait = blockedPress, leave = function() blockedFrom = nil end },
     { text = "Reading the row.", auto = true, run = function() return memoryState("after the third click") end },
     { text = "Hover the Fortitude row so its popover opens, then hover YOUR line in it and keep the pointer there: the probe takes the screenshot itself while the tooltip shows.",
-      timeout = 120, wait = refusedTooltip, leave = function() shot = nil end },
+      timeout = 120, wait = refusedTooltip, leave = function() shot, shotTry = nil, shotTry + 1 end },
     { text = "Wait without clicking or moving: the step completes when nothing is on record any more, and says whether that was at the 30 s deadline or earlier. (If nothing is on record by now, make the same click again first.)",
       timeout = 90, wait = lapsed, leave = function() lapse = nil end },
     { text = "Reading the row after the lapse.", auto = true, run = function() return memoryState("after the lapse") end },

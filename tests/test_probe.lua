@@ -565,6 +565,8 @@ H.check(not blocked.wait(), "everyone refused, but no press yet")
 WoW.now = WoW.now + 1
 H.runScript(prow, "PreClick", "RightButton", true)
 H.eq(prow:GetAttribute("spell2"), nil, "the press armed nothing: everyone is refused")
+-- Its release comes before the next poll and must not replace the press.
+H.runScript(prow, "PreClick", "RightButton", false)
 local ok3, why3 = blocked.wait()
 H.check(ok3, "and that completes the step: " .. tostring(why3))
 blocked.leave("done")

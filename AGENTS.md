@@ -367,10 +367,13 @@ and the like name those sections.
     never the token fallback of `API.UnitKey`), waits by castGUID for its `FAILED`, which must
     carry the same rank, within `CAST_WINDOW` (1 s). The bounce error, which names no cast,
     counts only while exactly one failed cast waits for it. `SUCCEEDED` on a cast drops that
-    member's record. Several casts can be in flight at once. Not learned: a secret, ambiguous or
-    outside-the-group target, a match with no readable GUID, another unit's cast, the group form,
-    anything in combat (SENT's target can be secret, #646), an out-of-range cast (FAILED with no
-    SENT). Three Codex rounds tried to tie a SENT to the window's click (both mouse edges, long
+    member's record. Several casts can be in flight at once. Only the rank the window casts now
+    (`CastRank`) is stored: a lower rank from the spellbook teaches nothing and never overwrites a
+    live record. Not learned: a secret, ambiguous or outside-the-group target, a match with no
+    readable GUID, **a pet** (its name isn't unique, so an outside namesake can't be ruled out;
+    pets still make a name ambiguous), a name the player's `target`, `mouseover` or `focus` shares
+    with another GUID, another unit's cast, the group form, anything in combat (SENT's target can
+    be secret, #646), an out-of-range cast (FAILED with no SENT). Three Codex rounds tried to tie a SENT to the window's click (both mouse edges, long
     holds, modifiers, cast-on-release) and each found a new hole; resolving the recipient from
     SENT itself made the click irrelevant, since the record is true whichever way it was cast.
   - **The record**: `Engine:RefusalOf(unit, def)` → `{ spellID, reason = "stronger-effect",
