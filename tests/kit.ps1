@@ -9,6 +9,8 @@
     fetched (git, depth 1) and checked to BE the pinned commit.
     -KitDev uses the sibling ..\WowTestKit working copy instead (or
     $env:WOWTESTKIT_DEV), and says so: for testing a kit change.
+    $env:WOWTESTKIT_PIN, when set, names the pin file read instead of
+    tests/kit.pin (tests/kit.lua reads it too), and says so: -Compare sets it.
 
     Run directly, it compares two pins (a pin bump, WowTestKit's
     docs/ADOPTING.md section 3):
@@ -17,8 +19,9 @@
         pwsh tests/kit.ps1 -Compare <old kit sha>        # this pin, another sha=
         pwsh tests/kit.ps1 -Compare main -Snapshot <script.lua> [-Lua <lua.exe>]
 
-    It runs tests/run.ps1 with the old pin, then with tests/kit.pin as it is,
-    and prints the test files whose result line differs, then whether the load
+    It runs tests/run.ps1 with the old pin, then with tests/kit.pin as it was
+    when it started, each fixed in a file of its own that $env:WOWTESTKIT_PIN
+    names, and prints the test files whose result line differs, then whether the load
     snapshot (the -Snapshot script's output) is identical. -Compare <commit of
     this repo> takes that commit's whole tests/kit.pin (sha, build, api); a
     40-hex sha that is no commit here replaces only sha=. The old pin is
@@ -27,7 +30,9 @@
     saved in the logs, and the comparison stops (exit 2). tests/kit.pin.compare-lock, created atomically before the
     pin is read and removed after both runs, makes a second -Compare refuse
     to start: it says whether the first is still running, or stopped, and
-    then what to do. tests/kit.pin.compare-backup holds the pin while it is
+    then what to do (the lock records the old pin once it is in, so a
+    pin that is neither that nor the backup is kept, with the backup, for
+    you to compare). tests/kit.pin.compare-backup holds the pin while it is
     changed, and exists only once complete. Each side's full output
     is kept in a WowTestKit-compare-<time>-<pid> folder in %TEMP%. Exit 0: nothing
     differs and every run passed; 1: something differs, or a run failed (its
@@ -49,14 +54,20 @@ function ConvertFrom-WowTestKitPin {
 function Get-WowTestKit {
     param([Parameter(Mandatory)][string]$RepoRoot, [switch]$KitDev)
 
-    $pin = ConvertFrom-WowTestKitPin (Get-Content (Join-Path $RepoRoot "tests\kit.pin"))
-    if (-not $pin.sha -or -not $pin.build) { throw "tests\kit.pin needs sha= and build=" }
-    if ($pin.sha -cnotmatch '^[0-9a-f]{40}$') { throw "tests\kit.pin needs a 40-hex sha=" }
+    # $env:WOWTESTKIT_PIN, when set, is the pin file read instead: -Compare
+    # fixes each side's pin in a file of its own, so a change to tests/kit.pin
+    # during a run can't make a side run another kit (#123).
+    $pinFile, $pinName = (Join-Path $RepoRoot "tests/kit.pin"), "tests\kit.pin"
+    if ($env:WOWTESTKIT_PIN) { $pinFile = $pinName = $env:WOWTESTKIT_PIN }
+    $pin = ConvertFrom-WowTestKitPin (Get-Content -LiteralPath $pinFile)
+    if (-not $pin.sha -or -not $pin.build) { throw "$pinName needs sha= and build=" }
+    if ($pin.sha -cnotmatch '^[0-9a-f]{40}$') { throw "$pinName needs a 40-hex sha=" }
+    $from = if ($env:WOWTESTKIT_PIN) { " (the pin in $pinName, not tests\kit.pin)" }
 
     if ($KitDev) {
         $dir = if ($env:WOWTESTKIT_DEV) { $env:WOWTESTKIT_DEV } else { Join-Path (Split-Path -Parent $RepoRoot) "WowTestKit" }
         if (-not (Test-Path (Join-Path $dir "kit.lua"))) { throw "-KitDev: no WowTestKit working copy at $dir" }
-        Write-Host "WowTestKit: DEV working copy $dir, NOT the pin $($pin.sha.Substring(0, 7))" -ForegroundColor Yellow
+        Write-Host "WowTestKit: DEV working copy $dir, NOT the pin $($pin.sha.Substring(0, 7))$from" -ForegroundColor Yellow
     } else {
         $cacheRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "WowTestKit"))
         $dir = [IO.Path]::GetFullPath((Join-Path $cacheRoot $pin.sha))
@@ -80,7 +91,7 @@ function Get-WowTestKit {
             $head = (git -C $dir rev-parse HEAD)
             if ($head -ne $pin.sha) { throw "WowTestKit at $dir is $head, not the pin $($pin.sha)" }
         }
-        Write-Host "WowTestKit: $($pin.sha.Substring(0, 7)), build $($pin.build)" -ForegroundColor DarkGray
+        Write-Host "WowTestKit: $($pin.sha.Substring(0, 7)), build $($pin.build)$from" -ForegroundColor DarkGray
     }
     $env:WOWTESTKIT = $dir
     return $dir
@@ -216,10 +227,23 @@ function Compare-WowTestKit {
     # The backup is written whole, then renamed into place, before the pin is
     # changed: when it exists, it is the complete pin as it was.
     $bytesOf = { param($p) if (Test-Path -LiteralPath $p) { [Convert]::ToBase64String([IO.File]::ReadAllBytes($p)) } }
+    # What to do with what an earlier -Compare left. $holder: its lock's text,
+    # whose "old=<base64> end" line records the old pin once it is in
+    # (#123). Only that pin is the earlier run's to undo: a pin that is
+    # neither it nor the backup is someone's edit (made during the run, or
+    # before the old pin went in), so both are kept for the user to compare.
     $backupAdvice = {
+        param($holder)
         if (-not (Test-Path -LiteralPath $backup)) { return "it stopped before it changed tests\kit.pin" }
-        if ((& $bytesOf $backup) -ceq (& $bytesOf $pinPath)) { return "tests\kit.pin is as it was: delete $backup" }
-        "it stopped with its old pin in tests\kit.pin, and $backup holds the pin as it was: move it over tests\kit.pin"
+        $now = & $bytesOf $pinPath
+        if ((& $bytesOf $backup) -ceq $now) { return "tests\kit.pin is as it was: delete $backup" }
+        # The record counts only as the lock's last line: the "back" line after
+        # it (or any part of one) ends the old pin's phase, after which the
+        # old pin's bytes in tests\kit.pin are someone's save.
+        if ($now -and "$holder" -cmatch '(?m)^old=([A-Za-z0-9+/=]+) end\r?\n?\z' -and $Matches[1] -ceq $now) {
+            return "it stopped with its old pin in tests\kit.pin, and $backup holds the pin as it was: move it over tests\kit.pin"
+        }
+        "tests\kit.pin is neither the pin as it was nor the old pin it wrote, so it was edited meanwhile: keep both. Compare tests\kit.pin with $backup, keep in tests\kit.pin the pin you want, then delete $backup"
     }
     $mine = [Text.Encoding]::ASCII.GetBytes("pid=$PID start=$((Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks)`n")
     if (-not (New-WowTestKitLock $lockPath $mine)) {
@@ -240,9 +264,9 @@ function Compare-WowTestKit {
         if ($running) {
             Write-Host "Another -Compare is running in this repo$(if ($p) { " (process $($p.Id))" }): wait for it to finish, then run again." -ForegroundColor Red
         } elseif (-not $named) {
-            Write-Host "$lockPath names no process to check. Make sure no -Compare is running in this repo; if none is, $(& $backupAdvice). Then delete $lockPath and run again." -ForegroundColor Red
+            Write-Host "$lockPath names no process to check. Make sure no -Compare is running in this repo; if none is, $(& $backupAdvice $holder). Then delete $lockPath and run again." -ForegroundColor Red
         } else {
-            Write-Host "An earlier -Compare left $lockPath and is no longer running: $(& $backupAdvice). Then delete $lockPath and run again." -ForegroundColor Red
+            Write-Host "An earlier -Compare left $lockPath and is no longer running: $(& $backupAdvice $holder). Then delete $lockPath and run again." -ForegroundColor Red
         }
         return 2
     }
@@ -253,7 +277,8 @@ function Compare-WowTestKit {
     # The exit code is decided after the cleanup below, which can find an edit.
     try { $code = . {
         if (Test-Path -LiteralPath $backup) {
-            Write-Host "$backup is left from an earlier -Compare: $(& $backupAdvice). Then run again." -ForegroundColor Red
+            # Its lock is gone, and with it the record of its old pin.
+            Write-Host "$backup is left from an earlier -Compare: $(& $backupAdvice $null). Then run again." -ForegroundColor Red
             return 2
         }
         $newBytes = [IO.File]::ReadAllBytes($pinPath)
@@ -291,14 +316,20 @@ function Compare-WowTestKit {
 
         $pwsh = (Get-Process -Id $PID).Path
         $logDir = New-WowTestKitLogDir
-        $savedKit = $env:WOWTESTKIT
+        $savedKit, $savedPin = $env:WOWTESTKIT, $env:WOWTESTKIT_PIN
         # One side: tests/run.ps1 as the owner runs it, then the snapshot script
-        # against the same kit.
+        # against the same kit. Its pin is $bytes, fixed in its own file in the
+        # logs, which $env:WOWTESTKIT_PIN names to this process, the runner and
+        # Lua (#123): none of them reads tests/kit.pin, so a writer that swaps
+        # it and puts it back during the side can't change the kit it runs.
         $runSide = {
-            param($name)
+            param($name, [byte[]]$bytes)
             Write-Host "-- $name pin: tests\run.ps1" -ForegroundColor Cyan
+            $sidePin = Join-Path $logDir "$name-kit.pin"
+            [IO.File]::WriteAllBytes($sidePin, $bytes)
+            $env:WOWTESTKIT_PIN = $sidePin
             $kit = Get-WowTestKit -RepoRoot $RepoRoot
-            $build = (ConvertFrom-WowTestKitPin (Get-Content -LiteralPath $pinPath)).build
+            $build = (ConvertFrom-WowTestKitPin (Get-Content -LiteralPath $sidePin)).build
             if ($shaForm -and $name -eq 'old' -and -not (Test-Path -LiteralPath (Join-Path $kit "data/forever-$build"))) {
                 Write-Host "   the kit at this sha has no data for build ${build}: -Compare <a commit of this repo> takes that commit's build too" -ForegroundColor Yellow
             }
@@ -328,22 +359,39 @@ function Compare-WowTestKit {
         # those same bytes), kept, and the comparison stops (#121). The cleanup
         # below says so.
         $oldBytes = [Text.UTF8Encoding]::new($false).GetBytes(($oldLines -join "`n") + "`n")
+        # The lock records the old pin once it is in, so a stale lock's advice
+        # can tell it from someone's edit (#123): not before the switch, which
+        # may refuse a pin someone saved with those same bytes. A stop between
+        # the switch and the record leaves no record, so the advice keeps both.
+        # Appended after the pid= line, which still comes first; a reader may
+        # open the lock meanwhile. Before the switch back, a "back" line ends
+        # that phase: from then on the old pin's bytes are someone's save.
+        $appendLock = {
+            param([string]$text)
+            $bytes = [Text.Encoding]::ASCII.GetBytes($text)
+            $s = [IO.File]::Open($lockPath, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            try { $s.Write($bytes, 0, $bytes.Length); $s.Flush($true) } finally { $s.Dispose() }
+        }
         try {
             try {
                 if (-not (Switch-WowTestKitPin $pinPath $newBytes $oldBytes)) { return 2 }
-                $ours = $true
-                $oldSide = & $runSide "old"
+                $ours = $true   # first: the pin is put back even if the record fails
+                & $appendLock "old=$(& $b64 $oldBytes) end`n"
+                $oldSide = & $runSide "old" $oldBytes
             } finally {
                 # $ours stays set only if the switch back fails. A refused one
                 # is an edit, even when the pin now holds the startup bytes
                 # again (a git restore): the old run may have read them.
-                if ($ours) { $edited = -not (Switch-WowTestKitPin $pinPath $oldBytes $newBytes); $ours = $false }
+                if ($ours) {
+                    try { & $appendLock "back`n" }
+                    finally { $edited = -not (Switch-WowTestKitPin $pinPath $oldBytes $newBytes); $ours = $false }
+                }
             }
             # A later edit is the check after the new run's, or the cleanup's.
             if ($edited) { return 2 }
-            $newSide = & $runSide "new"
+            $newSide = & $runSide "new" $newBytes
             if ((& $bytesOf $pinPath) -cne (& $b64 $newBytes)) { return 2 }
-        } finally { $env:WOWTESTKIT = $savedKit }
+        } finally { $env:WOWTESTKIT, $env:WOWTESTKIT_PIN = $savedKit, $savedPin }
 
         # The result lines that differ, in the old run's order.
         $o, $n = $oldSide.Results, $newSide.Results

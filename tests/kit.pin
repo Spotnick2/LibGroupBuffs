@@ -4,6 +4,6 @@
 # alone; it moves at an Interface bump, or when a name the build's diff changed
 # needs that build's data (root CLAUDE.md, "Forever API reference and new
 # client builds").
-sha=52cc64778455281c6b346d3c9730f7465e6cdcfd
+sha=87ca66e025c87b784b678b5d2bb155886913ffd2
 build=70959
 api=2

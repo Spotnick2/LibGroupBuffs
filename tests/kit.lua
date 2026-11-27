@@ -6,13 +6,17 @@
 -- the local cache, %LOCALAPPDATA%\WowTestKit\<sha>, that tests/run.ps1 fills.
 -- So one test can run by hand once run.ps1 has run:
 --   lua tests/test_boot.lua
+-- $WOWTESTKIT_PIN, when set, is the pin file read instead of tests/kit.pin:
+-- tests/kit.ps1 -Compare sets it, so each side runs on the pin it fixed.
 
+local pinFile = os.getenv("WOWTESTKIT_PIN")
+if not pinFile or pinFile == "" then pinFile = "tests/kit.pin" end
 local pin = {}
-for line in io.lines("tests/kit.pin") do
+for line in io.lines(pinFile) do
     local k, v = line:match("^%s*([%w_]+)%s*=%s*(%S+)")
     if k then pin[k] = v end
 end
-assert(pin.sha and pin.build, "tests/kit.pin needs sha= and build=")
+assert(pin.sha and pin.build, pinFile .. " needs sha= and build=")
 
 local dir = os.getenv("WOWTESTKIT")
 if not dir or dir == "" then
