@@ -1,8 +1,9 @@
 # WowTestKit for these tests: the commit, and the client build to test against.
-# build: the library records no measured build of its own (AGENTS.md: it
-# follows Priestly's MEASURED_ON_BUILD, 70338, the build the old stub also
-# modelled). The kit has no data for 70338 (its oldest is 70450), so this is
-# the newest build the kit has.
-sha=38c8a6c58a8caaf3b4cee41424e6e43502102a45
+# build: the API lists the kit checks the library's calls against. The library
+# records no measured build. A new build with the same Interface leaves this
+# alone; it moves at an Interface bump, or when a name the build's diff changed
+# needs that build's data (root CLAUDE.md, "Forever API reference and new
+# client builds").
+sha=87ca66e025c87b784b678b5d2bb155886913ffd2
 build=70959
 api=2
