@@ -15,7 +15,7 @@
 -- fills it in place: see AGENTS.md, "An upgrade reuses the existing tables".
 -- ============================================================================
 
-local MAJOR, MINOR = "LibGroupBuffs-1.0", 39
+local MAJOR, MINOR = "LibGroupBuffs-1.0", 40
 local lib = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end          -- an equal or newer copy is already loaded
 
@@ -792,7 +792,7 @@ end
 
 -- ─── client ──────────────────────────────────────────────────────────────────
 
--- Build number, used to invalidate anything learned from a previous patch.
+-- Build number. The load check (CheckLoad) compares it with its marker's.
 function API.ClientBuild()
     local ok, _, build = pcall(GetBuildInfo)
     return ok and tostring(build) or "?"
@@ -945,8 +945,8 @@ do -- Settings ================================================================
 --             { label = "per-character", get = function() ... return PriestlyDB end },
 --             { label = "account-wide",  get = function() ... return PriestlySVCheck end },
 --         },
---         measuredOnBuild = "69913",     -- in the addon's SOURCE; see CheckBuild
---         -- svBrokenSince / svBrokenOnBuild are accepted and no longer used; see CheckLoad
+--         -- measuredOnBuild, svBrokenSince and svBrokenOnBuild are accepted and
+--         -- no longer used; see CheckBuild and CheckLoad
 --         report    = function(text, kind) ... end,  -- required: the library never prints
 --         onChanged = function(key) ... end,         -- optional
 --     })
@@ -985,15 +985,13 @@ function Settings.New(spec)
     if spec.onChanged ~= nil and type(spec.onChanged) ~= "function" then
         Fail("onChanged must be a function or nil")
     end
-    if type(spec.measuredOnBuild) ~= "string" or spec.measuredOnBuild == "" then
-        Fail("measuredOnBuild must be a build number string")
-    end
-    -- Which build loading is broken on is no longer part of the decision:
-    -- the marker carries the build it was written on, and that settles it
-    -- (CheckLoad). Both names stay ACCEPTED so the three addons that pass one
-    -- keep working until they drop it, and a wrong TYPE is still refused -
-    -- silence about a field you passed is worse than an error.
-    for _, key in ipairs({ "svBrokenSince", "svBrokenOnBuild" }) do
+    -- Retired build fields. Which build loading is broken on is no longer part
+    -- of the decision: the marker carries the build it was written on, and that
+    -- settles it (CheckLoad). The build watch is gone (CheckBuild), so
+    -- measuredOnBuild no longer matters either. All three stay ACCEPTED so the addons
+    -- that pass one keep working until they drop it, and a wrong TYPE is still
+    -- refused: silence about a field you passed is worse than an error.
+    for _, key in ipairs({ "measuredOnBuild", "svBrokenSince", "svBrokenOnBuild" }) do
         if spec[key] ~= nil and (type(spec[key]) ~= "string" or spec[key] == "") then
             Fail(key .. " must be a build number string (it is no longer used; you may drop it)")
         end
@@ -1014,7 +1012,6 @@ function Settings.New(spec)
         scopes = scopes,
         report = spec.report,
         onChanged = spec.onChanged,
-        measuredOnBuild = spec.measuredOnBuild,
     }, lib.SettingsMeta)
 end
 
@@ -1185,24 +1182,20 @@ function Methods:CheckLoad(announce)
         "settingsLoaded")
 end
 
--- --- Which build were the findings measured on? -----------------------------
+-- --- The build watch, retired (#101) ------------------------------------------
 --
--- The addon's notes on how this beta behaves were measured on one client
--- build, and the beta updates without announcement. The build lives in the
--- addon's SOURCE, the one thing that survives a restart here: a stored build
--- could never fire, because the build only changes across a restart, which is
--- when stored data is lost.
+-- Up to r39 a real login on a build other than the host's measuredOnBuild
+-- reported "This version was tested on game build X" (kind "newBuild").
+-- Blizzard ships a build twice a week or more, and a build with the same
+-- Interface is now a diff checked centrally, so no addon announces the build
+-- it was checked on. The kind is never sent any more.
 --
--- Reported at every real login until someone re-measures and bumps the
--- constant. Deliberately not latched: a notice shown once and missed would
--- leave the addon running on stale findings with nothing left to say so.
-function Methods:CheckBuild()
-    local build = CurrentBuild()
-    if not build or build == self.measuredOnBuild then return end
-    self.report("This version was tested on game build " .. self.measuredOnBuild
-        .. "; you are on " .. build .. ". It should still work, but if anything "
-        .. "misbehaves, please report it.", "newBuild")
-end
+-- The method stays, doing nothing, for two reasons. A host may call it itself
+-- (Wildly does). And copies share this methods table: an older copy loaded
+-- first left its CheckBuild in it, which reads self.measuredOnBuild. An object
+-- made by this copy has no measuredOnBuild, so that old method would throw on it.
+-- Only overwriting it removes it.
+function Methods:CheckBuild() end
 
 -- PLAYER_LOGIN fires on /reload too and cannot tell the two apart.
 -- PLAYER_ENTERING_WORLD can: on 1.60.1.69913 it carries (isInitialLogin,
@@ -1210,9 +1203,7 @@ end
 -- is ignored. The addon registers the event and passes the payload on.
 function Methods:HandleEnteringWorld(isInitialLogin, isReloadingUi)
     if not (isInitialLogin or isReloadingUi) then return end
-    local realLogin = isInitialLogin and not isReloadingUi
-    self:CheckLoad(realLogin)
-    if realLogin then self:CheckBuild() end
+    self:CheckLoad(isInitialLogin and not isReloadingUi)
 end
 
 end -- Settings

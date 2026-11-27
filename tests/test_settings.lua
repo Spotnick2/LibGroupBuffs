@@ -77,8 +77,10 @@ H.check(not pcall(Settings.New, spec({ owner = "" })), "no owner is an error")
 H.check(not pcall(Settings.New, spec({ scopes = {} })), "no scopes is an error")
 H.check(not pcall(Settings.New, spec({ scopes = { { label = "x" } } })),
     "a scope without an accessor is an error")
+H.check(pcall(Settings.New, spec({ measuredOnBuild = nil })),
+    "measuredOnBuild is no longer required (#101)")
 H.check(not pcall(Settings.New, spec({ measuredOnBuild = 69913 })),
-    "a build that is not a string is an error: GetBuildInfo returns strings")
+    "but one passed as a non-string is still refused: GetBuildInfo returns strings")
 H.check(not pcall(Settings.New, spec({ onChanged = "yes" })), "a non-function hook is an error")
 
 local created = false
@@ -361,7 +363,7 @@ H.check(not pcall(Settings.New, spec({ svBrokenSince = 7 })),
     "but a non-string is refused rather than silently ignored")
 
 ------------------------------------------------------------
--- The build watch
+-- The build watch is retired (#101): no login names a build
 ------------------------------------------------------------
 
 local function warned(h)
@@ -369,36 +371,19 @@ local function warned(h)
     return nil
 end
 
-h = freshSession(MEASURED)
+-- A host still passing an old measuredOnBuild, on a client that has moved on.
+h = freshSession(FIXED, { measured = OLDER })
 h.settings:HandleEnteringWorld(true, false)
-H.eq(warned(h), nil, "the measured build is silent")
-
-h = freshSession(FIXED)
+H.eq(warned(h), nil, "a real login on a build other than the host's measured one says nothing")
 h.settings:HandleEnteringWorld(false, true)
-H.eq(warned(h), nil, "a /reload never shows the build warning")
-h.settings:HandleEnteringWorld(false, false)
-H.eq(warned(h), nil, "nor a zone change")
-
-h.settings:HandleEnteringWorld(true, false)
-msg = warned(h) or ""
-H.check(msg:find(FIXED, 1, true) and msg:find(MEASURED, 1, true),
-    "a real login on a new build warns, naming both: " .. msg)
-H.check(msg:find("report", 1, true), "worded for players: " .. msg)
-H.check(not msg:find("MEASURED", 1, true), "with no developer vocabulary: " .. msg)
-
--- Not latched: it repeats at every real login until the constant is bumped.
-h.said = {}
-h.settings:HandleEnteringWorld(true, false)
-H.check(warned(h) ~= nil, "it warns again at the next real login")
+H.eq(warned(h), nil, "nor does a /reload")
+H.check(pcall(h.settings.CheckBuild, h.settings), "a host that still calls CheckBuild itself does not break")
+H.eq(warned(h), nil, "and it says nothing either")
+H.eq(h.settings.measuredOnBuild, nil, "the object keeps no measured build")
 for key in pairs(h.char) do
-    H.check(key ~= "warnedBuild", "and records nothing that could silence it")
+    H.check(key ~= "warnedBuild" and key ~= "seenBuild" and key ~= "lastBuild",
+        "and nothing about the build is saved but the load check's marker: " .. key)
 end
-
-h = freshSession(FIXED)
-lib.API.ClientBuild = function() return "?" end
-h.settings:HandleEnteringWorld(true, false)
-H.eq(warned(h), nil, "an unreadable build is not a new one")
-lib.API.ClientBuild = realClientBuild
 
 ------------------------------------------------------------
 -- Two addons on one library: nothing shared but the code
@@ -412,8 +397,8 @@ H.eq(w.char, nil, "one addon's write does not touch another's store")
 H.eq(#w.changed, 0, "or run its hook")
 w.settings:HandleEnteringWorld(true, false)
 p.settings:HandleEnteringWorld(true, false)
-H.eq(warned(w), nil, "each addon has its own measured build")
-H.check(warned(p) ~= nil, "so one can warn while the other is current")
+H.eq(warned(w), nil, "neither addon names a build, whatever it was measured on")
+H.eq(warned(p), nil, "(the build watch is retired)")
 H.check(getmetatable(p.settings) == getmetatable(w.settings),
     "and both run the one shared set of methods, so an upgrade reaches both")
 
