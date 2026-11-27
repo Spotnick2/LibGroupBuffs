@@ -384,6 +384,50 @@ H.eq(r12Store.svLoadCheck.loads, true, "the latch now reads as loads")
 WoW.build = savedBuild
 
 ------------------------------------------------------------
+-- r39's build watch, then the current copy (#101).
+--
+-- r39 warned at a real login on a build other than the host's
+-- measuredOnBuild, and left its CheckBuild in the shared methods table. The
+-- current copy keeps no measuredOnBuild, so it must overwrite that method:
+-- the old one would throw on an object the current copy made, when a host
+-- (Wildly) calls it itself.
+------------------------------------------------------------
+
+local R39
+for _, entry in ipairs(SINGLE) do if entry[1] == 39 then R39 = entry[2] end end
+H.check(R39, "the r39 fixture is frozen")
+if R39 then
+    freshLibStub()
+    load(R39, "r39")
+    lib = LibStub("LibGroupBuffs-1.0")
+    local kinds = {}
+    local function report(_, kind) kinds[#kinds + 1] = kind end
+    local r39Store = {}
+    local r39Settings = lib.Settings.New({
+        owner = "Wildly", report = report, measuredOnBuild = "1",
+        scopes = { { label = "per-character", get = function() return r39Store end } },
+    })
+    r39Settings:HandleEnteringWorld(true, false)
+    H.eq(kinds[#kinds], "newBuild", "r39 names the build at a real login")
+
+    load(CURRENT_FILES, "current")
+    H.eq(activeMinor(), CURRENT, "newer-after-r39 claims the library")
+    kinds = {}
+    r39Settings:HandleEnteringWorld(true, false)
+    r39Settings:CheckBuild()
+    H.eq(#kinds, 0, "and the object r39 made no longer names the build, at login or called directly")
+
+    local made = lib.Settings.New({
+        owner = "Wildly", report = report,
+        scopes = { { label = "per-character", get = function() return {} end } },
+    })
+    local ok, err = pcall(made.CheckBuild, made)
+    H.check(ok, "a host calling CheckBuild on an object the current copy made does not throw: "
+        .. tostring(err))
+    H.eq(#kinds, 0, "and it says nothing")
+end
+
+------------------------------------------------------------
 -- A settings object made by one copy runs the next copy's methods.
 --
 -- Priestly creates its object at load; Wildly may embed a newer library that

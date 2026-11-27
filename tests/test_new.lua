@@ -160,7 +160,7 @@ local named = GB.UI({ engine = engine, owner = "PriestlyProbe" })
 H.eq(named.host.owner, "PriestlyProbe", "but never over one the host gave")
 
 local store = {}
-local settings = GB.Settings({ measuredOnBuild = "1",
+local settings = GB.Settings({
     scopes = { { label = "per-character", get = function() return store end } } })
 H.eq(settings.owner, "Priestly", "GB.Settings fills in the owner")
 H.eq(settings.report, report, "and the instance's reporter")
@@ -199,10 +199,12 @@ H.check(GB.EventFailures() and GB.EventFailures().NO_SUCH_EVENT ~= nil,
     "and recorded for this owner")
 
 -- The same reporter speaks for the settings checks, with their own kinds.
+-- A marker from another build came back: the load check speaks.
 said = {}
-settings:CheckBuild()
-H.eq(#said, 1, "the build check speaks once: this build is not the one measured")
-H.eq(said[1] and said[1].kind, "newBuild", "with its own kind")
+store.svLoadCheck = { stamp = "then", build = "1" }
+settings:HandleEnteringWorld(true, false)
+H.eq(#said, 1, "the load check speaks once: settings saved on another build came back")
+H.eq(said[1] and said[1].kind, "settingsLoaded", "with its own kind")
 H.eq(type(said[1] and said[1].text), "string", "and text, never a table")
 
 ------------------------------------------------------------

@@ -90,7 +90,6 @@ inst.RegisterEvents(events, "PLAYER_LOGIN", "GROUP_ROSTER_UPDATE", "UNIT_AURA")
 local saved = {}
 local settings = inst.Settings({
     scopes = { { label = "per-character", get = function() return saved end } },
-    measuredOnBuild = "70338",
 })
 settings:Set("alpha", 0.8)
 settings:HandleEnteringWorld(true, false)
