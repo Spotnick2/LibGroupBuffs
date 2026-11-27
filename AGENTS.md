@@ -14,8 +14,10 @@ Repository-specific additions:
   final response.
 - Start reviews in `C:\Projects\WoW\LibGroupBuffs`, or name the repository explicitly (for example,
   `gh pr diff 8 -R Spotnick2/LibGroupBuffs`); PR numbers overlap with consumer repositories.
-- The library has no build constant yet. Match Priestly's `MEASURED_ON_BUILD` in
-  `C:\Projects\WoW\Priestly\PriestlyConfig.lua` to
+- The library has no build constant and announces no build (#101). A new build with the same
+  Interface is a diff checked centrally (root `CLAUDE.md`, "Forever API reference and new client
+  builds"): this repo gets an issue only if it uses a name the diff removed or changed. An
+  Interface bump is the full re-check. The API surface is the newest
   `C:/Projects/WoW/References/Forever/api/forever-api-<version>.<build>.md`. Runtime measurements live in
   `C:\Projects\WoW\Priestly\docs\FOREVER-PROBE.md`.
 - A change here ships in every consumer. Review it as a change to Priestly, Wildly and Magely at
@@ -109,10 +111,13 @@ and the like name those sections.
   load it beside this library (`tests/test_packaging.lua` checks).
   `tests/harness.lua` loads exactly this list, so the suite fails the same way the client would.
 - `Settings.lua` — `lib.Settings.New(spec)`: one write path for an addon's saved table
-  (`Set`, `SetIn`, `Changed`), the SavedVariables-fix detector and the build watch
-  (`HandleEnteringWorld`). The addon passes accessors for its own saved tables (the first is the
-  settings store), its `measuredOnBuild` / `svBrokenOnBuild` constants and a required
-  `report(text, kind)`. The library composes the plain-text messages, because the "full exit, not a
+  (`Set`, `SetIn`, `Changed`) and the SavedVariables-fix detector (`HandleEnteringWorld`). The
+  addon passes accessors for its own saved tables (the first is the settings store) and a required
+  `report(text, kind)`. `measuredOnBuild`, `svBrokenSince` and `svBrokenOnBuild` are accepted and
+  ignored. A non-string is still refused. The build watch (kind `newBuild`) was retired in r40
+  (#101). `CheckBuild` stays as a method that does nothing, because an older copy's version left
+  in the shared methods table would throw on an object with no `measuredOnBuild`. The library
+  composes the plain-text messages, because the "full exit, not a
   relog" caveat is part of the detector being right; the addon adds its prefix and colour.
 - `Engine.lua` — `lib.Engine.New(host)`: one engine per addon, holding its own GUID-keyed aura
   cache. Aura reads with the combat-secrecy fallback (`HAS` / `MISSING` / `UNKNOWN`), durations,
@@ -496,10 +501,9 @@ and the like name those sections.
     reason: every host is on the kit (Priestly, Wildly, Magely, Buffy and ForeverCombatAssistant,
     tests only), so the frozen pre-kit stub was deleted, and a new host adopts the kit first.
     `WoW.build`'s default is the **installed client's** build (`.build.info` in the World of
-    Warcraft root names it without launching the game), never a host's `measuredOnBuild`: hosts
-    re-probe at different times, and one can be sitting on an older measured build deliberately,
-    with its login notice firing. Bump it here when the client moves, and the date in
-    `GetBuildInfo` with it. Take the date from the build-date string embedded in the client
+    Warcraft root names it without launching the game), never a host's `measuredOnBuild`.
+    A new build with the same Interface leaves it alone. Bump it at an Interface bump, or when a
+    test needs a build the diff changed, and move the date in `GetBuildInfo` with it. Take the date from the build-date string embedded in the client
     executable (`_classic_beta_/WowB.exe`), which the API dump's header repeats. Don't use the
     file's modified time: it is when the patch was applied, and for 70009 it is a day later.
 - `.pkgmeta` — **not for publishing** (the library never is): its `ignore` list decides what the

@@ -164,7 +164,7 @@ local settings = GB.Settings({                           -- owner and report fil
         if not MyAddonDB then MyAddonDB = {} end
         return MyAddonDB
     end } },
-    measuredOnBuild = "70338",                           -- the build your notes were measured on
+    -- measuredOnBuild is no longer used (r40): accepted and ignored, so you may drop it
 })
 settings:Set("lockFrame", true)
 settings:HandleEnteringWorld(isInitialLogin, isReloadingUi)   -- from PLAYER_ENTERING_WORLD

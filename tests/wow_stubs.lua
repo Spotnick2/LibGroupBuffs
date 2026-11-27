@@ -90,7 +90,7 @@ table.insert(WoW.onReset, function()
     WoW.secret      = false      -- C_Secrets.ShouldAurasBeSecret()
     -- The CLIENT's build, not any host's measuredOnBuild. Hosts re-probe at
     -- different times - one can be sitting on an older measured build on
-    -- purpose, with its login notice firing - and a stub that follows a host
+    -- purpose - and a stub that follows a host
     -- would then model a client nobody is running. .build.info in the World
     -- of Warcraft root names the installed build without launching the game.
     -- (tests/kit.pin's build is which API lists the kit checks against: the
